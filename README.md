@@ -209,3 +209,10 @@ Next.js le signale à chaque démarrage).
 ## Documentation
 
 - [`docs/SPEC.md`](docs/SPEC.md) — spécification technique : sources de données, schéma SQL, routes API, format des données, critères d'acceptation.
+- [`docs/reviews/`](docs/reviews/) — les trois revues de code indépendantes (Claude Opus 5.5) qui ont produit les corrections, avec les preuves `fichier:ligne` et les commandes de vérification.
+
+## Licence
+
+Aucune licence n'est déclarée, comme sur les autres dépôts publics du compte.
+Les droits restent réservés par défaut : si tu veux ouvrir le code
+(MIT, Apache-2.0…), ajoute un fichier `LICENSE` à la racine.
