@@ -111,7 +111,18 @@ export interface SubtitleRow {
   kind: SubtitleKind;
 }
 
-export type AnchorMethod = 'auto' | 'manual' | 'audio';
+/**
+ * Méthode d'obtention d'une ancre.
+ *
+ * - `auto`  : lecture du chrono à l'écran par OCR (vrai point de calage)
+ * - `manual`: pose manuelle par l'utilisateur (« cette action se passe ici »)
+ * - `audio` : alignement sur les coupures détectées dans le son
+ * - `est`   : ESTIMATION, faute de mieux (pas de ffmpeg pour l'OCR, ou
+ *             analyse impossible). Bien moins fiable qu'une vraie lecture :
+ *             elle est gardée à part pour ne jamais être confondue avec une
+ *             ancre mesurée.
+ */
+export type AnchorMethod = 'auto' | 'manual' | 'audio' | 'est';
 
 export interface AnchorRow {
   match_id: number;

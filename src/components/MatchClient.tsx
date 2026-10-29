@@ -276,7 +276,17 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
             </button>
             {analysis && (
               <span className="text-xs text-slate-400">
-                Analyse : {analysis}
+                {analysis === 'estimated' ? (
+                  // Une ancre ESTIMÉE (pas d'OCR) décale la VF de plusieurs
+                  // minutes : il faut le dire, sinon l'utilisateur croit la
+                  // VF calée alors qu'elle ne l'est pas.
+                  <span className="text-amber-400">
+                    Synchronisation ESTIMÉE (pas de calibration automatique) — le décalage peut
+                    être de plusieurs minutes. Lance « Calibrer automatiquement ».
+                  </span>
+                ) : (
+                  `Analyse : ${analysis}`
+                )}
                 {message ? ` — ${message}` : ''}
               </span>
             )}

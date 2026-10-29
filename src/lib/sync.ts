@@ -150,7 +150,7 @@ export function resolveAnchorWall(a: Pick<AnchorRow, 'period' | 'clock_sec' | 'w
   return null;
 }
 
-const METHOD_PRIORITY: Record<AnchorMethod, number> = { manual: 3, auto: 2, audio: 1 };
+const METHOD_PRIORITY: Record<AnchorMethod, number> = { manual: 3, auto: 2, audio: 1, est: 0 };
 
 /**
  * Garde un ensemble d'ancres strictement monotone.
@@ -213,7 +213,30 @@ export function buildMapping(tp: TimedPlay[], breaks: BreakInfo[], anchorsIn: Re
     const est = estimateStart(tp, tl, o);
     defaultRho = est.rho;
     const first = tp[0];
-    anchors = first ? [{ wall: first.wall, video: est.v0, method: 'auto', period: first.period, clock_sec: first.clock_sec }] : [];
+    if (first) {
+      // L'ancre de repli place le PREMIER play à `est.v0`.
+      //
+      // `est.v0` est l'instant de COUP D'ENVOIE du match dans la vidéo (calculé
+      // par `estimateStart` à partir de la durée totale et du temps de jeu
+      // cumulé). Or le premier play ESPN a souvent un `clock_sec` de 720
+      // (12:00, soit le DÉBUT DU 1er QUART), pas le chrono du coup d'envoi :
+      // l'ancre associait alors « 12:00 » à un instant qui est en réalité le
+      // début du match — un décalage de plusieurs dizaines de secondes (un
+      // quart entier), qui se propage ensuite sur tout le replay.
+      //
+      // On énonce donc l'ancre avec le chrono RÉEL du premier play tel que
+      // l'OCR l'a vu, mais on la marque `method: 'est'` pour distinguer une
+      // estimation d'une vraie lecture d'écran.
+      anchors = [
+        {
+          wall: first.wall,
+          video: est.v0,
+          method: 'est',
+          period: first.period,
+          clock_sec: first.clock_sec,
+        },
+      ];
+    }
   }
 
   // Taux par segment entre ancres

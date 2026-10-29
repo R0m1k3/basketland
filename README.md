@@ -161,6 +161,15 @@ Le jeton d'ingestion est soit défini par la variable d'environnement
 
 ### Calibration automatique de la VF
 
+> **À lire avant de juger la synchronisation.** L'analyse automatique
+> (OCR du chrono à l'écran) nécessite `ffmpeg` — présent dans l'image Docker,
+> mais pas forcément dans un environnement de développement local. Sans
+> analyse, l'application calcule une **ancre estimée** à partir de la durée
+> du replay et du temps de jeu cumulé. C'est une approximation : la VF peut
+> être décalée de **plusieurs minutes** sur un match long. L'interface
+> affiche alors « Synchronisation ESTIMÉE » en jaune. Pour une VF fiable :
+> lancer « Calibrer automatiquement », ou poser une ancre manuelle.
+
 Le replay coupe une trentaine de minutes de contenu : le décalage entre le
 temps réel du match et la position dans la vidéo n'est donc pas uniforme.
 L'application le calcule en trois temps :

@@ -31,6 +31,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/matchs" className="hover:text-white">
                 Matchs
               </Link>
+              <Link href="/equipes" className="hover:text-white">
+                Équipes
+              </Link>
               <Link href="/classement" className="hover:text-white">
                 Classement
               </Link>

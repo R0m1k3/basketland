@@ -224,12 +224,17 @@ const gLast = globalThis as unknown as { __analysisLast?: Map<number, number> };
 const analysisLast = (gLast.__analysisLast ??= new Map());
 
 export function analysisStatus(matchId: number): {
-  status: 'none' | 'running' | 'done' | 'unavailable';
+  status: 'none' | 'running' | 'done' | 'estimated' | 'unavailable';
   progress?: AnalysisState;
 } {
   const st = analysis.get(matchId);
   if (st) return { status: 'running', progress: st };
-  if (db.getAnchors(matchId).some((a) => a.method === 'auto') || db.getAudioProfile(matchId)) return { status: 'done' };
+  const anchors = db.getAnchors(matchId);
+  if (anchors.some((a) => a.method === 'auto') || db.getAudioProfile(matchId)) return { status: 'done' };
+  // Une ancre ESTIMÉE (produite par défaut, sans OCR) ne vaut pas une
+  // analyse : le statut ne doit pas dire « done », sinon l'utilisateur
+  // croit la VF calibrée alors qu'elle est décalée de plusieurs minutes.
+  if (anchors.some((a) => a.method === 'est')) return { status: 'estimated' };
   return { status: ffmpegAvailable() ? 'none' : 'unavailable' };
 }
 
