@@ -176,7 +176,7 @@ curl -X POST http://localhost:3012/api/ingest \
 | `sync-schedule` | Calendrier : matchs à venir et récents (7 jours avant / après). |
 | `sync-season` | Saison complète, mois par mois. |
 | `sync-stats` | Boxscores, joueurs, leaders et play-by-play des matchs terminés. |
-| `sync-videos` | Découvre les replays sur basketball-video.com. |
+| `sync-videos` | Découvre les replays sur basketball-video.com (toutes les 20 min ; un match fini depuis moins de 12 h est revérifié à chaque passage, les autres toutes les 2 h). La fiche d’un match terminé lance aussi une recherche à l’ouverture et se met à jour seule dès que le replay est trouvé. |
 | `sync-subtitles` | Régénère la VF française et recalcule la synchronisation. |
 
 Le jeton d'ingestion est soit défini par la variable d'environnement

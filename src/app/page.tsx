@@ -18,6 +18,7 @@ import ReplayCard from '@/components/home/ReplayCard';
 import CompactGame from '@/components/home/CompactGame';
 import GameRow from '@/components/schedule/GameRow';
 import { countdown, longDate, nightLabel, playedWhen, relativeDay, shortDate } from '@/components/schedule/dates';
+import AutoRefresh from '@/components/ui/AutoRefresh';
 import SpoilerToggle from '@/components/ui/SpoilerToggle';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { IconArrowRight, IconCalendar } from '@/components/ui/Icons';
@@ -49,6 +50,8 @@ export default async function HomePage() {
 
   return (
     <div data-spoilers={spoilers} className="space-y-12 sm:space-y-16">
+      {/* Nouveaux replays, scores et badges sans recharger (toutes les 5 min, onglet visible). */}
+      <AutoRefresh />
       {/* Bandeau de date, façon une de journal */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-700/70 pb-4">
         <p className="kicker flex flex-wrap items-center gap-x-3 gap-y-1">

@@ -5,7 +5,7 @@ const findReplay = vi.fn<() => Promise<ReplayLookup>>();
 vi.mock('../src/lib/bv', () => ({ findReplay: () => findReplay() }));
 
 import { getMatch, openDatabase, setDbForTests } from '../src/lib/db';
-import { syncVideos } from '../src/lib/ingest';
+import { searchReplay, replaySearchInProgress, syncVideos } from '../src/lib/ingest';
 
 /**
  * syncVideos : un replay MP4 est revérifié pour passer en HLS, mais n'est
@@ -29,7 +29,10 @@ function insertMp4Match(): number {
 
 const kind = (id: number) => (getMatch(id) as unknown as { video_kind: string | null }).video_kind;
 
-beforeEach(() => findReplay.mockReset());
+// Accolades : une fonction renvoyée par beforeEach serait appelée comme nettoyage.
+beforeEach(() => {
+  findReplay.mockReset();
+});
 afterAll(() => setDbForTests(undefined));
 
 describe('syncVideos', () => {
@@ -61,5 +64,20 @@ describe('syncVideos', () => {
     await syncVideos();
     expect(getMatch(id)?.video_ok_id).toBe('222222');
     expect(kind(id)).toBe('mp4');
+  });
+
+  it('deux recherches simultanées du même match : un seul scraping, résultat partagé', async () => {
+    const id = insertMp4Match();
+    let resolve!: (r: ReplayLookup) => void;
+    findReplay.mockImplementation(() => new Promise((r) => (resolve = r)));
+    const a = searchReplay(getMatch(id)!);
+    const b = searchReplay(getMatch(id)!);
+    expect(replaySearchInProgress(id)).toBe(true);
+    resolve({ slug: 's', okId: '111111', duration: 6016, available: true, kind: 'hls' });
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(findReplay).toHaveBeenCalledTimes(1);
+    expect(ra).toBe(rb);
+    expect(ra.changed).toBe(true); // MP4 → HLS
+    expect(replaySearchInProgress(id)).toBe(false);
   });
 });
