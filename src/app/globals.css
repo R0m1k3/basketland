@@ -8,11 +8,18 @@
 
 html,
 body {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
-  @apply bg-[#0b0e14] text-slate-200 antialiased;
+  @apply bg-ink-950 font-sans text-paper antialiased;
+  /* Halo discret en haut de page : rappelle l'éclairage d'une salle. */
+  background-image: radial-gradient(1200px 500px at 50% -200px, rgba(255, 90, 31, 0.08), transparent 70%);
+  background-repeat: no-repeat;
+}
+
+::selection {
+  @apply bg-flame/40 text-paper;
 }
 
 /* Scrollbar discrète */
@@ -24,10 +31,72 @@ body {
   @apply bg-transparent;
 }
 ::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-slate-700;
+  @apply rounded-full bg-ink-600;
 }
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-slate-600;
+  @apply bg-ink-500;
+}
+
+@layer components {
+  /* Surfaces */
+  .panel {
+    @apply rounded-2xl border border-ink-700/80 bg-ink-900/80 shadow-card;
+  }
+  .panel-soft {
+    @apply rounded-2xl border border-ink-700/60 bg-ink-850/60;
+  }
+
+  /* Petit titre en capitales au-dessus d'une section */
+  .kicker {
+    @apply font-display text-[13px] font-semibold uppercase tracking-[0.18em] text-paper-mute;
+  }
+  .title-xl {
+    @apply font-display text-4xl font-extrabold uppercase leading-[0.95] tracking-tight sm:text-6xl;
+  }
+  .title-lg {
+    @apply font-display text-2xl font-bold uppercase tracking-tight sm:text-3xl;
+  }
+
+  /* Chiffres de tableau d'affichage */
+  .num {
+    @apply font-display tabular-nums;
+  }
+
+  /* Boutons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-ink-600 bg-ink-850 px-4 py-2 text-sm font-medium text-paper transition hover:border-ink-500 hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-flame px-4 py-2 text-sm font-semibold text-ink-950 transition hover:bg-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-3 py-1.5 text-sm text-paper-dim transition hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+  }
+
+  /* Pastilles */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-850 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-paper-dim;
+  }
+  .chip-flame {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-flame/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-flame-hot;
+  }
+  .chip-live {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-live/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-live;
+  }
+
+  /* Tableaux de stats */
+  .table-stats {
+    @apply w-full text-sm;
+  }
+  .table-stats th {
+    @apply whitespace-nowrap px-2 py-2 text-right text-[11px] font-semibold uppercase tracking-wider text-paper-faint;
+  }
+  .table-stats td {
+    @apply whitespace-nowrap px-2 py-2 text-right tabular-nums text-paper-dim;
+  }
+  .table-stats tbody tr {
+    @apply border-t border-ink-700/60 transition-colors hover:bg-ink-800/50;
+  }
 }
 
 /* Sous-titre affiché sur la vidéo */
@@ -37,15 +106,24 @@ body {
     0 0 2px rgba(0, 0, 0, 1);
 }
 
-@keyframes pulse-live {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
+/* Liseré aux couleurs d'une équipe (variables posées par le composant) */
+.team-stripe {
+  background: linear-gradient(90deg, var(--team-a, #ff5a1f), var(--team-b, #ff5a1f));
 }
-.live-dot {
-  animation: pulse-live 1.6s ease-in-out infinite;
+
+/* Rangée défilante sans barre visible (sélecteur de jours) */
+.scroll-row {
+  scrollbar-width: none;
+}
+.scroll-row::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

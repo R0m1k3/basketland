@@ -1,52 +1,54 @@
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
+import { Barlow_Condensed, Inter } from 'next/font/google';
+import Logo from '@/components/ui/Logo';
+import Nav from '@/components/ui/Nav';
 import './globals.css';
 
+const display = Barlow_Condensed({
+  subsets: ['latin'],
+  weight: ['500', '600', '700', '800'],
+  variable: '--font-display',
+  display: 'swap',
+});
+const sans = Inter({ subsets: ['latin'], variable: '--font-sans', display: 'swap' });
+
 export const metadata: Metadata = {
-  title: 'BasketLand — Replays NBA',
+  title: { default: 'BasketLand — Replays NBA en VF', template: '%s · BasketLand' },
   description:
     'Replays NBA, calendrier complet en heure de Paris, statistiques de match et de joueurs, sous-titres français synchronisés.',
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0b0e14',
+  themeColor: '#0B0B0E',
   width: 'device-width',
   initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fr">
+    <html lang="fr" className={`${display.variable} ${sans.variable}`}>
       <body>
-        <header className="sticky top-0 z-50 border-b border-slate-800 bg-[#0b0e14]/95 backdrop-blur">
-          <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4">
-            <Link href="/" className="flex items-center gap-2 font-bold text-white">
-              <span className="inline-block h-5 w-5 rounded-full bg-court-500" />
-              BasketLand
+        <header className="sticky top-0 z-50 border-b border-ink-700/70 bg-ink-950/85 backdrop-blur-xl">
+          <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:gap-8">
+            <Link href="/" className="shrink-0" aria-label="BasketLand, accueil">
+              <Logo />
             </Link>
-            <nav className="flex items-center gap-4 text-sm text-slate-300">
-              <Link href="/" className="hover:text-white">
-                Accueil
-              </Link>
-              <Link href="/matchs" className="hover:text-white">
-                Matchs
-              </Link>
-              <Link href="/equipes" className="hover:text-white">
-                Équipes
-              </Link>
-              <Link href="/classement" className="hover:text-white">
-                Classement
-              </Link>
-            </nav>
-            <span className="ml-auto hidden text-xs text-slate-500 sm:block">
-              Heure de Paris (Europe/Paris)
+            <div className="min-w-0 flex-1">
+              <Nav />
+            </div>
+            <span className="hidden shrink-0 items-center gap-1.5 text-xs text-paper-faint lg:flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-win" />
+              Heures de Paris
             </span>
           </div>
         </header>
-        <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
-        <footer className="mx-auto max-w-7xl px-4 pb-10 pt-4 text-xs text-slate-600">
-          BasketLand — replays NBA. Les vidéos proviennent de sources tierces ; BasketLand ne
-          les héberge pas.
+        <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:pt-8">{children}</main>
+        <footer className="border-t border-ink-700/60">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-6 text-xs text-paper-faint">
+            <span>BasketLand — replays NBA avec VF synchronisée.</span>
+            <span>Les vidéos proviennent de sources tierces ; BasketLand ne les héberge pas.</span>
+          </div>
         </footer>
       </body>
     </html>
