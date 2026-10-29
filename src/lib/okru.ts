@@ -2,8 +2,16 @@
  * Résolution des flux ok.ru.
  *
  * GET https://ok.ru/videoembed/<id> → attribut `data-options` (JSON échappé HTML) →
- * flashvars.metadata (objet ou chaîne JSON) → `hlsManifestUrl` signée (expires=…, srcAg=CHROME).
- * L'URL expire : on ne la stocke jamais, on la ré-résout à la demande (cache mémoire court).
+ * flashvars.metadata (objet ou chaîne JSON) → `hlsManifestUrl` signée (expires=…, srcAg=CHROME)
+ * et `videos` (MP4 progressifs par qualité).
+ *
+ * Tant qu'ok.ru n'a pas fini de traiter une vidéo, l'embed n'a PAS de
+ * `hlsManifestUrl` : seule la qualité « mobile » existe, en MP4 progressif
+ * (`videos: [{ name: 'mobile', url: 'https://…okcdn.ru/?expires=…&type=4…' }]`).
+ * Ce MP4 est lisible : on le relaie plutôt que de déclarer le replay absent.
+ *
+ * Les URL signées vivent ~24 h (`expires`) : on ne les stocke jamais en base,
+ * on les garde en mémoire jusqu'à peu avant l'expiration (voir `resolveOkStream`).
  */
 import { BROWSER_UA, decodeHtmlEntities, fetchText, fetchWithRetry, HttpError } from './http';
 import { parseMasterVariants as parseMasterVariantsHls } from './hls';
@@ -17,7 +25,35 @@ export interface OkEmbedInfo {
   duration: number | null;
   poster: string | null;
   hlsManifestUrl: string | null;
+  /** MP4 progressifs lisibles (qualités `disallowed` exclues), dans l'ordre d'ok.ru. */
+  mp4: Mp4Source[];
   status: string;
+}
+
+/** Un MP4 progressif signé d'ok.ru (`name` = mobile, lowest, low, sd, hd, full…). */
+export interface Mp4Source {
+  name: string;
+  url: string;
+}
+
+/**
+ * Extrait les MP4 du champ `videos` des métadonnées.
+ *
+ * On écarte les entrées `disallowed: true` (qualité listée mais refusée par
+ * ok.ru) et toute URL qui n'est pas en https : elle serait de toute façon
+ * refusée par le proxy (anti-SSRF).
+ */
+export function parseOkVideos(raw: unknown): Mp4Source[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Mp4Source[] = [];
+  for (const v of raw) {
+    if (!v || typeof v !== 'object') continue;
+    const { name, url, disallowed } = v as { name?: unknown; url?: unknown; disallowed?: unknown };
+    if (disallowed === true || typeof name !== 'string' || typeof url !== 'string') continue;
+    if (!/^https:\/\//.test(url) || out.some((o) => o.name === name)) continue;
+    out.push({ name, url });
+  }
+  return out;
 }
 
 export function isValidOkId(id: string): boolean {
@@ -25,7 +61,7 @@ export function isValidOkId(id: string): boolean {
 }
 
 export function parseOkEmbed(html: string, okId: string): OkEmbedInfo {
-  const info: OkEmbedInfo = { okId, title: '', duration: null, poster: null, hlsManifestUrl: null, status: '' };
+  const info: OkEmbedInfo = { okId, title: '', duration: null, poster: null, hlsManifestUrl: null, mp4: [], status: '' };
   const m = html.match(/data-options="([^"]+)"/) ?? html.match(/data-options='([^']+)'/);
   if (m) {
     try {
@@ -34,6 +70,7 @@ export function parseOkEmbed(html: string, okId: string): OkEmbedInfo {
       const md = typeof raw === 'string' ? JSON.parse(raw) : raw;
       if (md) {
         info.hlsManifestUrl = md.hlsManifestUrl ?? md.hlsMasterPlaylistUrl ?? null;
+        info.mp4 = parseOkVideos(md.videos);
         info.duration = md.movie?.duration ? Number(md.movie.duration) : null;
         info.poster = md.movie?.poster ?? opts?.poster ?? null;
         info.title = String(md.movie?.title ?? '');
@@ -79,19 +116,55 @@ export interface Variant {
 
 export interface OkStream {
   okId: string;
+  /** URL de la playlist maîtresse ; '' quand ok.ru n'a pas (encore) de HLS. */
   masterUrl: string;
+  /** Contenu de la playlist maîtresse ; '' sans HLS. */
   masterText: string;
   expiresAt: number;
   fetchedAt: number;
+  /** Variantes HLS ; vide sans HLS. */
   variants: Variant[];
+  /**
+   * MP4 progressifs signés (qualités `disallowed` exclues). Seule source
+   * lisible tant qu'ok.ru n'a produit que la qualité « mobile ».
+   */
+  mp4: { name: string; url: string }[];
   duration: number | null;
   poster: string | null;
 }
 
-export const STREAM_CACHE_TTL_MS = 45_000;
-const g = globalThis as unknown as { __okCache?: Map<string, Promise<OkStream>>; __okCacheAt?: Map<string, number> };
-const cache = (g.__okCache ??= new Map());
-const cacheAt = (g.__okCacheAt ??= new Map());
+/**
+ * Le flux résolu est gardé jusqu'à `expiresAt - STREAM_EXPIRY_MARGIN_MS`.
+ *
+ * Avant, le cache ne vivait que 45 s : toutes les 45 s, une requête de
+ * segment déclenchait une re-résolution complète (page embed + master, 1 à
+ * 3 s) que toutes les requêtes concurrentes attendaient — d'où un trou
+ * dans le buffer du lecteur. Les URL signées vivent ~24 h : on les garde.
+ */
+export const STREAM_EXPIRY_MARGIN_MS = 5 * 60_000;
+/** Rafraîchissement en arrière-plan (stale-while-revalidate) quand il reste moins que ça. */
+export const STREAM_REFRESH_BEFORE_MS = 30 * 60_000;
+/**
+ * Un flux MP4 seul est revérifié plus souvent (en arrière-plan) : dès
+ * qu'ok.ru a fini le traitement, le HLS apparaît et doit être servi.
+ */
+export const MP4_ONLY_REFRESH_MS = 10 * 60_000;
+/**
+ * Une résolution forcée (segment en 403) réutilise un flux résolu il y a
+ * moins de FORCE_DEDUP_MS : plusieurs segments en 403 simultanés ne
+ * doivent déclencher qu'UNE résolution.
+ */
+export const FORCE_DEDUP_MS = 10_000;
+/** Durée de vie supposée quand l'URL ne porte pas de champ `expires`. */
+const DEFAULT_LIFETIME_MS = 3600_000;
+
+interface StreamEntry {
+  stream: OkStream | null;
+  /** Résolution en cours : une seule à la fois par okId. */
+  inflight: Promise<OkStream> | null;
+}
+const g = globalThis as unknown as { __okStreams?: Map<string, StreamEntry> };
+const streams: Map<string, StreamEntry> = (g.__okStreams ??= new Map());
 
 /**
  * Parse les variantes d'une playlist maîtresse ok.ru.
@@ -112,41 +185,116 @@ export function parseMasterVariants(text: string, baseUrl: string): Variant[] {
 
 async function doResolve(okId: string): Promise<OkStream> {
   const embed = await fetchOkEmbed(okId);
-  if (!embed.hlsManifestUrl) throw new Error(`Pas de flux HLS pour ok.ru/${okId} (statut: ${embed.status || 'inconnu'})`);
-  const res = await fetchWithRetry(embed.hlsManifestUrl, { headers: OK_HEADERS });
-  if (!res.ok) throw new HttpError(res.status, 'master.m3u8');
-  const masterText = await res.text();
-  const masterUrl = res.url || embed.hlsManifestUrl;
+  let masterText = '';
+  let masterUrl = '';
+  let variants: Variant[] = [];
+  if (embed.hlsManifestUrl) {
+    try {
+      const res = await fetchWithRetry(embed.hlsManifestUrl, { headers: OK_HEADERS });
+      if (!res.ok) throw new HttpError(res.status, 'master.m3u8');
+      masterText = await res.text();
+      masterUrl = res.url || embed.hlsManifestUrl;
+      variants = parseMasterVariants(masterText, masterUrl);
+    } catch (e) {
+      // Sans MP4 de repli, un master illisible est fatal ; sinon on sert le MP4.
+      if (!embed.mp4.length) throw e;
+      masterText = '';
+      masterUrl = '';
+      variants = [];
+    }
+  } else if (!embed.mp4.length) {
+    throw new Error(`Pas de flux pour ok.ru/${okId}, ni HLS ni MP4 (statut: ${embed.status || 'inconnu'})`);
+  }
+  const signed = embed.hlsManifestUrl ?? embed.mp4[0]?.url ?? '';
   return {
     okId,
     masterUrl,
     masterText,
-    expiresAt: signedUrlExpiry(embed.hlsManifestUrl) ?? Date.now() + 3600_000,
+    expiresAt: signedUrlExpiry(signed) ?? Date.now() + DEFAULT_LIFETIME_MS,
     fetchedAt: Date.now(),
-    variants: parseMasterVariants(masterText, masterUrl),
+    variants,
+    mp4: embed.mp4,
     duration: embed.duration,
     poster: embed.poster,
   };
 }
 
-/**
- * Résout (ou ré-résout) le flux signé. Cache court (45 s) pour ne pas re-résoudre
- * à chaque segment ; `force` contourne le cache (ex. segment en 403 après expiration).
- */
-export async function resolveOkStream(okId: string, opts: { force?: boolean } = {}): Promise<OkStream> {
-  const at = cacheAt.get(okId) ?? 0;
-  const cached = cache.get(okId);
-  if (!opts.force && cached && Date.now() - at < STREAM_CACHE_TTL_MS) {
-    const s = await cached.catch(() => null);
-    if (s && s.expiresAt - Date.now() > 60_000) return s;
+function entryFor(okId: string): StreamEntry {
+  let e = streams.get(okId);
+  if (!e) {
+    // Purge des flux expirés : la Map vit aussi longtemps que le processus.
+    if (streams.size >= 200) {
+      const now = Date.now();
+      for (const [k, v] of streams) if (!v.inflight && (!v.stream || v.stream.expiresAt <= now)) streams.delete(k);
+    }
+    e = { stream: null, inflight: null };
+    streams.set(okId, e);
   }
-  const p = doResolve(okId);
-  cache.set(okId, p);
-  cacheAt.set(okId, Date.now());
-  p.catch(() => {
-    if (cache.get(okId) === p) cache.delete(okId);
+  return e;
+}
+
+/** Lance UNE résolution pour cet okId (ou rejoint celle en cours). */
+function startResolve(okId: string, e: StreamEntry): Promise<OkStream> {
+  if (e.inflight) return e.inflight;
+  const p = doResolve(okId).then((s) => {
+    e.stream = s;
+    return s;
+  });
+  e.inflight = p;
+  // Un échec ne vide pas `e.stream` : un flux encore valable reste servi.
+  p.catch(() => undefined).finally(() => {
+    if (e.inflight === p) e.inflight = null;
   });
   return p;
+}
+
+function shouldRefresh(s: OkStream, now: number): boolean {
+  if (s.expiresAt - now < STREAM_REFRESH_BEFORE_MS) return true;
+  return !s.masterText && now - s.fetchedAt > MP4_ONLY_REFRESH_MS;
+}
+
+/**
+ * Résout le flux signé, avec cache jusqu'à peu avant l'expiration de la signature.
+ *
+ * - flux valable : servi immédiatement ; s'il approche de l'expiration (ou
+ *   s'il n'a que du MP4), un rafraîchissement part en arrière-plan ;
+ * - flux expiré ou absent : résolution, partagée par tous les appelants ;
+ * - `force` (ex. segment en 403) : contourne le cache, mais rejoint une
+ *   résolution en cours, et réutilise un flux résolu il y a moins de
+ *   FORCE_DEDUP_MS.
+ */
+export async function resolveOkStream(okId: string, opts: { force?: boolean } = {}): Promise<OkStream> {
+  const e = entryFor(okId);
+  const now = Date.now();
+  const s = e.stream;
+  if (opts.force) {
+    if (e.inflight) return e.inflight;
+    if (s && now - s.fetchedAt < FORCE_DEDUP_MS) return s;
+    return startResolve(okId, e);
+  }
+  if (s && now < s.expiresAt - STREAM_EXPIRY_MARGIN_MS) {
+    if (shouldRefresh(s, now)) startResolve(okId, e).catch(() => undefined);
+    return s;
+  }
+  return startResolve(okId, e);
+}
+
+/** Vide le cache des flux (tests). */
+export function clearOkStreamCache(): void {
+  streams.clear();
+}
+
+/** Ordre de préférence des MP4 ok.ru (meilleure qualité d'abord). */
+export const MP4_QUALITY_ORDER = ['full', 'hd', 'sd', 'low', 'lowest', 'mobile'] as const;
+
+function mp4Rank(name: string): number {
+  const i = (MP4_QUALITY_ORDER as readonly string[]).indexOf(name);
+  return i < 0 ? MP4_QUALITY_ORDER.length : i;
+}
+
+/** Meilleur MP4 disponible (full > hd > sd > low > lowest > mobile, inconnus en dernier). */
+export function bestMp4(sources: readonly Mp4Source[]): Mp4Source | undefined {
+  return [...sources].sort((a, b) => mp4Rank(a.name) - mp4Rank(b.name))[0];
 }
 
 export function pickVariant(stream: OkStream, key: string | null | undefined): Variant | undefined {

@@ -12,6 +12,37 @@
 /** Un segment doit être un nom de fichier .ts (souvent MEDIA/MEDIUM + index). */
 const SEGMENT_NAME_RE = /^[A-Za-z0-9_-]+\.ts$/;
 
+/** Nom de segment acceptable (nom de fichier `.ts` simple, sans chemin). */
+export function isSegmentName(name: string): boolean {
+  return SEGMENT_NAME_RE.test(name);
+}
+
+/**
+ * Nom du segment situé `step` positions plus loin, en incrémentant l'index
+ * numérique final et en conservant sa largeur : `MEDIUM00041.ts` →
+ * `MEDIUM00042.ts`. Sert au préchargement des segments suivants.
+ * Renvoie null si le nom ne se termine pas par un index.
+ */
+export function nextSegmentName(name: string, step = 1): string | null {
+  const m = name.match(/^([A-Za-z0-9_-]*?)(\d+)\.ts$/);
+  if (!m) return null;
+  const n = Number(m[2]) + step;
+  if (!Number.isSafeInteger(n) || n < 0) return null;
+  return `${m[1]}${String(n).padStart(m[2].length, '0')}.ts`;
+}
+
+/** Noms des segments d'une playlist média (dans l'ordre). */
+export function segmentNames(playlistText: string): string[] {
+  const out: string[] = [];
+  for (const raw of playlistText.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const name = line.split('/').pop() ?? line;
+    if (SEGMENT_NAME_RE.test(name)) out.push(name);
+  }
+  return out;
+}
+
 /**
  * Une playlist HLS valide commence par #EXTM3U et contient des segments.
  */

@@ -126,10 +126,18 @@ export function syncVideos(limit = 20) {
     for (const m of todo) {
       try {
         const r = await findReplay(m);
-        if (r.okId || r.slug) db.setVideo(m.id, { slug: r.slug, okId: r.okId, duration: r.duration, available: r.available });
+        // Un replay déjà trouvé (en MP4, revérifié pour passer en HLS) n'est
+        // jamais rétrogradé par une recherche qui échoue : page ou embed
+        // momentanément illisible ne doivent pas faire disparaître le replay.
+        const wasAvailable = !!m.video_available && !!m.video_ok_id;
+        if (wasAvailable && !r.available) db.markVideoChecked(m.id);
+        else if (r.okId || r.slug)
+          db.setVideo(m.id, { slug: r.slug, okId: r.okId, duration: r.duration, available: r.available, kind: r.kind });
         else db.markVideoChecked(m.id);
-        out.push(`${m.away_abbr}@${m.home_abbr}: ${r.available ? `ok.ru/${r.okId} (${r.duration}s)` : r.reason}`);
-        if (r.available) regenerateSubtitles(m.id);
+        out.push(`${m.away_abbr}@${m.home_abbr}: ${r.available ? `ok.ru/${r.okId} ${r.kind} (${r.duration}s)` : r.reason}`);
+        // Passage MP4 → HLS sur la même vidéo : mêmes timecodes, rien à recaler.
+        const sameVideo = wasAvailable && r.okId === m.video_ok_id && r.duration === m.video_duration;
+        if (r.available && !sameVideo) regenerateSubtitles(m.id);
       } catch (e) {
         db.markVideoChecked(m.id);
         out.push(`${m.id}: ${(e as Error).message}`);
