@@ -161,7 +161,10 @@ export async function proxiedAsset(okId: string, key: string | null, asset: stri
   if (!resp.ok) throw new ProxyError(502, `amont HTTP ${resp.status}`);
   // ok.ru renvoie la playlist pour un nom de fichier inconnu dans ce
   // dossier : on ne doit pas le relayer comme si c'était la ressource.
-  const ctype = resp.headers.get('content-type') ?? '';
+  // Attention à la casse : ok.ru répond `application/x-mpegURL` (avec la
+  // capitalisation d'origine), un test sur `includes('mpegurl')` ne
+  // matchait donc jamais.
+  const ctype = (resp.headers.get('content-type') ?? '').toLowerCase();
   if (ctype.includes('mpegurl') || ctype.includes('m3u8')) {
     throw new ProxyError(404, 'ressource introuvable');
   }
