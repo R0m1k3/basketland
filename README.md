@@ -13,6 +13,7 @@ Application web de replays NBA, conteneurisée pour Unraid : calendrier complet 
 | **Statistiques** | Bouton « Statistiques du match » actif **uniquement** quand le match est terminé : boxscore des deux équipes, lignes de chaque joueur (MIN, PTS, FG, 3PT, FT, REB, AST, TO, STL, BLK, OREB, DREB, PF, ±), leaders du match. |
 | **VF française synchronisée** | Sous-titres en français calés sur la vidéo, générés à partir du play-by-play et alignés sur l'audio original. Export WebVTT. Ajustement manuel du décalage possible. |
 | **Classement** | Classement NBA par conférence. |
+| **Page équipe** | `/equipes/[abbr]` : prochain match, derniers résultats, replays disponibles et bilan de la saison. Les noms d'équipes de la fiche match y mènent. |
 
 ## Architecture
 

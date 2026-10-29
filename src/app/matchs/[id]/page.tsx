@@ -43,7 +43,12 @@ export default async function MatchPage({ params }: { params: Promise<{ id: stri
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={match.away.logo} alt={match.away.name} width={44} height={44} />
             <div>
-              <div className="text-lg font-semibold text-white">{match.away.name}</div>
+              <Link
+                href={`/equipes/${match.away.abbr}`}
+                className="text-lg font-semibold text-white hover:text-court-400 hover:underline"
+              >
+                {match.away.name}
+              </Link>
               <div className="text-2xl font-bold tabular-nums text-slate-300">
                 {match.away.score ?? '—'}
               </div>
@@ -60,7 +65,12 @@ export default async function MatchPage({ params }: { params: Promise<{ id: stri
 
           <div className="flex flex-1 items-center justify-end gap-3 sm:justify-end">
             <div className="text-right">
-              <div className="text-lg font-semibold text-white">{match.home.name}</div>
+              <Link
+                href={`/equipes/${match.home.abbr}`}
+                className="text-lg font-semibold text-white hover:text-court-400 hover:underline"
+              >
+                {match.home.name}
+              </Link>
               <div className="text-2xl font-bold tabular-nums text-slate-300">
                 {match.home.score ?? '—'}
               </div>
