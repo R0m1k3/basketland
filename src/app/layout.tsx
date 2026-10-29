@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 import { Barlow_Condensed, Inter } from 'next/font/google';
 import Logo from '@/components/ui/Logo';
-import Nav from '@/components/ui/Nav';
+import Nav, { BottomNav } from '@/components/ui/Nav';
 import './globals.css';
 
 const display = Barlow_Condensed({
@@ -43,13 +43,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </span>
           </div>
         </header>
-        <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:pt-8">{children}</main>
-        <footer className="border-t border-ink-700/60">
+        <main className="mx-auto max-w-7xl px-4 pb-28 pt-6 sm:pt-8 md:pb-16">{children}</main>
+        <footer className="border-t border-ink-700/60 pb-20 md:pb-0">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-6 text-xs text-paper-faint">
             <span>BasketLand — replays NBA avec VF synchronisée.</span>
             <span>Les vidéos proviennent de sources tierces ; BasketLand ne les héberge pas.</span>
           </div>
         </footer>
+        <BottomNav />
       </body>
     </html>
   );
