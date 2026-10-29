@@ -7,3 +7,8 @@ next-env.d.ts
 .env*
 npm-debug.log*
 coverage/
+
+# Fichiers de diagnostic (mesures de synchronisation locales)
+eng.traineddata
+ocr_scan.mjs
+scan_scoreboard.mjs
