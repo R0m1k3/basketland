@@ -48,6 +48,7 @@ Dans Unraid : **Docker → Add Container**
 |---|---|
 | Name | `basketland` |
 | Repository | `ghcr.io/r0m1k3/basketland` |
+| Repository : Access Token | token GitHub avec le scope `read:packages` (**l'image est privée**) |
 | Network Type | `bridge` |
 | Port (HTTP) | `3000` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
@@ -55,7 +56,10 @@ Dans Unraid : **Docker → Add Container**
 
 Puis **Apply**. L'application est accessible sur `http://<IP-DU-NAS>:3000`.
 
-> Si l'image est privée, ajouter dans les *Repository* le champ `Access Token` avec un token GitHub possédant le scope `read:packages`.
+> **L'image est privée.** Sans *Access Token*, Unraid ne pourra pas la tirer.
+> Pour la rendre publique : GitHub → le package `basketland` → *Package settings* →
+> *Change visibility* → *Public*. Les paquets déjà publiés par ce compte
+> (`logiflow`, `collectflow`, `socialflow`…) sont publics.
 
 ### 3. Alternative docker-compose
 
@@ -66,12 +70,36 @@ services:
     container_name: basketland
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       TZ: Europe/Paris
     volumes:
       - /mnt/user/appdata/basketland:/data
 ```
+
+## Synchronisation des données
+
+Les matchs, statistiques et replays sont récupérés par jobs. Le premier
+lancement se fait manuellement :
+
+```bash
+# Dans le conteneur (ou via l'API d'ingestion)
+curl -X POST http://localhost:3000/api/ingest \
+  -H "Authorization: Bearer <INGEST_TOKEN>" \
+  -H 'Content-Type: application/json' \
+  -d '{"jobs":["sync-schedule","sync-stats","sync-videos"]}'
+```
+
+| Job | Rôle |
+|---|---|
+| `sync-schedule` | Calendrier : matchs à venir et récents (7 jours avant / après). |
+| `sync-season` | Saison complète, mois par mois. |
+| `sync-stats` | Boxscores, joueurs, leaders et play-by-play des matchs terminés. |
+| `sync-videos` | Découvre les replays sur basketball-video.com. |
+| `sync-subtitles` | Régénère la VF française et recalcule la synchronisation. |
+
+Le jeton d'ingestion est soit défini par la variable d'environnement
+`INGEST_TOKEN`, soit généré automatiquement dans `/data/ingest_token`.
 
 ## Développement local
 
@@ -79,7 +107,8 @@ services:
 npm install
 npm run dev          # http://localhost:3000
 npm run build        # build de production
-npm test             # tests
+npm run typecheck    # vérification TypeScript
+npm test             # 100 tests (dont 27 sur captures réelles)
 ```
 
 ## Documentation
