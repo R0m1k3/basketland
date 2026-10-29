@@ -1,0 +1,35 @@
+{
+  "name": "basketland",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Replays NBA, calendrier en heure de Paris, stats ESPN et VF française synchronisée",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "hls.js": "1.7.4",
+    "next": "15.5.28",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tesseract.js": "7.0.0",
+    "@tesseract.js-data/eng": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "3.4.19",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.0"
+  }
+}
