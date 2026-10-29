@@ -39,6 +39,7 @@ Dans **Unraid → Terminal**, collez :
 
 ```bash
 mkdir -p /mnt/user/appdata/basketland && \
+chown -R 1000:1000 /mnt/user/appdata/basketland && \
 docker run -d \
   --name basketland \
   --restart unless-stopped \
@@ -47,6 +48,12 @@ docker run -d \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
+
+> Le `chown 1000:1000` est nécessaire : le conteneur tourne avec
+> l'utilisateur `node` (uid 1000), et un volume monté sur `/data` remplace
+> le répertoire de l'image — le `chown` fait au build est donc perdu. Sans
+> lui, le dossier appartient à `root` et l'application ne peut pas créer
+> sa base SQLite.
 
 L'image est **publique** : aucun jeton n'est nécessaire. Le premier
 tirage télécharge l'image (une à deux minutes), puis le conteneur démarre.

@@ -182,7 +182,21 @@ const g = globalThis as unknown as { __basketlandDb?: DatabaseSyncType };
 
 export function openDatabase(file: string): DatabaseSyncType {
   const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite');
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (file !== ':memory:') {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+    } catch (e) {
+      // Un volume Unraid monte sur /data remplace le répertoire de l'image :
+      // le `chown node:node` du Dockerfile est alors perdu, et si le
+      // dossier appartient à root, l'utilisateur `node` (uid 1000) ne peut
+      // plus écrire. On explique le problème au lieu d'un crash opaque.
+      throw new Error(
+        `Impossible de créer le répertoire de la base (${path.dirname(file)}) : ${(e as Error).message}. ` +
+          `Vérifiez que le volume est inscriptible par l'utilisateur du conteneur (uid 1000) : ` +
+          `sur Unraid, chown -R 1000:1000 /mnt/user/appdata/basketland`,
+      );
+    }
+  }
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA_SQL);
