@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import MatchClient, { type PlayLite } from '@/components/MatchClient';
+import MatchClient, { type PlayLite, type PlayPosition } from '@/components/MatchClient';
 import StatsPanel from '@/components/StatsPanel';
 import MatchHeader from '@/components/match/MatchHeader';
 import Countdown from '@/components/match/Countdown';
@@ -9,7 +9,7 @@ import TeamLogo from '@/components/ui/TeamLogo';
 import type { PlayItem } from '@/components/match/PlayByPlay';
 import { FICHE_ROOT_ID } from '@/components/match/format';
 import { spoilerMode } from '@/components/ui/spoilers';
-import { getMatch, getPlays } from '@/lib/db';
+import { getMatch, getPlays, getSubtitles } from '@/lib/db';
 import { computeLinescore } from '@/lib/linescore';
 import { toDto } from '@/lib/present';
 import { teamInfo } from '@/lib/teams';
@@ -84,6 +84,10 @@ export default async function MatchPage({ params }: Params) {
   const items = toPlayItems(plays);
   const lite: PlayLite[] = plays.map((p) => [p.seq, p.period, p.clock_sec, p.clock_display]);
   const hasVideo = isFinal && match.video.available && !!match.video.src;
+  // Position vidéo estimée de chaque action (play-by-play calé par l'analyse
+  // du bandeau) : sert à « Revoir l'action » et aux repères de quart. Ce ne
+  // sont PAS les sous-titres affichés (traduction des commentateurs).
+  const positions: PlayPosition[] = hasVideo ? getSubtitles(match.id).map((s) => [s.seq, s.video_ts]) : [];
   const away = teamInfo(match.away.abbr);
   const home = teamInfo(match.home.abbr);
   // Mode « scores masqués » commun au site (cookie lu côté serveur : pas de clignotement).
@@ -117,6 +121,7 @@ export default async function MatchPage({ params }: Params) {
             awayAbbr={match.away.abbr}
             homeAbbr={match.home.abbr}
             plays={lite}
+            positions={positions}
           />
         )}
 
@@ -126,7 +131,7 @@ export default async function MatchPage({ params }: Params) {
             home={match.home.abbr}
             kicker="Replay"
             title="Replay pas encore trouvé"
-            text="Les replays apparaissent en général quelques heures après la fin du match. Nouvelle recherche automatique toutes les 2 h : revenez un peu plus tard, la VF sera prête en même temps."
+            text="Les replays apparaissent en général quelques heures après la fin du match. Nouvelle recherche automatique toutes les 2 h : revenez un peu plus tard. Les commentaires sont ensuite traduits en français automatiquement."
           />
         )}
 
@@ -136,7 +141,7 @@ export default async function MatchPage({ params }: Params) {
             home={match.home.abbr}
             kicker="En direct"
             title="Match en cours"
-            text="Le replay et la VF synchronisée seront disponibles quelques heures après le coup de sifflet final."
+            text="Le replay et les commentaires traduits en français seront disponibles quelques heures après le coup de sifflet final."
             live
           />
         )}
@@ -154,12 +159,12 @@ export default async function MatchPage({ params }: Params) {
                 <strong className="font-semibold text-paper">{match.time_paris}</strong> (heure de Paris)
                 {match.broadcast ? ` · ${match.broadcast}` : ''}.
                 <br />
-                Le replay et la VF seront disponibles après le match.
+                Le replay et les commentaires en français seront disponibles après le match.
               </p>
               <ul className="mx-auto mt-8 grid max-w-2xl gap-3 text-left sm:grid-cols-3">
                 {[
                   ['Replay intégral', 'Trouvé automatiquement après le match.'],
-                  ['VF synchronisée', 'Commentaires en français calés sur la vidéo.'],
+                  ['Commentaires en VF', 'La voix des commentateurs traduite en français, en sous-titres.'],
                   ['Stats complètes', 'Leaders, duel d’équipes, box score, actions.'],
                 ].map(([t, d]) => (
                   <li key={t} className="panel-soft px-4 py-3">
