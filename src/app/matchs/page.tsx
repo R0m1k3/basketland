@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { MatchCard } from '@/components/MatchCard';
-import { listMatches, listSeasons, listTeams } from '@/lib/db';
+import { countMatches, listMatches, listSeasons, listTeams } from '@/lib/db';
 import { toDto } from '@/lib/present';
 
 export const dynamic = 'force-dynamic';
@@ -27,14 +27,22 @@ export default async function MatchesPage({
   const season = one('season');
   const team = one('team');
   const order = one('order') === 'desc' ? 'desc' : 'asc';
+  // Pagination : la spec l'annonce, et sans elle les matchs au-delà de la
+  // limite n'étaient accessibles par aucun moyen (300 cartes, puis plus rien).
+  const pageSize = Math.min(Math.max(Number(one('limit')) || 60, 12), 300);
+  const page = Math.max(Number(one('page')) || 1, 1);
+  const offset = (page - 1) * pageSize;
 
-  const matches = listMatches({
+  const filters = {
     status: status === 'all' ? undefined : (status as 'scheduled' | 'live' | 'final'),
     season: season ? Number(season) : undefined,
     team,
     order,
-    limit: 300,
-  }).map(toDto);
+  } as const;
+
+  const matches = listMatches({ ...filters, limit: pageSize, offset }).map(toDto);
+  const total = countMatches({ ...filters });
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   // Groupement par jour à Paris.
   const groups: Array<{ date: string; label: string; items: typeof matches }> = [];
@@ -57,6 +65,10 @@ export default async function MatchesPage({
       season,
       team,
       order,
+      // Un changement de filtre ou de tri repart de la première page :
+      // conserver l'ancienne page menait à une page vide ou hors bornes.
+      page: '1',
+      limit: String(pageSize),
       ...patch,
     };
     for (const [k, v] of Object.entries(merged)) {
@@ -152,6 +164,32 @@ export default async function MatchesPage({
             </section>
           ))}
         </div>
+      )}
+
+      {totalPages > 1 && (
+        <nav className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4 text-sm">
+          <span className="text-slate-500">
+            Page {page} sur {totalPages} · {total} match{total > 1 ? 's' : ''}
+          </span>
+          <div className="flex items-center gap-2">
+            {page > 1 && (
+              <Link
+                href={qs({ page: String(page - 1), limit: String(pageSize) })}
+                className="rounded-lg border border-slate-700 px-3 py-1.5 text-slate-300 hover:border-slate-500"
+              >
+                ← Précédents
+              </Link>
+            )}
+            {page < totalPages && (
+              <Link
+                href={qs({ page: String(page + 1), limit: String(pageSize) })}
+                className="rounded-lg border border-slate-700 px-3 py-1.5 text-slate-300 hover:border-slate-500"
+              >
+                Suivants →
+              </Link>
+            )}
+          </div>
+        </nav>
       )}
     </div>
   );
