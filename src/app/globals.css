@@ -258,6 +258,27 @@ body {
 .subtitle-banner {
   @apply bg-ink-950/85 ring-1 ring-flame/50;
 }
+/* Roll-up : entrée par le bas, la ligne précédente remonte et s'estompe. */
+@keyframes subtitle-in {
+  from {
+    opacity: 0;
+    transform: translateY(40%);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.subtitle-roll {
+  animation: subtitle-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+.subtitle-older {
+  opacity: 0.62;
+  transform: scale(0.94);
+}
 .subtitle-banner .subtitle-text {
   @apply font-display uppercase tracking-wide;
 }

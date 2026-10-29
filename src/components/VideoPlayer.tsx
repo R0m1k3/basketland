@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type HlsType from 'hls.js';
 import type { ErrorData, HlsConfig } from 'hls.js';
 import TeamLogo from '@/components/ui/TeamLogo';
-import { useCue, usePlayback, type Subtitle } from '@/components/match/playback';
+import { usePlayback, useScreenLines, type Subtitle } from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
@@ -700,26 +700,39 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
 
 // ---------------------------------------------------------------- sous-composants
 
-/** Ligne de VF superposée : seul composant re-rendu au changement de ligne. */
+/**
+ * VF écrite sur l'image, en « roll-up » : la nouvelle ligne arrive par le
+ * bas, la précédente remonte et s'estompe au lieu de disparaître d'un coup.
+ * Seul composant re-rendu au changement de ligne.
+ */
 const SubtitleOverlay = memo(function SubtitleOverlay({ subs, lifted }: { subs: Subtitle[]; lifted: boolean }) {
-  const cue = useCue();
+  const lines = useScreenLines();
   const noSpoil = useNoSpoil();
-  const s = cue.visible && cue.index >= 0 ? subs[cue.index] : null;
-  if (!s) return null;
-  const text = noSpoil ? stripScores(s.text) : s.text;
-  const banner = s.kind === 'score' || s.kind === 'banniere';
-  const accent = s.speaker ? teamInfo(s.speaker).accent : null;
+  if (!lines.length) return null;
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 z-[5] flex justify-center px-[4%] transition-[bottom] duration-300 ${
+      className={`pointer-events-none absolute inset-x-0 z-[5] flex flex-col items-center gap-1.5 px-[4%] transition-[bottom] duration-300 ${
         lifted ? 'bottom-[88px] sm:bottom-[100px]' : 'bottom-[6%]'
       }`}
       aria-live="polite"
     >
-      <div key={s.seq} className={`subtitle-box animate-fade-up ${banner ? 'subtitle-banner' : ''}`}>
-        {accent && !banner && <span className="subtitle-team" style={{ background: accent }} aria-hidden="true" />}
-        <span className="subtitle-overlay subtitle-text">{text}</span>
-      </div>
+      {lines.map((i, pos) => {
+        const s = subs[i];
+        if (!s) return null;
+        const text = noSpoil ? stripScores(s.text) : s.text;
+        const banner = s.kind === 'score' || s.kind === 'banniere';
+        const accent = s.speaker ? teamInfo(s.speaker).accent : null;
+        const older = pos < lines.length - 1;
+        return (
+          <div
+            key={s.seq}
+            className={`subtitle-box subtitle-roll ${older ? 'subtitle-older' : ''} ${banner ? 'subtitle-banner' : ''}`}
+          >
+            {accent && !banner && <span className="subtitle-team" style={{ background: accent }} aria-hidden="true" />}
+            <span className="subtitle-overlay subtitle-text">{text}</span>
+          </div>
+        );
+      })}
     </div>
   );
 });

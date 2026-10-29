@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCue, type Subtitle } from '../src/components/match/playback';
+import { findCue, findOnScreen, readDuration, type Subtitle } from '../src/components/match/playback';
 import { fmtTime, parseClock } from '../src/components/match/format';
 import { stripScores } from '../src/components/match/spoiler';
 
@@ -48,5 +48,40 @@ describe('mise en forme', () => {
   it('stripScores retire le score des lignes de fin de période', () => {
     expect(stripScores('Fin du 4e quart · NY 133 – 127 CHI')).toBe('Fin du 4e quart');
     expect(stripScores('Dunk de Caleb Wilson !')).toBe('Dunk de Caleb Wilson !');
+  });
+});
+
+describe('findOnScreen (VF en roll-up)', () => {
+  const mk = (seq: number, at: number, text = 'Dunk de Wembanyama', end: number | null = at + 1): Subtitle => ({
+    seq,
+    video_ts: at,
+    end_ts: end,
+    text,
+    speaker: '',
+    kind: 'action',
+  });
+
+  it('une ligne trop courte reste le temps d’être lue', () => {
+    const subs = [mk(1, 10, 'Temps mort Clippers', 10.8)];
+    expect(readDuration(subs[0])).toBeGreaterThanOrEqual(2.5);
+    expect(findOnScreen(subs, 12)).toEqual([0]);
+    expect(findOnScreen(subs, 14)).toEqual([]);
+  });
+
+  it('deux actions simultanées s’empilent au lieu de s’écraser', () => {
+    const subs = [mk(1, 455, 'Walker Kessler marque en lay-up'), mk(2, 455, 'Walker Kessler marque le lancer franc 1 sur 1')];
+    expect(findOnScreen(subs, 455.5)).toEqual([0, 1]);
+  });
+
+  it('au plus deux lignes, les plus récentes', () => {
+    const subs = [mk(1, 100), mk(2, 100.5), mk(3, 101)];
+    expect(findOnScreen(subs, 101.2)).toEqual([1, 2]);
+  });
+
+  it('une ligne longue reste plus longtemps', () => {
+    const court = mk(1, 0, 'Faute');
+    const long = mk(2, 0, 'Shai Gilgeous-Alexander marque un shoot à 3 points, passe décisive de Jalen Williams');
+    expect(readDuration(long)).toBeGreaterThan(readDuration(court));
+    expect(readDuration(long)).toBeLessThanOrEqual(7);
   });
 });
