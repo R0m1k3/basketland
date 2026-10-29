@@ -208,6 +208,7 @@ CREATE TABLE ingest_log (
 | `/api/matches/[id]/stats` | GET | Stats équipe + joueurs (renvoie `available: false` si match non terminé) |
 | `/api/matches/[id]/subtitles` | GET | Sous-titres FR avec `video_ts` |
 | `/api/matches/[id]/sync` | GET/POST | Lit / écrit les ancrages et l'offset manuel |
+| `/api/matches/[id]/replay` | POST | `{ action: "check" }` : cherche le replay tout de suite (match terminé, au plus une fois toutes les 2 min par match) → `{ video, checked, message }` |
 | `/api/schedule` | GET | Calendrier : matchs à venir + récents, groupés par date **Europe/Paris** |
 | `/api/video/[okId]/master.m3u8` | GET | Proxy : ré-résout le m3u8 ok.ru (les signatures expirent) et réécrit les URLs de variantes vers le proxy |
 | `/api/video/[okId]/playlist.m3u8` | GET | Proxy : réécrit les URLs de segments vers le proxy |
@@ -278,7 +279,7 @@ La VF doit rester **courte** (une ligne par action notable) : les actions à 3 p
 |---|---|---|
 | `sync-schedule` | toutes les 15 min | Rafraîchir les matchs des 7 derniers jours + les 7 prochains jours |
 | `sync-stats` | après chaque match | Récupérer boxscore + actions quand `status = final` |
-| `sync-videos` | toutes les 2 h | Scanner les matchs terminés sans vidéo → scraper basketball-video.com |
+| `sync-videos` | toutes les 20 min | Scanner les matchs terminés sans vidéo → scraper basketball-video.com (match fini depuis < 12 h : à chaque passage ; plus vieux ou MP4 en attente du HLS : toutes les 2 h ; ≤ 21 jours) |
 | `sync-subtitles` | après `sync-stats` | Générer la VF française + calculer les `video_ts` |
 
 Le scraping vidéo ne doit pas bloquer le refresh du calendrier : tasks séparées, erreurs isolées.

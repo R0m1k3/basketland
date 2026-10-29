@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as db from './db';
 import { fetchScoreboard, fetchScoreboardRange, fetchSummary } from './espn';
-import { findReplay } from './bv';
+import { findReplay, type ReplayLookup } from './bv';
+import { replayRecheckWindow } from './replayCadence';
 import { classifyPlay } from './vf';
 import { buildCommentary } from './vf';
 import { alignWithCuts, buildMapping, findBreaks, resolveAnchorWall, timeLines, toTimedPlays, type ResolvedAnchor } from './sync';
@@ -113,32 +114,79 @@ export function syncStats(limit = 15) {
   });
 }
 
+/** Résultat d'une recherche de replay pour un match (job ou demande). */
+export interface ReplaySearchResult {
+  /** null si la recherche a levé une erreur (réseau…). */
+  lookup: ReplayLookup | null;
+  /** Replay lisible après la recherche (nouveau ou déjà connu). */
+  available: boolean;
+  /** Un replay vient d'apparaître ou a changé (autre vidéo, MP4 → HLS…). */
+  changed: boolean;
+  /** Ligne de journal (`ingest_log`). */
+  line: string;
+}
+
+/** Ligne de match avec la colonne `video_kind` (absente de `MatchRow`). */
+type VideoMatchRow = MatchRow & { video_kind?: string | null };
+
+/**
+ * Recherches en cours, par match : le job périodique et une recherche à la
+ * demande sur le même match partagent la même promesse au lieu de scraper
+ * deux fois en parallèle.
+ */
+const replaySearches = new Map<number, Promise<ReplaySearchResult>>();
+
+export function replaySearchInProgress(matchId: number): boolean {
+  return replaySearches.has(matchId);
+}
+
+/**
+ * Cherche le replay d'un match et enregistre le résultat (setVideo /
+ * markVideoChecked, `video_kind`). Ne lève jamais : une erreur est
+ * journalisée et le match marqué vérifié (pas de nouvel essai immédiat).
+ * `fresh` : relit la 1re page de liste malgré le cache (recherche à la demande).
+ */
+export function searchReplay(m: VideoMatchRow, opts: { fresh?: boolean } = {}): Promise<ReplaySearchResult> {
+  const current = replaySearches.get(m.id);
+  if (current) return current;
+  const p = runReplaySearch(m, opts).finally(() => replaySearches.delete(m.id));
+  replaySearches.set(m.id, p);
+  return p;
+}
+
+async function runReplaySearch(m: VideoMatchRow, opts: { fresh?: boolean }): Promise<ReplaySearchResult> {
+  const wasAvailable = !!m.video_available && !!m.video_ok_id;
+  try {
+    const r = await findReplay(m, opts);
+    // Un replay déjà trouvé (en MP4, revérifié pour passer en HLS) n'est
+    // jamais rétrogradé par une recherche qui échoue : page ou embed
+    // momentanément illisible ne doivent pas faire disparaître le replay.
+    if (wasAvailable && !r.available) db.markVideoChecked(m.id);
+    else if (r.okId || r.slug)
+      db.setVideo(m.id, { slug: r.slug, okId: r.okId, duration: r.duration, available: r.available, kind: r.kind });
+    else db.markVideoChecked(m.id);
+    const line = `${m.away_abbr}@${m.home_abbr}: ${r.available ? `ok.ru/${r.okId} ${r.kind} (${r.duration}s)` : r.reason}`;
+    // Passage MP4 → HLS sur la même vidéo : mêmes timecodes, rien à recaler.
+    const sameVideo = wasAvailable && r.okId === m.video_ok_id && r.duration === m.video_duration;
+    if (r.available && !sameVideo) regenerateSubtitles(m.id);
+    const prevKind = m.video_kind === 'mp4' ? 'mp4' : 'hls';
+    const changed = r.available && (!sameVideo || (r.kind ?? 'hls') !== prevKind);
+    return { lookup: r, available: wasAvailable || r.available, changed, line };
+  } catch (e) {
+    db.markVideoChecked(m.id);
+    return { lookup: null, available: wasAvailable, changed: false, line: `${m.id}: ${(e as Error).message}` };
+  }
+}
+
+/**
+ * Job vidéo (toutes les 20 min) : cadence de revérification selon l'âge du
+ * match, voir `replayCadence.ts` et `finalMatchesNeedingVideo`.
+ */
 export function syncVideos(limit = 20) {
   return runLogged('sync-videos', async () => {
-    const since = addDays(new Date(), -21).toISOString();
-    const recheckBefore = new Date(Date.now() - 2 * 3600_000).toISOString();
-    const todo = db.finalMatchesNeedingVideo(since, recheckBefore, limit);
+    const todo = db.finalMatchesNeedingVideo(replayRecheckWindow(), limit);
     const out: string[] = [];
-    for (const m of todo) {
-      try {
-        const r = await findReplay(m);
-        // Un replay déjà trouvé (en MP4, revérifié pour passer en HLS) n'est
-        // jamais rétrogradé par une recherche qui échoue : page ou embed
-        // momentanément illisible ne doivent pas faire disparaître le replay.
-        const wasAvailable = !!m.video_available && !!m.video_ok_id;
-        if (wasAvailable && !r.available) db.markVideoChecked(m.id);
-        else if (r.okId || r.slug)
-          db.setVideo(m.id, { slug: r.slug, okId: r.okId, duration: r.duration, available: r.available, kind: r.kind });
-        else db.markVideoChecked(m.id);
-        out.push(`${m.away_abbr}@${m.home_abbr}: ${r.available ? `ok.ru/${r.okId} ${r.kind} (${r.duration}s)` : r.reason}`);
-        // Passage MP4 → HLS sur la même vidéo : mêmes timecodes, rien à recaler.
-        const sameVideo = wasAvailable && r.okId === m.video_ok_id && r.duration === m.video_duration;
-        if (r.available && !sameVideo) regenerateSubtitles(m.id);
-      } catch (e) {
-        db.markVideoChecked(m.id);
-        out.push(`${m.id}: ${(e as Error).message}`);
-      }
-    }
+    for (const m of todo) out.push((await searchReplay(m)).line);
     return out.length ? out.join(' | ') : 'rien à faire';
   });
 }

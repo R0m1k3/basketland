@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { DatabaseSync as DatabaseSyncType, SQLInputValue } from 'node:sqlite';
+import type { ReplayRecheckWindow } from './replayCadence';
 import type {
   AnchorRow,
   CutInterval,
@@ -444,18 +445,21 @@ export type VideoKind = 'hls' | 'mp4';
 /**
  * Matchs terminés dont le replay est à (re)chercher : sans replay, OU
  * trouvé en MP4 seul (pour passer en HLS dès qu'ok.ru a fini le
- * traitement). Même cadence de revérification dans les deux cas.
+ * traitement).
+ *
+ * Cadence (voir `replayCadence.ts`) : un match sans replay terminé depuis
+ * moins de 12 h (`date_utc >= recentSince`) est revérifié dès que sa
+ * dernière vérification est antérieure à `recentRecheckBefore` (≈ 20 min) ;
+ * les autres, MP4 compris, à `recheckBefore` (≈ 2 h). Les plus récents
+ * d'abord : ce sont ceux qu'on attend.
  */
-export function finalMatchesNeedingVideo(
-  sinceIso: string,
-  recheckBeforeIso: string,
-  limit = 30,
-): (MatchRow & { video_kind: string | null })[] {
+export function finalMatchesNeedingVideo(w: ReplayRecheckWindow, limit = 30): (MatchRow & { video_kind: string | null })[] {
   return all<MatchRow & { video_kind: string | null }>(
     `SELECT * FROM matches WHERE status = 'final' AND (video_available = 0 OR video_kind = 'mp4') AND date_utc >= $since
-       AND (video_checked_at IS NULL OR video_checked_at < $recheck)
+       AND (video_checked_at IS NULL OR video_checked_at < $recheck
+            OR (video_available = 0 AND date_utc >= $recentSince AND video_checked_at < $recentRecheck))
      ORDER BY date_utc DESC LIMIT $limit`,
-    { since: sinceIso, recheck: recheckBeforeIso, limit },
+    { since: w.since, recheck: w.recheckBefore, recentSince: w.recentSince, recentRecheck: w.recentRecheckBefore, limit },
   );
 }
 
