@@ -25,7 +25,7 @@ export function intParam(v: string | null, def: number, min: number, max: number
  * Origines autorisées à effectuer des écritures de calibration.
  *
  * Liste séparée par des virgules dans `SYNC_WRITE_ORIGINS` : on y met des
- * origines (`http://192.168.1.16:3000`) ou des IP (`192.168.1.16`).
+ * origines (`http://192.168.1.16:3012`) ou des IP (`192.168.1.16`).
  * Liste vide = aucune restriction (comportement par défaut d'une app
  * mono-utilisateur sur le LAN).
  */
@@ -33,12 +33,12 @@ export function intParam(v: string | null, def: number, min: number, max: number
  * Origines autorisées à écrire.
  *
  * Chaque entrée peut être :
- *  - une origine complète (`http://nas.local:3000`) ;
- *  - un simple hôte (`nas.local:3000` ou `nas.local`) ;
+ *  - une origine complète (`http://nas.local:3012`) ;
+ *  - un simple hôte (`nas.local:3012` ou `nas.local`) ;
  *  - une IP (`192.168.1.16`).
  *
  * Les deux formes sont normalisées en `hôte` et `hôte:port` pour que
- * l'exemple du README (`http://nas.local:3000`) fonctionne réellement : la
+ * l'exemple du README (`http://nas.local:3012`) fonctionne réellement : la
  * comparaison se faisait auparavant sur `host` (avec port) alors que la
  * configuration documente une URL complète.
  */

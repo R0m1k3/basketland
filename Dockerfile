@@ -19,7 +19,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV TZ=Europe/Paris
-ENV PORT=3000
+ENV PORT=3012
 ENV HOSTNAME=0.0.0.0
 
 # L'image officielle `node` fournit déjà l'utilisateur `node` (uid 1000) :
@@ -36,13 +36,17 @@ RUN apt-get update \
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]
 
-USER node
-EXPOSE 3000
+# Pas de `USER node` ici : l'entrypoint démarre en root pour rendre le volume
+# /data à `node` (le chown du build est perdu au montage), puis lâche les
+# privilèges via setpriv avant de lancer le serveur.
+EXPOSE 3012
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3012)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "server.js"]

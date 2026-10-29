@@ -197,7 +197,20 @@ export function openDatabase(file: string): DatabaseSyncType {
       );
     }
   }
-  const db = new DatabaseSync(file);
+  let db: DatabaseSyncType;
+  try {
+    db = new DatabaseSync(file);
+  } catch (e) {
+    // Le répertoire peut exister (volume monté) sans être inscriptible :
+    // mkdirSync passe alors, et c'est SQLite qui échoue avec un
+    // « unable to open database file » sans piste.
+    throw new Error(
+      `Impossible d'ouvrir la base SQLite (${file}) : ${(e as Error).message}. ` +
+        `Vérifiez que le volume est inscriptible par l'utilisateur du conteneur (uid 1000) : ` +
+        `sur Unraid, chown -R 1000:1000 /mnt/user/appdata/basketland`,
+      { cause: e },
+    );
+  }
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA_SQL);
   return db;

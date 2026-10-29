@@ -7,10 +7,10 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3012",
     "build": "next build",
     "start": "node scripts/start-standalone.mjs",
-    "start:next": "next start -p 3000",
+    "start:next": "next start -p 3012",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
