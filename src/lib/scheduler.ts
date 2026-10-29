@@ -1,11 +1,12 @@
 /**
  * Cron interne (setInterval) démarré par `instrumentation.ts` côté serveur Node.
  * Fréquences (spec) : calendrier 15 min, stats après match (5 min), vidéos 2 h,
- * VF après stats. Désactivable avec DISABLE_CRON=1.
+ * VF après stats, analyse vidéo (synchro auto) 10 min. Désactivable avec DISABLE_CRON=1.
  */
 import { countMatches } from './db';
 import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
+import { enqueueRecentAnalyses } from './analysis';
 
 const g = globalThis as unknown as { __basketlandCron?: boolean };
 
@@ -36,4 +37,12 @@ export function startScheduler(): void {
   every(5 * MIN, () => syncStats(), 60_000);
   every(120 * MIN, () => syncVideos(), 3 * MIN);
   every(60 * MIN, () => syncSubtitles(), 10 * MIN);
+  // Synchro automatique : met en file (une analyse à la fois) les matchs
+  // terminés récents qui ont un replay mais pas encore d'ancres OCR. Les
+  // échecs sont espacés (backoff) : un match illisible n'est pas réanalysé
+  // en boucle.
+  every(10 * MIN, async () => {
+    const n = enqueueRecentAnalyses();
+    if (n) console.log(`[cron] ${n} analyse(s) vidéo mise(s) en file`);
+  }, 4 * MIN);
 }

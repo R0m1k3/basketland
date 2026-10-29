@@ -9,12 +9,8 @@ import * as db from './db';
 import { fetchScoreboard, fetchScoreboardRange, fetchSummary } from './espn';
 import { findReplay } from './bv';
 import { classifyPlay } from './vf';
-import { analyzeHlsAudio, detectCuts, ffmpegAvailable } from './audio';
-import { lightestVariant, OK_REFERER, resolveOkStream } from './okru';
-import { BROWSER_UA } from './http';
 import { buildCommentary } from './vf';
 import { alignWithCuts, buildMapping, findBreaks, resolveAnchorWall, timeLines, toTimedPlays, type ResolvedAnchor } from './sync';
-import { scanVideoClock, selectConsistentObservations } from './ocr';
 import { addDays, currentSeason, espnDate } from './time';
 import type { AnchorRow, MatchRow } from './types';
 
@@ -189,7 +185,7 @@ export function syncSubtitles(limit = 50) {
   });
 }
 
-// ------------------------------------------------------------------ analyse vidéo (OCR + audio)
+// ------------------------------------------------------------------ ancres
 
 function anchorRow(matchId: number, a: ResolvedAnchor): AnchorRow {
   return {
@@ -202,144 +198,8 @@ function anchorRow(matchId: number, a: ResolvedAnchor): AnchorRow {
   };
 }
 
-interface AnalysisState {
-  phase: 'ocr' | 'audio';
-  done: number;
-  total: number;
-  startedAt: string;
-}
-const g = globalThis as unknown as { __analysis?: Map<number, AnalysisState> };
-const analysis = (g.__analysis ??= new Map());
-
-/**
- * Date du dernier lancement d'analyse, par match.
- *
- * Un scan OCR complet extrait ~130 images et lance ~130 passes tesseract :
- * environ 5 à 8 minutes de CPU. Sans garde, un appel non authentifié
- * (`POST /api/matches/[id]/sync` est accessible depuis l'UI, donc sans
- * jeton) permettrait de saturer le NAS en boucle. Le cooldown borne la
- * fréquence, `ANALYSIS_MIN_INTERVAL_MS` la rend configurable.
- */
-const gLast = globalThis as unknown as { __analysisLast?: Map<number, number> };
-const analysisLast = (gLast.__analysisLast ??= new Map());
-
-export function analysisStatus(matchId: number): {
-  status: 'none' | 'running' | 'done' | 'estimated' | 'unavailable';
-  progress?: AnalysisState;
-} {
-  const st = analysis.get(matchId);
-  if (st) return { status: 'running', progress: st };
-  const anchors = db.getAnchors(matchId);
-  if (anchors.some((a) => a.method === 'auto') || db.getAudioProfile(matchId)) return { status: 'done' };
-  // Une ancre ESTIMÉE (produite par défaut, sans OCR) ne vaut pas une
-  // analyse : le statut ne doit pas dire « done », sinon l'utilisateur
-  // croit la VF calibrée alors qu'elle est décalée de plusieurs minutes.
-  if (anchors.some((a) => a.method === 'est')) return { status: 'estimated' };
-  return { status: ffmpegAvailable() ? 'none' : 'unavailable' };
-}
-
-/** Variante utilisée pour l'OCR : 720p si dispo (le 480p est trop flou pour le chrono). */
-function ocrVariant(stream: Awaited<ReturnType<typeof resolveOkStream>>) {
-  return (
-    stream.variants.find((v) => v.key === 'hd') ??
-    [...stream.variants].filter((v) => /x(7\d\d|8\d\d)$/.test(v.resolution)).sort((a, b) => b.bandwidth - a.bandwidth)[0] ??
-    [...stream.variants].sort((a, b) => b.bandwidth - a.bandwidth)[0]
-  );
-}
-
-/**
- * Lance l'analyse automatique de synchro en tâche de fond :
- * Phase A — OCR du chrono à l'écran → ancres 'auto' cohérentes ;
- * Phase B — énergie audio (coupures) si l'OCR n'a pas donné assez d'ancres
- *           (ou si `withAudio` est demandé explicitement).
- */
-export function startVideoAnalysis(matchId: number, opts: { withAudio?: boolean } = {}): { started: boolean; reason?: string } {
-  const match = db.getMatch(matchId);
-  if (!match?.video_ok_id || !match.video_available) return { started: false, reason: 'pas de replay' };
-  if (!ffmpegAvailable()) return { started: false, reason: 'ffmpeg absent' };
-  if (analysis.has(matchId)) return { started: false, reason: 'déjà en cours' };
-  // Une valeur non numérique donnerait NaN, et toute comparaison avec NaN
-  // est fausse : la limite serait silencieusement désactivée.
-  const maxParallel = Math.max(1, Math.trunc(Number(process.env.ANALYSIS_MAX_PARALLEL) || 1));
-  if (analysis.size >= maxParallel) return { started: false, reason: 'une analyse est déjà en cours' };
-  // Cooldown : une analyse coûte 5 à 8 min de CPU, on borne la fréquence.
-  // `??` et non `||` : `ANALYSIS_MIN_INTERVAL_MS=0` doit pouvoir DÉSACTIVER
-  // le cooldown (0 est une valeur intentionnelle, pas une valeur absente).
-  const minIntervalRaw = process.env.ANALYSIS_MIN_INTERVAL_MS;
-  const minInterval = Number.isFinite(Number(minIntervalRaw))
-    ? Math.max(0, Math.trunc(Number(minIntervalRaw)))
-    : 15 * 60_000;
-  const last = analysisLast.get(matchId) ?? 0;
-  const since = Date.now() - last;
-  if (last && since < minInterval) {
-    const waitMin = Math.ceil((minInterval - since) / 60_000);
-    return { started: false, reason: `analyse récente, réessayez dans ~${waitMin} min` };
-  }
-  const okId = match.video_ok_id;
-  const state: AnalysisState = { phase: 'ocr', done: 0, total: 0, startedAt: new Date().toISOString() };
-  analysis.set(matchId, state);
-  void runLogged(`analyse-${matchId}`, async () => {
-    const report: string[] = [];
-    let plays = db.getPlays(matchId);
-    if (!plays.length) {
-      await ingestMatchDetails(match);
-      plays = db.getPlays(matchId);
-    }
-    const tp = toTimedPlays(plays);
-    const breaks = findBreaks(tp);
-    const stream = await resolveOkStream(okId, { force: true });
-    const duration = match.video_duration ?? stream.duration ?? 0;
-
-    // Phase A : OCR du chrono
-    let ocrAnchors = 0;
-    if (process.env.OCR_DISABLED !== '1') {
-      const v = ocrVariant(stream);
-      if (v) {
-        const obs = await scanVideoClock(v.url, {
-          userAgent: BROWSER_UA,
-          referer: OK_REFERER,
-          duration,
-          stepSec: Number(process.env.OCR_STEP_SEC ?? 60),
-          onProgress: (done, total) => Object.assign(state, { done, total }),
-        });
-        const anchors = selectConsistentObservations(obs, tp, breaks);
-        db.replaceAnchorsByMethod(matchId, 'auto', anchors.map((a) => anchorRow(matchId, a)));
-        ocrAnchors = anchors.length;
-        report.push(`OCR: ${obs.length} lectures, ${anchors.length} ancres cohérentes`);
-      }
-    }
-
-    // Phase B : énergie audio
-    if (opts.withAudio || ocrAnchors < 3) {
-      Object.assign(state, { phase: 'audio', done: 0, total: 1 });
-      const fresh = await resolveOkStream(okId, { force: true });
-      const v = lightestVariant(fresh);
-      if (!v) throw new Error('aucune variante');
-      const profile = await analyzeHlsAudio(v.url, { userAgent: BROWSER_UA, referer: OK_REFERER });
-      const cuts = detectCuts(profile);
-      db.saveAudioProfile({ match_id: matchId, ok_id: okId, window_sec: 1, rms_db: profile, cuts });
-      report.push(`audio: ${profile.length} s, ${cuts.length} coupures`);
-    }
-    const n = regenerateSubtitles(matchId);
-    report.push(`${n} sous-titres recalés`);
-    return report.join(' ; ');
-  })
-    .then((res) => {
-      // Le cooldown n'est consommé qu'en cas de SUCCÈS.
-      //
-      // `runLogged` n'ATTIRE PAS l'erreur : il la capture et renvoie
-      // `{ ok: false }`. Un `.then()` sans condition posait donc le cooldown
-      // même après un échec, et une analyse morte en 2 s (ok.ru indisponible)
-      // bloquait toute nouvelle tentative pendant 15 min.
-      //
-      // Le cooldown est aussi compté depuis la FIN, pas depuis le début : une
-      // analyse de plus de 15 min ne peut ainsi pas être relancée
-      // immédiatement après sa fin.
-      if (res.ok) analysisLast.set(matchId, Date.now());
-    })
-    .finally(() => analysis.delete(matchId));
-  return { started: true };
-}
+// L'analyse vidéo (OCR du chrono + audio) et sa file d'attente sont dans
+// `analysis.ts` (startVideoAnalysis, analysisStatus, enqueueAnalysis).
 
 // ------------------------------------------------------------------ jeton /api/ingest
 
