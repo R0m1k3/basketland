@@ -20,7 +20,42 @@ export interface ClockReading {
   clock_sec: number;
 }
 
-const PERIOD_RE = /\b(1ST|2ND|3RD|4TH|OT\d?|[1-4](?:ST|ND|RD|TH))\b/;
+/**
+ * Période lue telle quelle, avec frontières de mot : "2ND", "4TH".
+ * Le bord droit évite "1STX".
+ */
+const PERIOD_STRICT_RE = /\b(1ST|2ND|3RD|4TH)\b/;
+
+/**
+ * Période collée au shot clock, sans séparateur : "2ND24", "1ST08".
+ * Le bord droit garantit qu'on ne colle pas la période au texte qui suit.
+ */
+const PERIOD_COLLED_RE = /(1ST|2ND|3RD|4TH)(?![A-Z])/;
+
+/**
+ * Prolongation : uniquement si le mot est isolé. Sur le bandeau NBC, "OT7THH"
+ * est du bruit de lecture d'un "3RD" mal reconnu : sans frontière de mot,
+ * on l'accepterait à tort et on attribuerait une 5e période à un match normal.
+ */
+const PERIOD_OT_RE = /\bOT(\d?)\b/;
+
+/**
+ * Confusions observées avec tesseract.js sur le bandeau NBC :
+ * le D de "3RD" est souvent lu O, le D de "2ND" lu O ou 0.
+ * Listes explicites : aucune autre approximation n'est acceptée.
+ */
+const PERIOD_VARIANTS: Array<[RegExp, number]> = [
+  [/1ST/, 1],
+  [/2ND/, 2],
+  [/3RD/, 3],
+  [/4TH/, 4],
+  [/1S7/, 1],
+  [/2NO/, 2],
+  [/2N0/, 2],
+  [/3RO/, 3],
+  [/3R0/, 3],
+  [/4T4/, 4],
+];
 
 function periodFromToken(tok: string): number | null {
   const t = tok.toUpperCase();
@@ -32,12 +67,30 @@ function periodFromToken(tok: string): number | null {
 /**
  * Extrait (période, chrono) d'un texte OCR de bandeau de score.
  * Accepte '8:41 1ST', '1ST 8:41', '42.8 4TH' (dernière minute en dixièmes).
+ * Accepte aussi la forme collée du diffuseur NBC : '1:24 65 2ND24' (le shot
+ * clock suit la période sans séparateur).
  * Rejette les motifs de bilan ('2-0') et les valeurs impossibles.
  */
 export function parseScoreboardText(text: string): ClockReading | null {
   const t = text.toUpperCase().replace(/[|]/g, ' ').replace(/\s+/g, ' ');
-  const periodTok = t.match(PERIOD_RE)?.[1] ?? null;
-  const period = periodTok ? periodFromToken(periodTok) : null;
+  // Période : forme classique (frontières de mot), puis forme collée au shot
+  // clock ("2ND24"), puis confusions OCR ("3RO"). La prolongation n'est retenue
+  // que si le mot est isolé, pour ne pas confondre un "3RD" mal lu avec un OT.
+  let period: number | null = null;
+  const strict = t.match(PERIOD_STRICT_RE)?.[1] ?? t.match(PERIOD_COLLED_RE)?.[1] ?? null;
+  if (strict) period = periodFromToken(strict);
+  if (period === null) {
+    for (const [re, value] of PERIOD_VARIANTS) {
+      if (re.test(t)) {
+        period = value;
+        break;
+      }
+    }
+  }
+  if (period === null) {
+    const ot = t.match(PERIOD_OT_RE);
+    if (ot) period = 4 + (Number(ot[1]) || 1);
+  }
   const candidates: number[] = [];
   for (const m of t.matchAll(/(?<![\d:.])(\d{1,2}):(\d{2})(?![\d:])/g)) {
     const mm = Number(m[1]);
@@ -128,11 +181,24 @@ export function selectConsistentObservations(
 
 // ------------------------------------------------------------------ extraction d'images + OCR
 
-/** Bandeau bas-centre, agrandi ×3, plusieurs binarisations (texte clair sur fond sombre et inverse). */
+/**
+ * Zone de lecture du chrono, dans le bandeau NBC (relevé sur image 1280x720).
+ *
+ * Le bandeau complet (x 25 %-75 %, y 82 %-98 %) contient trop d'éléments :
+ * l'OCR mélange alors le score, le chrono et le shot clock ("165 / 28. 651").
+ * En resserrant sur le bloc chrono + période + shot clock (x 42 %-57 %,
+ * y 82,5 %-95,5 %), tesseract.js lit proprement "1:24 65 2ND24".
+ *
+ * On garde trois binarisations : le texte du diffuseur est clair sur fond
+ * sombre, mais selon le cadrage et la compression l'inverse peut être net.
+ */
 export const OCR_FILTERS = [
-  "crop=iw*0.5:ih*0.16:iw*0.25:ih*0.82,scale=iw*3:-1,format=gray,lutyuv=y='if(gt(val,185),0,255)'",
-  'crop=iw*0.5:ih*0.16:iw*0.25:ih*0.82,scale=iw*3:-1,format=gray,negate',
-  "crop=iw*0.5:ih*0.16:iw*0.25:ih*0.82,scale=iw*4:-1,format=gray,lutyuv=y='if(gt(val,210),0,255)'",
+  // texte clair sur fond sombre -> noir sur blanc, agrandissement ×3
+  "crop=iw*0.15:ih*0.13:iw*0.42:ih*0.825,scale=iw*6:-1,format=gray,lutyuv=y='if(gt(val,185),0,255)'",
+  // idem, seuillage plus agressif
+  "crop=iw*0.15:ih*0.13:iw*0.42:ih*0.825,scale=iw*6:-1,format=gray,lutyuv=y='if(gt(val,210),0,255)'",
+  // version inversée (au cas où le bandeau serait clair sur fond sombre)
+  'crop=iw*0.15:ih*0.13:iw*0.42:ih*0.825,scale=iw*6:-1,format=gray,negate',
 ];
 
 export interface FrameGrabOptions {
