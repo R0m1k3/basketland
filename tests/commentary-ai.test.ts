@@ -13,6 +13,11 @@ import {
   translateSystemPrompt,
   validTranslation,
   whisperPrompt,
+  DEFAULT_TRANSLATE_MODEL,
+  groupSentences,
+  mtPrompt,
+  splitProportional,
+  translateBatchMt,
 } from '../src/lib/commentaryAi';
 
 const ENV = ['TRANSCRIBE_URL', 'TRANSLATE_URL', 'TRANSCRIBE_MODEL', 'TRANSLATE_MODEL', 'TRANSLATE_BATCH', 'COMMENTARY_DISABLED', 'TRANSLATE_PROMPT_FILE'];
@@ -63,10 +68,10 @@ describe('configuration', () => {
   it('modèles et taille de lot par défaut, surchargeables', () => {
     setEnv();
     const c = commentaryConfig();
-    expect(c).toMatchObject({ transcribeUrl: 'http://gpu.local:8000/v1', transcribeModel: 'Systran/faster-distil-whisper-large-v3', translateModel: 'mistral-nemo:12b', batch: 20 });
+    expect(c).toMatchObject({ transcribeUrl: 'http://gpu.local:8000/v1', transcribeModel: 'Systran/faster-distil-whisper-large-v3', translateModel: DEFAULT_TRANSLATE_MODEL, translateEngine: 'mt', batch: 20 });
     process.env.TRANSLATE_MODEL = 'qwen3:14b';
     process.env.TRANSLATE_BATCH = '999';
-    expect(commentaryConfig()).toMatchObject({ translateModel: 'qwen3:14b', batch: 60 });
+    expect(commentaryConfig()).toMatchObject({ translateModel: 'qwen3:14b', translateEngine: 'chat', batch: 60 });
   });
 
   it('prompt système remplaçable par un fichier', () => {
@@ -189,7 +194,11 @@ describe('analyse des réponses du LLM', () => {
 });
 
 describe('traduction par lots (faux serveur Ollama)', () => {
-  beforeEach(setEnv);
+  // LLM généraliste : lots JSON (le modèle par défaut, MiLMMT, a son propre mode).
+  beforeEach(() => {
+    setEnv();
+    process.env.TRANSLATE_MODEL = 'mistral-nemo:12b';
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -250,5 +259,65 @@ describe('traduction par lots (faux serveur Ollama)', () => {
   it('modèle absent d’Ollama : ServiceError explicite', async () => {
     fakeFetch(() => new Response('{"error":{"message":"model \\"mistral-nemo:12b\\" not found, try pulling it first"}}', { status: 404 }));
     await expect(translateBatch(lines, [], commentaryConfig())).rejects.toThrow('modèle de traduction « mistral-nemo:12b » absent d\'Ollama (ollama pull mistral-nemo:12b)');
+  });
+});
+
+describe('traduction par un modèle pur (MiLMMT, faux serveur Ollama)', () => {
+  beforeEach(setEnv);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    ENV.forEach((k) => delete process.env[k]);
+  });
+
+  it('gabarit officiel du modèle', () => {
+    expect(mtPrompt('Bang!')).toBe('Translate this from English to French:\nEnglish: Bang!\nFrench:');
+  });
+
+  it('regroupe les sous-titres en phrases (ponctuation finale, 4 lignes max)', () => {
+    const l = (i: number, en: string) => ({ i, en });
+    expect(groupSentences([l(1, 'Curry brings it up,'), l(2, 'looks for the screen.'), l(3, 'Bang!')]).map((g) => g.map((x) => x.i))).toEqual([[1, 2], [3]]);
+    expect(groupSentences([l(1, 'a'), l(2, 'b'), l(3, 'c'), l(4, 'd'), l(5, 'e')]).map((g) => g.length)).toEqual([4, 1]);
+  });
+
+  it('répartit une traduction au prorata, entre deux mots, sans part vide', () => {
+    const parts = splitProportional('Curry remonte le ballon, cherche l’écran et déclenche.', [20, 21]);
+    expect(parts).toHaveLength(2);
+    expect(parts!.every((p) => p.length > 0)).toBe(true);
+    expect(parts!.join(' ')).toBe('Curry remonte le ballon, cherche l’écran et déclenche.');
+    expect(parts![0].endsWith(',')).toBe(true); // coupe préférée après la ponctuation
+    expect(splitProportional('Oui !', [10, 10])).toBeNull();
+  });
+
+  it('complétion brute /api/generate, phrase par phrase, puis répartition', async () => {
+    const prompts: string[] = [];
+    fakeFetch((url, init) => {
+      expect(url).toBe('http://gpu.local:11434/api/generate');
+      const body = JSON.parse(String(init.body));
+      expect(body).toMatchObject({ model: DEFAULT_TRANSLATE_MODEL, raw: true, stream: false, options: { temperature: 0, top_k: 1, stop: ['\n'] } });
+      prompts.push(body.prompt);
+      const en = /English: (.*)\nFrench:/.exec(body.prompt)![1];
+      const fr = en === 'Curry brings it up, looks for the screen.' ? ' Curry remonte la balle, cherche l’écran.' : ' Dedans !';
+      return new Response(JSON.stringify({ response: fr, done: true }), { headers: { 'Content-Type': 'application/json' } });
+    });
+    const out = await translateBatchMt(
+      [
+        { i: 1, en: 'Curry brings it up,' },
+        { i: 2, en: 'looks for the screen.' },
+        { i: 3, en: 'Bang!' },
+      ],
+      commentaryConfig(),
+      { retryDelayMs: 0 },
+    );
+    expect(prompts).toHaveLength(2);
+    expect(out.map((x) => x.untranslated)).toEqual([false, false, false]);
+    expect(`${out[0].fr} ${out[1].fr}`).toBe('Curry remonte la balle, cherche l’écran.');
+    expect(out[2].fr).toBe('Dedans !');
+  });
+
+  it('réponse vide : nouvel essai puis anglais marqué', async () => {
+    fakeFetch(() => new Response(JSON.stringify({ response: '' }), { headers: { 'Content-Type': 'application/json' } }));
+    const out = await translateBatchMt([{ i: 1, en: 'Timeout Portland.' }], commentaryConfig(), { retryDelayMs: 0 });
+    expect(out).toEqual([{ i: 1, fr: 'Timeout Portland.', untranslated: true }]);
   });
 });

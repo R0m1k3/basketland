@@ -26,13 +26,29 @@ import { parseVerboseJson, type Transcript } from './commentaryCues';
 // ------------------------------------------------------------------ configuration
 
 export const DEFAULT_TRANSCRIBE_MODEL = 'Systran/faster-distil-whisper-large-v3';
-export const DEFAULT_TRANSLATE_MODEL = 'mistral-nemo:12b';
+/**
+ * MiLMMT-46-4B v1.0 (Xiaomi) : modèle SPÉCIALISÉ en traduction, entraîné sur
+ * Gemma 3 4B (46 langues dont l'anglais et le français). Servi par Ollama à
+ * partir du GGUF ; Q8_0 (~4 Go) laisse toute la marge sur une carte 12 Go.
+ */
+export const DEFAULT_TRANSLATE_MODEL = 'hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0';
+
+/**
+ * Deux façons de piloter le modèle de traduction :
+ * - 'mt'   : modèle de traduction pur (MiLMMT) — complétion BRUTE, une phrase
+ *            à la fois, avec le gabarit officiel du modèle ;
+ * - 'chat' : LLM généraliste (Mistral, Gemma, Qwen…) — lots de lignes en JSON
+ *            avec un prompt système.
+ * Par défaut : 'mt' si le nom du modèle contient « milmmt », sinon 'chat'.
+ */
+export type TranslateEngine = 'mt' | 'chat';
 
 export interface CommentaryConfig {
   transcribeUrl: string;
   transcribeModel: string;
   translateUrl: string;
   translateModel: string;
+  translateEngine: TranslateEngine;
   /** Sous-titres par requête de traduction. */
   batch: number;
   /** Durée d'un tronçon audio (s). */
@@ -48,7 +64,14 @@ function intEnv(name: string, def: number, min: number, max: number): number {
   return Number.isFinite(n) && process.env[name] !== '' ? Math.min(max, Math.max(min, Math.trunc(n))) : def;
 }
 
+export function engineFor(model: string, forced?: string): TranslateEngine {
+  const f = forced?.trim().toLowerCase();
+  if (f === 'mt' || f === 'chat') return f;
+  return /milmmt/i.test(model) ? 'mt' : 'chat';
+}
+
 export function commentaryConfig(): CommentaryConfig {
+  const translateModel = process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL;
   const transcribeUrl = trimUrl(process.env.TRANSCRIBE_URL);
   const translateUrl = trimUrl(process.env.TRANSLATE_URL);
   let disabledReason: string | null = null;
@@ -60,7 +83,8 @@ export function commentaryConfig(): CommentaryConfig {
     transcribeUrl,
     transcribeModel: process.env.TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIBE_MODEL,
     translateUrl,
-    translateModel: process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL,
+    translateModel,
+    translateEngine: engineFor(translateModel, process.env.TRANSLATE_ENGINE),
     batch: intEnv('TRANSLATE_BATCH', 20, 1, 60),
     chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 600, 60, 3600),
     disabledReason,
@@ -358,6 +382,7 @@ export interface TranslatedLine {
  * `context` : quelques lignes précédentes, données pour le sens seulement.
  */
 export async function translateBatch(lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext = {}): Promise<TranslatedLine[]> {
+  if (cfg.translateEngine === 'mt') return translateBatchMt(lines, cfg, o);
   const system = translateSystemPrompt();
   const done = new Map<number, string>();
   const missing = () => lines.filter((l) => !done.has(l.i));
@@ -379,5 +404,178 @@ export async function translateBatch(lines: TranslateLine[], context: string[], 
       if (validTranslation(l.en, fr)) done.set(l.i, fr);
     }
   }
+  return lines.map((l) => (done.has(l.i) ? { i: l.i, fr: done.get(l.i) as string, untranslated: false } : { i: l.i, fr: l.en, untranslated: true }));
+}
+
+// ------------------------------------------------------------------ modèle de traduction pur (MiLMMT)
+
+/** Gabarit officiel de MiLMMT-46 (fiche du modèle) : complétion brute, sans chat. */
+export function mtPrompt(en: string): string {
+  return `Translate this from English to French:\nEnglish: ${en}\nFrench:`;
+}
+
+/** Racine Ollama (`…/v1` retiré) : la complétion brute passe par l'API native. */
+export function ollamaBase(url: string): string {
+  return url.replace(/\/v1$/, '');
+}
+
+/**
+ * Une traduction, en complétion brute (`/api/generate`, `raw: true` : aucun
+ * gabarit de chat ajouté) et décodage glouton, comme le recommande la fiche
+ * du modèle. Arrêt au saut de ligne : le modèle ne traduit qu'une phrase.
+ */
+export async function mtComplete(en: string, cfg: CommentaryConfig, o: TranslateContext = {}): Promise<string> {
+  const url = `${ollamaBase(cfg.translateUrl)}/api/generate`;
+  const timeoutMs = o.timeoutMs ?? intEnv('TRANSLATE_TIMEOUT_MS', 5 * 60_000, 5_000, 3600_000);
+  const body = JSON.stringify({
+    model: cfg.translateModel,
+    prompt: mtPrompt(en),
+    raw: true,
+    stream: false,
+    keep_alive: '10m',
+    options: { temperature: 0, top_k: 1, num_predict: Math.min(512, 40 + en.length * 2), stop: ['\n'] },
+  });
+  let last = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (o.signal?.aborted) throw new ServiceError('traduction interrompue', 'traduction');
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        body,
+        headers: { 'Content-Type': 'application/json', ...authHeaders(process.env.TRANSLATE_API_KEY) },
+        signal: timeoutSignal(timeoutMs, o.signal),
+      });
+    } catch (e) {
+      last = `serveur de traduction injoignable (${cfg.translateUrl}) : ${fetchErrorText(e)}`;
+      if (o.signal?.aborted) break;
+      await sleep(o.retryDelayMs ?? 3000, o.signal);
+      continue;
+    }
+    if (res.ok) {
+      const data = (await res.json().catch(() => null)) as { response?: unknown } | null;
+      return typeof data?.response === 'string' ? data.response.replace(/\s+/g, ' ').trim() : '';
+    }
+    const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    last =
+      res.status === 404 && /model/i.test(detail)
+        ? `modèle de traduction « ${cfg.translateModel} » absent d'Ollama (ollama pull ${cfg.translateModel})`
+        : `serveur de traduction : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`;
+    if (res.status < 500) break;
+    await sleep(o.retryDelayMs ?? 3000, o.signal);
+  }
+  throw new ServiceError(last || 'traduction impossible', 'traduction');
+}
+
+/** Fin de phrase : ponctuation finale (guillemets fermants tolérés). */
+const SENTENCE_END = /[.!?…]["»”')\]]*$/;
+
+/**
+ * Regroupe des sous-titres consécutifs en phrases : un modèle de traduction
+ * pur traduit une phrase à la fois, et une phrase coupée en deux sous-titres
+ * se traduit mal morceau par morceau (sujet d'un côté, verbe de l'autre).
+ * Un groupe s'arrête sur la ponctuation finale, ou à 4 lignes / 300 caractères.
+ */
+export function groupSentences(lines: TranslateLine[]): TranslateLine[][] {
+  const groups: TranslateLine[][] = [];
+  let cur: TranslateLine[] = [];
+  let len = 0;
+  for (const l of lines) {
+    cur.push(l);
+    len += l.en.length + 1;
+    if (SENTENCE_END.test(l.en.trim()) || cur.length >= 4 || len >= 300) {
+      groups.push(cur);
+      cur = [];
+      len = 0;
+    }
+  }
+  if (cur.length) groups.push(cur);
+  return groups;
+}
+
+/**
+ * Répartit une traduction sur `weights.length` sous-titres, au prorata des
+ * longueurs anglaises, en coupant entre deux mots — de préférence juste
+ * après une ponctuation proche du point de coupe idéal. Rend null si le
+ * texte a trop peu de mots pour être réparti proprement.
+ */
+export function splitProportional(fr: string, weights: number[]): string[] | null {
+  const n = weights.length;
+  if (n === 1) return [fr];
+  const words = fr.split(/\s+/).filter(Boolean);
+  if (words.length < n * 2) return null;
+  const total = weights.reduce((a, b) => a + Math.max(1, b), 0);
+  // Position (en caractères) de la fin de chaque mot.
+  const ends: number[] = [];
+  let pos = 0;
+  for (const w of words) {
+    pos += w.length + 1;
+    ends.push(pos);
+  }
+  const out: string[] = [];
+  let from = 0;
+  let acc = 0;
+  for (let k = 0; k < n - 1; k++) {
+    acc += Math.max(1, weights[k]);
+    const ideal = (acc / total) * pos;
+    // Coupe possible après le mot j (au moins un mot par part, de chaque côté).
+    const minJ = from;
+    const maxJ = words.length - (n - k - 1) - 1;
+    let best = minJ;
+    let bestScore = Infinity;
+    for (let j = minJ; j <= maxJ; j++) {
+      const dist = Math.abs(ends[j] - ideal);
+      const bonus = /[,;:.!?…]$/.test(words[j]) ? 12 : 0;
+      const score = dist - bonus;
+      if (score < bestScore) {
+        bestScore = score;
+        best = j;
+      }
+    }
+    out.push(words.slice(from, best + 1).join(' '));
+    from = best + 1;
+  }
+  out.push(words.slice(from).join(' '));
+  return out;
+}
+
+/** Concurrence des requêtes de traduction (Ollama sert plusieurs requêtes à la fois). */
+const MT_PARALLEL = Math.max(1, Math.min(8, Math.trunc(Number(process.env.TRANSLATE_PARALLEL) || 2)));
+
+async function mtTranslateOne(en: string, cfg: CommentaryConfig, o: TranslateContext): Promise<string | undefined> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const fr = await mtComplete(en, cfg, o);
+    if (validTranslation(en, fr)) return fr;
+  }
+  return undefined;
+}
+
+/**
+ * Lot de sous-titres traduit par un modèle de traduction pur : phrase par
+ * phrase, puis répartition sur les sous-titres de la phrase. Si la
+ * répartition est impossible, chaque sous-titre est traduit seul ; en
+ * dernier recours, l'anglais est gardé (marqué).
+ */
+export async function translateBatchMt(lines: TranslateLine[], cfg: CommentaryConfig, o: TranslateContext = {}): Promise<TranslatedLine[]> {
+  const done = new Map<number, string>();
+  const groups = groupSentences(lines);
+  let next = 0;
+  const worker = async () => {
+    while (next < groups.length) {
+      const g = groups[next++];
+      const en = g.map((l) => l.en.trim()).join(' ');
+      const fr = await mtTranslateOne(en, cfg, o);
+      const parts = fr ? splitProportional(fr, g.map((l) => l.en.length)) : null;
+      if (parts) {
+        g.forEach((l, k) => done.set(l.i, parts[k]));
+        continue;
+      }
+      for (const l of g) {
+        const one = await mtTranslateOne(l.en, cfg, o);
+        if (one) done.set(l.i, one);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MT_PARALLEL, groups.length) }, worker));
   return lines.map((l) => (done.has(l.i) ? { i: l.i, fr: done.get(l.i) as string, untranslated: false } : { i: l.i, fr: l.en, untranslated: true }));
 }

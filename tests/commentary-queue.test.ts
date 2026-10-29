@@ -7,6 +7,7 @@ import path from 'node:path';
 vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../src/lib/audio')>()), ffmpegAvailable: () => true }));
 
 import * as db from '../src/lib/db';
+import { DEFAULT_TRANSLATE_MODEL } from '../src/lib/commentaryAi';
 import {
   __commentaryIdle,
   __setCommentaryRunnerForTests,
@@ -72,7 +73,7 @@ describe('file des traductions', () => {
       status: 'running',
       phase: 'transcription',
       progress: { done: 2, total: 3 },
-      models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: 'mistral-nemo:12b' },
+      models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL },
     });
     expect(commentaryStatus(B)).toMatchObject({ status: 'queued', position: 1 });
     gates.get(A)!.resolve({ ok: true, reason: 'ok' });
@@ -196,7 +197,7 @@ describe('runCommentary', () => {
     expect(phases).toContain('transcription 3/3');
     expect(phases).toContain('traduction 1/1');
     expect(fs.existsSync(workDir(db.getMatch(A)!.video_ok_id!))).toBe(false);
-    expect(commentaryStatus(A)).toEqual({ status: 'ready', models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: 'mistral-nemo:12b' } });
+    expect(commentaryStatus(A)).toEqual({ status: 'ready', models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL } });
     expect(db.commentaryReadyIds([A, B, 12345])).toEqual(new Set([A]));
   });
 

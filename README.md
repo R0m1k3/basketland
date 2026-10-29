@@ -210,7 +210,7 @@ deux services du NAS (carte NVIDIA) :
 audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 kb/s)
    ──speaches (Whisper)──▶ texte anglais horodaté au mot
    ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
-   ──Ollama (LLM)──▶ français, par lots de 20 avec 4 lignes de contexte
+   ──Ollama (MiLMMT-46, modèle de traduction)──▶ français, phrase par phrase
    ──▶ table commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
 ```
 
@@ -238,9 +238,11 @@ audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 
 | `TRANSCRIBE_MODEL` | `Systran/faster-distil-whisper-large-v3` | Modèle Whisper demandé à speaches. |
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
-| `TRANSLATE_URL` | — | Base de l'API compatible OpenAI d'Ollama, ex. `http://192.168.1.16:11434/v1` (appel : `POST …/chat/completions`). **Sans elle, la fonctionnalité est inactive.** |
-| `TRANSLATE_MODEL` | `mistral-nemo:12b` | Modèle Ollama de traduction (à installer avec `ollama pull`). |
-| `TRANSLATE_BATCH` | `20` | Sous-titres par requête de traduction (1 à 60). |
+| `TRANSLATE_URL` | — | Adresse d'Ollama, ex. `http://192.168.1.16:11434/v1` (MiLMMT : `POST /api/generate` en complétion brute ; LLM généraliste : `POST …/chat/completions`). **Sans elle, la fonctionnalité est inactive.** |
+| `TRANSLATE_MODEL` | `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` | Modèle Ollama de traduction (à installer avec `ollama pull`). Par défaut **MiLMMT-46-4B v1.0** (Xiaomi), modèle spécialisé en traduction. |
+| `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
+| `TRANSLATE_PARALLEL` | `2` | Requêtes de traduction simultanées en mode `mt` (Ollama : régler `OLLAMA_NUM_PARALLEL` en conséquence). |
+| `TRANSLATE_BATCH` | `20` | Sous-titres par lot (1 à 60). |
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
 | `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
@@ -248,8 +250,17 @@ audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 
 | `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
 | `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
 
-Un lot de 20 lignes tient dans ~2 000 jetons : le contexte par défaut
-d'Ollama suffit. Pour Qwen3, `/no_think` est ajouté automatiquement.
+**Mode `mt` (MiLMMT, par défaut)** : le modèle traduit une phrase à la fois,
+avec son gabarit officiel (`Translate this from English to French: …`) et un
+décodage glouton. Les sous-titres d'une même phrase sont d'abord regroupés
+(jusqu'à la ponctuation finale, 4 lignes max) pour ne pas traduire des bouts
+de phrase hors contexte, puis le français est réparti sur ces sous-titres au
+prorata de l'anglais, en coupant entre deux mots. Le prompt système ne
+s'applique pas à ce mode.
+
+**Mode `chat` (LLM généraliste)** : un lot de 20 lignes tient dans ~2 000
+jetons, le contexte par défaut d'Ollama suffit. Pour Qwen3, `/no_think` est
+ajouté automatiquement.
 
 ## Développement local
 

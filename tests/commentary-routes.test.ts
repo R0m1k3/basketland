@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../src/lib/audio')>()), ffmpegAvailable: () => true }));
 
 import * as db from '../src/lib/db';
+import { DEFAULT_TRANSLATE_MODEL } from '../src/lib/commentaryAi';
 import { GET as getSubtitles } from '../src/app/api/matches/[id]/subtitles/route';
 import { GET as getVtt } from '../src/app/api/matches/[id]/subtitles.vtt/route';
 import { GET as getCommentary, POST as postCommentary } from '../src/app/api/matches/[id]/commentary/route';
@@ -137,7 +138,7 @@ describe('API POST /commentary', () => {
     const r = await post({ action: 'start' });
     expect(r.status).toBe(202);
     expect(await r.json()).toEqual({
-      commentary: { status: 'queued', position: 1, models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: 'mistral-nemo:12b' } },
+      commentary: { status: 'queued', position: 1, models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL } },
       message: 'Traduction en file (position 1)',
     });
 
