@@ -3,6 +3,7 @@
  * Base : https://site.api.espn.com/apis/site/v2/sports/basketball/<league>/
  */
 import { fetchJson } from './http';
+import { espnDate } from './time';
 import { classifyPlay, isKeyCategory } from './vf';
 import type { LeaderRow, MatchStatus, ParsedMatch, PlayRow, PlayerStatRow, SeasonType, TeamStatRow } from './types';
 
@@ -298,6 +299,78 @@ export function parseSummary(json: Json, matchId: number, league = 'nba'): Parse
 export async function fetchScoreboard(dates: string, league = 'nba', limit = 1000): Promise<ParsedMatch[]> {
   const json = await fetchJson(`${ESPN_SITE}/${league}/scoreboard?dates=${dates}&limit=${limit}`);
   return parseScoreboard(json, league);
+}
+
+/**
+ * Calendrier sur une période, en contournant le refus de l'API pour les plages.
+ *
+ * ESPN **ne accepte pas** `dates=YYYYMMDD-YYYYMMDD` : la requête renvoie
+ * HTTP 400 (mesuré). Les seuls formats acceptés sont `YYYYMMDD` (un jour),
+ * `YYYYMM` (un mois) et `YYYY` (une année, plafonnée à 1 000 matchs).
+ *
+ * On découpe donc la période :
+ *  - moins de 40 jours : un appel par jour (précis, et le jour ESPN est le
+ *    jour US local — le conversion se fait à l'affichage) ;
+ *  - 40 jours ou plus : un appel par mois (`YYYYMM`), chaque mois tenant
+ *    sous le plafond de 1 000 matchs (environ 155 pour la NBA).
+ *
+ * Les erreurs d'un jour isolé n'interrompent pas la collecte : elles sont
+ * cumulées et signalées à la fin, pour qu'un incident transitoire ne vide
+ * pas le calendrier.
+ */
+export async function fetchScoreboardRange(
+  from: Date,
+  to: Date,
+  league = 'nba',
+  limit = 1000,
+): Promise<ParsedMatch[]> {
+  const start = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
+  const end = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+  if (end < start) return [];
+  // `spanDays` est l'écart entre les bornes (28→29 = 1 jour d'écart) ;
+  // `attempts` est le nombre d'appels réellement effectués (bornes
+  // incluses = spanDays + 1). Les deux ne doivent pas être confondus.
+  const spanDays = Math.round((end - start) / 86400_000);
+
+  const out: ParsedMatch[] = [];
+  const errors: string[] = [];
+  let attempts = 0;
+
+  if (spanDays < 40) {
+    for (let t = start; t <= end; t += 86400_000) {
+      const d = new Date(t);
+      attempts++;
+      try {
+        out.push(...(await fetchScoreboard(espnDate(d), league, limit)));
+      } catch (e) {
+        errors.push(`${espnDate(d)}: ${(e as Error).message}`);
+      }
+    }
+  } else {
+    // Un appel par mois : du premier jour du mois de départ au dernier
+    // jour du mois d'arrivée.
+    const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    const lastMonth = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1);
+    while (cursor.getTime() <= lastMonth) {
+      const y = cursor.getUTCFullYear();
+      const m = String(cursor.getUTCMonth() + 1).padStart(2, '0');
+      attempts++;
+      try {
+        out.push(...(await fetchScoreboard(`${y}${m}`, league, limit)));
+      } catch (e) {
+        errors.push(`${y}${m}: ${(e as Error).message}`);
+      }
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+  }
+
+  // Le calendrier n'est rejeté que si TOUS les appels ont échoué ET
+  // qu'aucun match n'a été trouvé. Un jour en erreur sur trois ne doit pas
+  // faire échouer la collecte : les jours restants restent exploitables.
+  if (!out.length && attempts > 0 && errors.length === attempts) {
+    throw new Error(errors.join(' | '));
+  }
+  return out;
 }
 
 export async function fetchSummary(eventId: number | string, league = 'nba'): Promise<ParsedSummary> {

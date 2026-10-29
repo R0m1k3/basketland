@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as db from './db';
-import { fetchScoreboard, fetchSummary } from './espn';
+import { fetchScoreboard, fetchScoreboardRange, fetchSummary } from './espn';
 import { findReplay } from './bv';
 import { classifyPlay } from './vf';
 import { analyzeHlsAudio, detectCuts, ffmpegAvailable } from './audio';
@@ -44,16 +44,18 @@ async function runLogged(task: string, fn: () => Promise<string>): Promise<{ ok:
 export function syncSchedule(league = 'nba', daysBack = 7, daysAhead = 7) {
   return runLogged('sync-schedule', async () => {
     const now = new Date();
-    const range = `${espnDate(addDays(now, -daysBack))}-${espnDate(addDays(now, daysAhead))}`;
-    const matches = await fetchScoreboard(range, league, 1000);
+    const from = addDays(now, -daysBack);
+    const to = addDays(now, daysAhead);
+    // ESPN refuse les plages de dates (HTTP 400) : on itère jour par jour.
+    const matches = await fetchScoreboardRange(from, to, league, 1000);
     db.upsertMatches(matches);
-    return `${matches.length} matchs (${range})`;
+    return `${matches.length} matchs (${espnDate(from)}→${espnDate(to)})`;
   });
 }
 
 /**
  * Saison complète (année de début, ex. 2026 pour 2026-27), mois par mois de
- * septembre à juin pour ne pas buter sur la limite de 1000 matchs par requête.
+ * septembre à juin pour ne pas buter sur la limite de 1 000 matchs par requête.
  */
 export function syncSeason(season: number, league = 'nba') {
   return runLogged('sync-season', async () => {
@@ -65,7 +67,7 @@ export function syncSeason(season: number, league = 'nba') {
       const from = new Date(Date.UTC(year, month, 1));
       const to = new Date(Date.UTC(year, month + 1, 0));
       try {
-        const matches = await fetchScoreboard(`${espnDate(from)}-${espnDate(to)}`, league, 1000);
+        const matches = await fetchScoreboardRange(from, to, league, 1000);
         db.upsertMatches(matches);
         total += matches.length;
       } catch (e) {
