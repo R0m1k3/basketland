@@ -34,7 +34,13 @@ if (existsSync(publicSrc)) {
 }
 
 // Le serveur standalone écoute sur le nom d'hôte de la machine sans
-// `HOSTNAME` : il ne répond alors pas sur l'interface réseau.
-process.env.HOSTNAME = process.env.HOSTNAME || '0.0.0.0';
+// `HOSTNAME=0.0.0.0` : il ne répond alors pas sur 127.0.0.1, mais
+// seulement sur l'IP de l'interface.
+//
+// On ne se contente PAS d'une valeur par défaut : `HOSTNAME` est souvent
+// DÉJÀ défini dans l'environnement (nom de la machine ou IP d'interface),
+// et le `||` ne s'appliquerait alors jamais. D'où `START_HOSTNAME`, qui
+// est le seul moyen de choisir explicitement une autre interface.
+process.env.HOSTNAME = process.env.START_HOSTNAME || '0.0.0.0';
 
 await import(join(standalone, 'server.js'));
