@@ -40,6 +40,10 @@ L'image est construite automatiquement par GitHub Actions à chaque push sur `ma
 ghcr.io/r0m1k3/basketland:latest
 ```
 
+L'image est **publique** : aucun jeton n'est nécessaire sur le NAS, Unraid la
+tire directement. (Le dépôt GitHub et le paquet GHCR sont publics, comme les
+autres dépôts et paquets du compte.)
+
 ### 2. Ajouter le conteneur
 
 Dans Unraid : **Docker → Add Container**
@@ -48,18 +52,13 @@ Dans Unraid : **Docker → Add Container**
 |---|---|
 | Name | `basketland` |
 | Repository | `ghcr.io/r0m1k3/basketland` |
-| Repository : Access Token | token GitHub avec le scope `read:packages` (**l'image est privée**) |
+| Repository : Access Token | *(vide — l'image est publique)* |
 | Network Type | `bridge` |
 | Port (HTTP) | `3000` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
 Puis **Apply**. L'application est accessible sur `http://<IP-DU-NAS>:3000`.
-
-> **L'image est privée.** Sans *Access Token*, Unraid ne pourra pas la tirer.
-> Pour la rendre publique : GitHub → le package `basketland` → *Package settings* →
-> *Change visibility* → *Public*. Les paquets déjà publiés par ce compte
-> (`logiflow`, `collectflow`, `socialflow`…) sont publics.
 
 ### 3. Alternative docker-compose
 
