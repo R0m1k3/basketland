@@ -1,0 +1,50 @@
+{
+  "_doc": "Vérité terrain lue à l'œil sur les vraies images (1280x720, flux HD ok.ru). clock en secondes (null = pas de chrono lisible : pas de bandeau, HALF, END 1ST, transition) ; period null si pas de chrono ; scores away/home quand le bandeau est visible.",
+  "nybos": {
+    "t900": { "period": 1, "clock": 537, "away": 5, "home": 9 },
+    "t1500": { "period": 1, "clock": 259, "away": 19, "home": 14 },
+    "t1800": { "period": 1, "clock": 133, "away": 24, "home": 21 },
+    "t2100": null,
+    "t2700": { "period": 2, "clock": 307, "away": 39, "home": 41 },
+    "t3100": { "period": 2, "clock": 138, "away": 41, "home": 47 },
+    "t3600": null,
+    "t4300": { "period": 3, "clock": 606, "away": 54, "home": 52 },
+    "t4500": { "period": 3, "clock": 488, "away": 54, "home": 60, "optional": true },
+    "t4900": { "period": 3, "clock": 256, "away": 60, "home": 68 },
+    "t5400": { "period": 3, "clock": 155, "away": 69, "home": 73 },
+    "t5700": { "period": 3, "clock": 46, "away": 73, "home": 80 },
+    "t6300": { "period": 4, "clock": 487, "away": 82, "home": 91 },
+    "t6900": null
+  },
+  "memgs": {
+    "t1700": { "period": 1, "clock": 296, "away": 19, "home": 21 },
+    "t2300": { "period": 2, "clock": 708, "away": 33, "home": 34 },
+    "t2900": { "period": 2, "clock": 480, "away": 42, "home": 39 },
+    "t4100": { "period": 2, "clock": 30, "away": 59, "home": 56 },
+    "t4700": { "period": 3, "clock": 585, "away": 70, "home": 63 },
+    "t5300": { "period": 3, "clock": 417, "away": 77, "home": 72 }
+  },
+  "laclal": {
+    "t600": null,
+    "t1200": { "period": 1, "clock": 436, "away": 7, "home": null },
+    "t1700": { "period": 1, "clock": 204, "away": 20, "home": null },
+    "t2300": null,
+    "t2900": { "period": 2, "clock": 536, "away": 44, "home": null },
+    "t3500": null,
+    "t4100": { "period": 2, "clock": 25, "away": 62, "home": null },
+    "t4700": null,
+    "t5300": { "period": 3, "clock": 602, "away": 69, "home": null },
+    "t5900": { "period": 3, "clock": 363, "away": 76, "home": null }
+  },
+  "denokc": {
+    "t600": { "period": 1, "clock": 345, "away": 17, "home": 14 },
+    "t1200": null,
+    "t1700": { "period": 2, "clock": 467, "away": 35, "home": 28 },
+    "t2900": null,
+    "t3500": { "period": 3, "clock": 375, "away": 60, "home": 55 },
+    "t4100": { "period": 3, "clock": 78, "away": 62, "home": 64 },
+    "t4700": { "period": 4, "clock": 590, "away": 66, "home": 72 },
+    "t5300": { "period": 4, "clock": 340, "away": 72, "home": 81 },
+    "t5900": { "period": 4, "clock": 103, "away": 76, "home": 93 }
+  }
+}
