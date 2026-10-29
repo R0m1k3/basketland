@@ -10,7 +10,9 @@ import {
   upsertAnchor,
 } from '@/lib/db';
 import { allowedOrigins, error, isOriginAllowed, json, parseId, type RouteCtx } from '@/lib/api';
-import { analysisStatus, regenerateSubtitles, startVideoAnalysis } from '@/lib/ingest';
+import { regenerateSubtitles } from '@/lib/ingest';
+import { analysisStatus, enqueueAnalysis } from '@/lib/analysis';
+import { resolveAnchorWall, toTimedPlays } from '@/lib/sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +41,7 @@ export async function GET(_req: Request, ctx: RouteCtx<{ id: string }>) {
 }
 
 interface SyncBody {
-  action?: 'anchor' | 'delete-anchor' | 'offset' | 'nudge' | 'reset' | 'analyze' | 'analyze-audio';
+  action?: 'anchor' | 'clock' | 'delete-anchor' | 'offset' | 'nudge' | 'reset' | 'analyze' | 'analyze-audio';
   /** Ancre depuis une ligne de VF : seq de l'action + position vidéo courante. */
   seq?: number;
   video_ts?: number;
@@ -54,14 +56,22 @@ interface SyncBody {
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
+/** « 7:43 » */
+const fmtClock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+/** « 2e période », « prolongation 1 » */
+const fmtPeriod = (p: number) => (p <= 4 ? `${p}e période` : `prolongation ${p - 4}`);
+
 /**
  * POST /api/matches/[id]/sync
  * - { global_offset, quarter_offsets }        → réglage manuel persistant
  * - { action: 'nudge', delta, period? }       → ± décalage relatif
  * - { action: 'anchor', seq, video_ts }       → « cette action se passe maintenant »
+ * - { action: 'clock', video_ts, period, clock_sec } → « à cette position, le chrono
+ *   affiché à l'écran indique période P, chrono C » (ancre manuelle)
  * - { anchors: [{ period, clock_sec, video_ts }] } → ancres manuelles brutes
  * - { action: 'delete-anchor', period, clock_sec } / { action: 'reset' }
- * - { action: 'analyze-audio' }               → détection des coupures (ffmpeg)
+ * - { action: 'analyze' }                     → analyse OCR mise en TÊTE de file
+ * - { action: 'analyze-audio' }               → idem, avec détection des coupures audio
  */
 export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   const id = parseId((await ctx.params).id);
@@ -107,8 +117,13 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   let message = 'ok';
 
   if (body.action === 'analyze-audio' || body.action === 'analyze') {
-    const r = startVideoAnalysis(id, { withAudio: body.action === 'analyze-audio' });
-    return json({ ...syncState(id), started: r.started, message: r.reason ?? 'analyse lancée' }, { status: r.started ? 202 : 200 });
+    // Demande explicite : le match passe en tête de file (le cooldown après
+    // un succès récent reste appliqué, voir `enqueueAnalysis`).
+    const r = enqueueAnalysis(id, { priority: true, withAudio: body.action === 'analyze-audio', manual: true });
+    return json(
+      { ...syncState(id), started: r.started, queued: r.queued, ...(r.position ? { position: r.position } : {}), message: r.message },
+      { status: r.started || r.queued ? 202 : 200 },
+    );
   }
 
   if (body.action === 'reset') {
@@ -145,6 +160,36 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
       wallclock: play.wallclock,
     });
     message = `ancre posée (${play.period}e période, ${play.clock_display})`;
+  } else if (body.action === 'clock') {
+    // Validation stricte : une période fractionnaire ou un chrono hors bornes
+    // créerait une ancre impossible à résoudre (ou à supprimer).
+    if (!finite(body.video_ts) || body.video_ts < 0) return error(400, 'video_ts invalide');
+    if (match.video_duration && body.video_ts > match.video_duration) return error(400, 'video_ts au-delà de la fin de la vidéo');
+    if (!finite(body.period) || !Number.isInteger(body.period) || body.period < 1 || body.period > 10) {
+      return error(400, 'période invalide (entier de 1 à 10)');
+    }
+    if (!finite(body.clock_sec) || body.clock_sec < 0 || body.clock_sec > 720) return error(400, 'chrono invalide (0 à 720 s)');
+    if (body.period > 4 && body.clock_sec > 300) return error(400, 'chrono invalide pour une prolongation (5:00 au plus)');
+    const period = body.period;
+    // La clé d'une ancre est (période, chrono entier) : les dixièmes de la
+    // dernière minute (« 42.8 ») sont arrondis.
+    const clockSec = Math.round(body.clock_sec);
+    const plays = getPlays(id);
+    if (!plays.length) return error(409, 'play-by-play pas encore disponible pour ce match');
+    const wall = resolveAnchorWall({ period, clock_sec: clockSec, wallclock: null }, toTimedPlays(plays));
+    if (wall === null) return error(422, `${fmtPeriod(period)} absente du play-by-play`);
+    // Même convention que l'action `anchor` : on stocke la position BRUTE
+    // (les offsets global et par quart sont ré-appliqués ensuite).
+    const offset = current.global_offset + (Number(current.quarter_offsets[String(period)]) || 0);
+    upsertAnchor({
+      match_id: id,
+      period,
+      clock_sec: clockSec,
+      video_ts: Math.round((body.video_ts - offset) * 100) / 100,
+      method: 'manual',
+      wallclock: new Date(wall * 1000).toISOString(),
+    });
+    message = `ancre posée (${fmtPeriod(period)}, ${fmtClock(clockSec)})`;
   } else if (body.action === 'delete-anchor') {
     if (!finite(body.period) || !finite(body.clock_sec)) return error(400, 'period et clock_sec requis');
     deleteAnchor(id, body.period, body.clock_sec);

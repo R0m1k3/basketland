@@ -141,9 +141,12 @@ export function resolveAnchorWall(a: Pick<AnchorRow, 'period' | 'clock_sec' | 'w
     else if (p.clock_sec < a.clock_sec && !after) after = p;
   }
   if (before && after) {
-    const span = before.clock_sec - after.clock_sec;
-    const f = span > 0 ? (before.clock_sec - a.clock_sec) / span : 0;
-    return before.wall + f * (after.wall - before.wall);
+    // Modèle de reprise (le même que `findBreaks`) : après `before`, le chrono
+    // reste arrêté (faute, temps mort, sortie…) puis repart juste à temps pour
+    // atteindre `after`. Une interpolation linéaire sur le wallclock plaçait un
+    // chrono lu à l'écran au milieu de l'arrêt, avec jusqu'à une minute
+    // d'erreur. Sans arrêt, les deux modèles coïncident.
+    return Math.max(before.wall, after.wall - (a.clock_sec - after.clock_sec));
   }
   if (before) return before.wall + (before.clock_sec - a.clock_sec);
   if (after) return after.wall - (a.clock_sec - after.clock_sec);

@@ -435,6 +435,20 @@ export function finalMatchesNeedingVideo(
   );
 }
 
+/**
+ * Matchs terminés depuis `sinceIso`, avec replay, sans ancre OCR ('auto') :
+ * candidats à l'analyse automatique (les plus récents d'abord).
+ */
+export function finalMatchesNeedingAnalysis(sinceIso: string, limit = 30): MatchRow[] {
+  return all<MatchRow>(
+    `SELECT * FROM matches m WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL
+       AND m.date_utc >= $since
+       AND NOT EXISTS (SELECT 1 FROM sync_anchors a WHERE a.match_id = m.id AND a.method = 'auto')
+     ORDER BY m.date_utc DESC LIMIT $limit`,
+    { since: sinceIso, limit },
+  );
+}
+
 export function setVideo(
   matchId: number,
   v: { slug: string | null; okId: string | null; duration: number | null; available: boolean; kind?: VideoKind | null },
