@@ -88,7 +88,15 @@ export async function proxiedSegment(okId: string, key: string | null, s: string
   if (!s) throw new ProxyError(400, 'paramètre s manquant');
   for (let attempt = 0; attempt < 2; attempt++) {
     const { variant } = await variantFor(okId, key, attempt > 0);
-    const url = resolveSegmentUrl(s, variant.url);
+    // `resolveSegmentUrl` lève une Error simple : on la traduit en 400
+    // (erreur du client) plutôt qu'en 502 (erreur de la passerelle), pour
+    // que le refus soit explicite sur le statut HTTP.
+    let url: string;
+    try {
+      url = resolveSegmentUrl(s, variant.url);
+    } catch (e) {
+      throw new ProxyError(400, (e as Error).message);
+    }
     if (!isAllowedMediaHost(url)) throw new ProxyError(400, 'hôte non autorisé');
     const headers: Record<string, string> = { ...OK_HEADERS };
     if (range) headers.Range = range;
