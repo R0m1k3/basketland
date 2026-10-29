@@ -1,0 +1,215 @@
+# Revue #3 — BasketLand, état consolidé (3f488eb → a8b9f75)
+
+## Synthèse
+
+L'état consolidé n'est **pas entièrement sain**.
+
+Ce qui passe :
+- `tsc --noEmit` OK, `vitest` 159/159, `next build` OK.
+- Corrections réellement OK : H1, H2, R1, R2/L3, M1, N6, M3, L1, L2, L5, N2, L6 et le commentaire de `consistentAnchors`. Le code mort est supprimé.
+
+Ce qui ne passe pas : deux corrections annoncées comme faites ne fonctionnent pas, et une a introduit une régression fonctionnelle.
+
+1. **RÉGRESSION L9 — cache des listes indexé par saison.**
+   - La profondeur du parcours dépend pourtant de la date cherchée.
+   - `syncVideos` traite les matchs du plus récent au plus ancien. Le premier appel remplit donc le cache avec 1 ou 2 pages seulement.
+   - Pendant 30 min, tous les matchs plus anciens sortent en « replay non listé », sont marqués `video_checked_at`, et le scénario se répète au cycle suivant.
+   - Résultat : les replays de plus de quelques jours ne sont plus trouvés. **CONFIRMÉ (exécuté).**
+2. **CSRF (N1) toujours exploitable dans la configuration par défaut.**
+   - Le contrôle du Content-Type est un `includes('application/json')`.
+   - `Content-Type: text/plain;charset=application/json` est une requête « simple », donc sans preflight. Elle passe le contrôle et écrit `global_offset`.
+   - **CONFIRMÉ de bout en bout** : réponse 200 sur une copie de la base.
+3. **N4 non corrigé : le cooldown est consommé même en cas d'échec.**
+   - `runLogged` ne rejette jamais, donc le `.then()` qui pose `analysisLast` s'exécute toujours.
+   - Une analyse qui échoue en 2 s bloque toujours la suivante pendant 15 min. **CONFIRMÉ (exécuté).**
+4. **N7 (course sur l'offset) non corrigé.**
+   - La garde `cur === offsetRef.current` est toujours vraie au moment où la réponse arrive. Elle ne protège donc de rien.
+5. **L7 incomplète.**
+   - Les URI relatives et les URI absolues qui ne finissent pas en `.ts` (clés, `init.mp4`) ne sont pas réécrites. Or ce sont précisément les cas réels de `#EXT-X-KEY` et `#EXT-X-MAP`. **CONFIRMÉ (exécuté).**
+
+S'y ajoutent :
+- `npm start` local sert les pages sans JS ni CSS (404 sur `/_next/static`, confirmé) ;
+- un défaut logique dans `isOriginAllowed` (« même origine toujours autorisée » non implémenté) ;
+- des mineurs dans le proxy, la page équipe et le regroupement des lancers francs.
+
+## Corrections vérifiées (une ligne par finding)
+
+| Finding | Verdict | Preuve |
+|---|---|---|
+| H1 SSRF segment/playlist | **OK** | `hls.ts:37-49` refuse les URL absolues, `/` et les noms hors `^[A-Za-z0-9_-]+\.ts$`. `okru.ts:175` exige https, allow-list ancrée `(^|\.)…$`. `?u=` supprimé (`playlist.m3u8/route.ts:12-14`). Hôte vérifié avant le fetch du segment (`videoProxy.ts:119`). Exécuté : okId inconnu → 404, master connu → 200. |
+| H1/N5 redirection manuelle | **INCOMPLÈTE** (faible) | Le corps relayé est bien celui de la réponse redirigée (`videoProxy.ts:150` `resp.body`, en-têtes lus sur `resp`). Mais (a) après un 3xx, les branches 416 et 4xx testent encore `r.status`, le 3xx d'origine (`:152-153`), voir N-P1 ; (b) `variant.url` n'est validée qu'**après** le fetch (`:76` puis `:78`). Avec `manual`, `r.url === variant.url`, donc la vérification ne précède jamais la première requête ; (c) le master (`okru.ts:116`) reste en `redirect:'follow'` et n'est pas validé. |
+| H2 double offset | **OK** | Un seul point d'application : `sync.ts:402` (`timeLines`). Le lecteur fait `position = current` (`VideoPlayer.tsx:110`). Le VTT et `/subtitles` utilisent `video_ts` tel quel. |
+| R1 sens des libellés | **OK** | `VideoPlayer.tsx:196-214` : « −0,5 s » = Avancer, « +0,5 s » = Retarder, cohérent avec `applyOffsets` (`sync.ts:389-391`, + = plus tard). Verrouillé par `tests/review-regression.test.ts`. |
+| H3 / N1 CSRF | **INCOMPLÈTE** (moyen) | Contrôle appliqué à toute écriture (`sync/route.ts:88`), XFF ignoré (`api.ts:78-98`), `res.ok` vérifié (`MatchClient.tsx:139`). **Mais** `sync/route.ts:94-95` (`includes`) se contourne. Voir N-C1. `isOriginAllowed` contient aussi un défaut logique (N-C2). |
+| M1 UNIQUE seq | **OK** | Au plus une ligne par action. Dédoublonnage final (`vf.ts:622-630`). |
+| N6 pas de renumérotation | **OK** | `vf.ts:611-630` garde la 1re occurrence, ne renumérote plus. |
+| R3 bannière | **OK** pour le cas visé, faiblesse résiduelle | `push()` n'applique la bannière qu'à `primary` (`vf.ts:406`). Émission seule si aucune ligne `primary` (`:576-594`) ; `extras.pop()` ne retire que la ligne de la même action (`:579`, `last.seq === p.seq`). La branche `turnover` sans interception (`:541`) contourne `push`, sans conséquence. Résidu : la bannière préfixée **hérite de la priorité de l'action** (60 pour un entre-deux, 70 pour un panier). Elle peut donc être retirée par le tri `maxLines` (`:598-604`). Exécuté (synthétique) : entre-deux + 298 paniers → 180 lignes, `banner? false`. Voir N-V2. |
+| M2 lancers francs | **OK** pour le doublon | `consumed` (`vf.ts:426-433`, `:530`). |
+| N3 acteur / sur-regroupement | **INCOMPLÈTE** (faible) | Regex avec particules et flag `u` OK (`espn.ts:145-152`). Non fait : « ne pas regrouper si `actor === ''` ». `vf.ts:507` regroupe toujours `'' === ''`. Exécuté : deux lancers sans acteur de deux séries différentes → `" : 1/2 aux lancers francs"` (nom vide, 1 sur 1 et 1 sur 2 fusionnés). |
+| M3 rechargement VF + polling | **OK** | `reloadSubtitles` après chaque écriture (`MatchClient.tsx:154, 167, 201, 211`). Polling (`:105-121`) : dépendances stables (`loadSync` et `reloadSubtitles` ne dépendent que de `matchId`), il ne démarre que sur `running` et s'arrête dès que `setAnalysis(st)` change le statut. Pas de boucle. |
+| N7 course sur l'offset | **INCOMPLÈTE** | `MatchClient.tsx:79` : `offsetRef.current` est réassigné à chaque rendu (`:68`). Quand la réponse du GET arrive, `cur` (dernier état) vaut toujours `offsetRef.current`, donc la valeur serveur écrase toujours l'état local. Voir N-U1. |
+| M4 proxy ouvert | **OK** (restriction), **INCOMPLÈTE** (dé-duplication) | `assertKnownOkId` (`videoProxy.ts:29-35`) OK. Aucune dé-duplication des `force:true` concurrents (`okru.ts:136-150`), donc une vague de 403 provoque N re-résolutions. Non annoncé comme corrigé. |
+| N7 `leagueAny` | **OK**, une mine latente | Seul le proxy passe `leagueAny` (`videoProxy.ts:33`). Les autres appelants (`page.tsx:14-16`, `schedule/route.ts:20`, `api/matches/route.ts:43-44`, `equipes/[abbr]/page.tsx:30`, `matchs/page.tsx:31`, `ingest.ts:185`, `scheduler.ts:29`) gardent `league = $league` (`db.ts:291-296`). `leagueAny` n'est pas atteignable depuis la query string (`api/matches/route.ts:23-31` construit `f` champ par champ). Latent : `listMatches({ leagueAny: true })` sans autre filtre produit `WHERE ORDER BY` → erreur SQL (exécuté : `near "ORDER": syntax error`). |
+| R2 / L3 `stats_synced_at` | **OK** | `ingest.ts:98-100` via `classifyPlay(...) === 'game_end'`. Sur la vraie base : 0 match `final` sans `stats_synced_at`. |
+| N4 cooldown | **INCOMPLÈTE** (régression de l'intention) | `ingest.ts:322-329` : `.then()` sur `runLogged`, qui **attrape** l'erreur et renvoie `{ok:false}` (`ingest.ts:33-37`). Le cooldown est donc posé aussi en cas d'échec. Exécuté : ESPN et ok.ru en échec → 2e appel « analyse récente, réessayez dans ~15 min ». Seule la partie « compté depuis la fin » est correcte. |
+| N2 / L5 `OCR_STEP_SEC` | **OK** | `ocr.ts:351-352` : NaN, 0, vide et négatif donnent 60, et le minimum est 10. `ANALYSIS_MAX_PARALLEL` OK (`ingest.ts:258`). Mineur : `ANALYSIS_MIN_INTERVAL_MS=` (vide) donne `Number('')=0`, ce qui **désactive** le cooldown (`ingest.ts:264`). |
+| L1 plage du calendrier | **OK** | `schedule/route.ts:69-70` : 61 j × ~15 ≤ 1000. |
+| L2 jeton | **OK** | `ingest.ts:357-359` : SHA-256 des deux côtés. |
+| L6 timeout `filterImage` | **OK** | `ocr.ts:261-293` : timeout de 20 s + SIGKILL, `settled` contre la double résolution. Résidu : `worker.recognize` (`ocr.ts:317`) n'a toujours pas de timeout. |
+| L7 `URI=` | **INCOMPLÈTE** | `hls.ts:199-207` ne réécrit que les URI **absolues** dont le dernier segment est un `.ts`. Exécuté : `#EXT-X-KEY:…URI="https://…/key.bin"` reste absolue (chargée sans Referer, donc 403 ou CORS), et `#EXT-X-MAP:URI="init.mp4"` reste relative. Elle est alors résolue contre `/api/video/<id>/`, donc 404. Ce sont exactement les cas décrits en 1re revue. Le commentaire « clé chiffrée reste lisible » est faux. Et si une clé finissait en `.ts`, elle serait servie depuis le dossier de la **variante** et non depuis celui de la clé. `#EXT-X-MEDIA` et `#EXT-X-I-FRAME-STREAM-INF` (master) ne sont toujours pas traitées. Latent : le flux actuel n'a aucune de ces balises. |
+| L8 convention des ancres | **OK**, cas limite toujours ouvert | `sync/route.ts:155` utilise `current` (offset **avant** `saveSyncSettings` en `:147`). `{global_offset, anchors}` dans une même requête décale l'ancre de (nouveau − ancien). |
+| L9 cache des listes | **RÉGRESSION** | Voir R-1. |
+| Commentaire `consistentAnchors` | **OK** | `sync.ts:153-163` : commentaire et code alignés (manuel > auto > audio). |
+| Code mort | **OK** | `isAllowedSegmentUrl`, `absolute`, `STATUS_FR` supprimés. `computeRmsDb` reste utilisé par les tests seuls (bénin). Clé de variante unifiée (`hls.ts:86-103`, réutilisé par `okru.ts:104`). |
+| Garde-fou `fetchScoreboard` | **OK** | `espn.ts:307-316`. Seul appelant hors module : `ingest.ts` (via `fetchScoreboardRange`). Voir N-E1 pour les erreurs partielles. |
+| `npm start` standalone | **INCOMPLÈTE** | Voir N-D1. |
+
+## Régressions introduites
+
+### R-1. L9 : le cache par saison tronque la recherche des replays plus anciens — CONFIRMÉ (exécuté)
+- Fichiers : `src/lib/bv.ts:151-173`, `src/lib/db.ts:370-377` (`ORDER BY date_utc DESC`), `src/lib/ingest.ts:120-136`
+- Sévérité : **élevée** (fonction principale : la découverte des replays)
+- Symptôme :
+  - `fetchSeasonListing` arrête le parcours dès qu'une page est entièrement plus ancienne que `oldestUsDate` (`:163`), puis met en cache **ce résultat partiel** sous la seule clé `season`. Le commentaire « (presque) le même résultat » est faux.
+  - `syncVideos` traite les matchs du plus récent au plus ancien. Le 1er appel (match d'hier) ne remplit que la page 1, voire la 2.
+  - Pour les matchs suivants (jusqu'à J−21), le cache renvoie la liste tronquée. `matchListingEntry` ne trouve rien, d'où `reason: 'replay non listé'` et `markVideoChecked`.
+  - Au cycle suivant (2 h plus tard, TTL de 30 min expiré), le même ordre reproduit le même échec tant qu'un match récent sans vidéo reste en tête.
+  - Exécuté avec un `fetch` simulé (pages datées 15, 10 et 5 nov.) : `fetchSeasonListing(2026,'2026-11-14')` fait 2 requêtes. `fetchSeasonListing(2026,'2026-11-03')` renvoie ensuite le cache sans le 5 nov.
+- Correctif : stocker aussi dans le cache la date la plus ancienne couverte (`oldestCovered`) et la page atteinte. Ne servir le cache que si `oldestCovered <= oldestUsDate`, sinon reprendre le parcours à la page suivante et fusionner. Variante plus simple : un cache par page (`season:page`), comme proposé en 1re revue. Ajouter un test avec deux dates.
+
+## Nouveaux findings
+
+### N-C1. CSRF : contrôle du Content-Type contournable — CONFIRMÉ (exécuté)
+- Fichier : `src/app/api/matches/[id]/sync/route.ts:94-97`
+- Sévérité : **moyenne** (en configuration par défaut, `SYNC_WRITE_ORIGINS` vide, c'est la seule défense)
+- Symptôme :
+  - `ctype.includes('application/json')` accepte `text/plain;charset=application/json`. Pour le navigateur, l'essence MIME est `text/plain` : la requête est « simple », sans preflight.
+  - Un site tiers peut donc faire `fetch(url, {method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain;charset=application/json'}, body:'{"global_offset":3600}'})`, ou lancer `analyze`.
+  - Exécuté sur le serveur standalone, avec une **copie** de la base : `Origin: https://evil.example` donne **200**, et `global_offset` passe à 7. `text/plain` nu donne bien 415.
+- Correctif : `const essence = ctype.split(';')[0].trim(); if (essence !== 'application/json') return 415;`. En complément :
+  - refuser tout `Origin` différent de l'hôte servi, même si la liste est vide (`new URL(origin).host === req.headers.get('host')`) ;
+  - ou exiger un en-tête personnalisé (`X-Requested-With`), qui force un preflight.
+
+### N-C2. `isOriginAllowed` : « la même origine est toujours autorisée » n'est pas implémenté — CONFIRMÉ (lecture et exécution), exploitabilité À CONFIRMER
+- Fichier : `src/lib/api.ts:116-122`
+- Sévérité : faible à moyenne
+- Symptôme :
+  - Le code n'autorise pas `Origin == hôte de la requête`. Il autorise **toute** origine dès que l'hôte de `req.url` figure dans la liste.
+  - En test unitaire (`req.url = http://nas.local:3000`, liste = README), `Origin: https://evil.example` est **accepté**.
+  - En standalone, `req.url` vaut `http://0.0.0.0:PORT` (mesuré : le contournement n'apparaît que si `0.0.0.0` est listé). Il n'est donc pas exploitable en Docker tel quel, mais il le devient si Next construit `req.url` depuis `Host` (`next dev`, autre déploiement).
+  - Inversement, la promesse documentée n'est pas tenue : un utilisateur qui accède par un nom non listé reçoit 403 sur sa propre UI.
+  - README `:129` : l'exemple `192.168.1.16` laisse croire à une IP **cliente**. C'est en réalité l'adresse du **serveur**, puisque l'Origin est celle de la page.
+- Correctif : `const self = req.headers.get('host'); if (self && o === self) return true;` et supprimer le bloc `:116-122`. Clarifier le README.
+
+### N-V2. La bannière « Coup d'envoi » peut être retirée par `maxLines` — CONFIRMÉ (synthétique), impact réel À CONFIRMER
+- Fichier : `src/lib/vf.ts:406-409`, `:598-604`
+- Sévérité : faible
+- La ligne préfixée garde la priorité de l'action (60 pour un entre-deux, 70 pour un panier). Sur un match chargé (plus de 180 lignes `primary`), elle peut être retirée. La bannière émise seule, elle, a la priorité 100.
+- Correctif : dans `push`, quand la bannière est appliquée, faire `priority = Math.max(priority, 100)`.
+
+### N-V3. Séries de lancers francs sans acteur fusionnées, avec un nom vide — CONFIRMÉ (exécuté)
+- Fichier : `src/lib/vf.ts:507`, `:522-526`
+- Sévérité : faible
+- Exécuté : deux lancers d'acteur `''` (« makes free throw 1 of 2 », « misses free throw 1 of 1 ») donnent `" : 1/2 aux lancers francs"`.
+- Correctif : `if (p.actor && q.actor === p.actor && …)`, et si `who` est vide, utiliser `translatePlay(p)`.
+
+### N-P1. Proxy segment : après une redirection, les statuts 416 et 4xx sont lus sur la mauvaise réponse — CONFIRMÉ (lecture), latent
+- Fichier : `src/lib/videoProxy.ts:152-153`
+- Sévérité : faible (ok.ru ne redirige pas aujourd'hui)
+- `r` est la réponse 3xx, `resp` la réponse redirigée.
+  - Un 403 (signature expirée) après redirection donne « amont HTTP 302 » (502) **sans** la re-résolution prévue.
+  - Un 416 après redirection donne 502.
+  - Le corps du 3xx n'est jamais consommé ni annulé.
+- Correctif : remplacer `r` par `resp` aux lignes 152-153, et appeler `await r.body?.cancel()` avant de suivre la redirection.
+
+### N-U1. Course sur l'offset : la garde N7 est une tautologie — CONFIRMÉ (lecture)
+- Fichier : `src/components/MatchClient.tsx:67-79`
+- Sévérité : faible
+- Deux clics rapides (0 → 0,5 → 1,0) avec des GET servis dans le désordre : la réponse GET1 (0,5) arrive en dernier, `cur === offsetRef.current` vaut `1,0 === 1,0`, et l'offset affiché revient à 0,5 avec des sous-titres périmés. Le clic suivant envoie 1,0 au lieu de 1,5.
+- Correctif : un compteur de requête (`const reqId = ++seqRef.current` ; à la réponse, `if (reqId !== seqRef.current) return;`). Appliquer le même compteur à `setSubtitles`.
+
+### N-E1. `fetchScoreboardRange` : les erreurs partielles sont perdues — CONFIRMÉ (lecture)
+- Fichier : `src/lib/espn.ts:352-389`
+- Sévérité : faible
+- `errors` n'est remonté que si **tous** les appels échouent, alors que le commentaire (`:334-336`) dit « signalées à la fin ». Un jour en erreur sur 15 disparaît sans trace dans `ingest_log`.
+- Efficacité : une plage de moins de 40 jours est découpée **par jour**. `syncSchedule` fait 15 appels ESPN toutes les 15 min (1 440 par jour), et `syncSeason` en fait environ 300 (10 mois de 30 jours, tous sous 40 j). Deux appels `YYYYMM` suffiraient.
+- Correctif : renvoyer `{ matches, errors }` (ou les journaliser) ; utiliser `YYYYMM` dès que la plage couvre plus de quelques jours.
+
+### N-T1. Page équipe : bilan multi-saison, cartes sans date — CONFIRMÉ (lecture et exécution)
+- Fichier : `src/app/equipes/[abbr]/page.tsx:30`, `:44-56`, `:88-105`
+- Sévérité : faible
+- `listMatches({ team, limit: 200 })` ne filtre pas la saison. Le « bilan de la saison en cours » (commentaire `:44` et README `:16`) agrège toutes les saisons présentes dans les 200 derniers matchs. Latent : la base actuelle n'a que 2026.
+- Les `MatchCard` n'affichent que `time_paris` (`MatchCard.tsx:59`). Sur la page équipe, où les cartes ne sont pas groupées par jour, « Prochain match » et « Derniers résultats » s'affichent sans date. Exécuté : `/equipes/BOS` → cartes « 00:30 », « 21:30 ».
+- Le score des replays est affiché `theirs – mine` (`:140`), à l'inverse de l'usage (« V 120–110 »).
+- Le commentaire `:44` (« la base ne contient que 'preseason' et 'regular' ») est faux : `mapSeasonType` produit aussi `post` (`espn.ts:43`), exclu sans le dire.
+- Pas de page `/equipes` (index) : `/equipes` donne 404 (exécuté), et aucun lien de navigation n'y mène.
+- Correctif : filtrer `season: currentSeason()` pour le bilan, passer `showDate` à `MatchCard` ou afficher `parisDateKey`, afficher `mine – theirs`.
+
+### N-D1. `npm start` local : pages sans JS ni CSS — CONFIRMÉ (exécuté)
+- Fichiers : `package.json:12`, `README.md:147-155`
+- Sévérité : faible (Docker n'est pas concerné, il copie `static` et `public` : `Dockerfile:36-38`)
+- `next build` ne copie ni `.next/static` ni `public` dans `.next/standalone`. Exécuté : `/_next/static/chunks/webpack-*.js` donne **404**. L'UI ne s'hydrate pas, donc pas de lecteur ni de calibration.
+- Le `cwd` du serveur détermine aussi `data/` (`db.ts:178`).
+- Correctif : `"start": "cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/ && node .next/standalone/server.js"`, ou un script `postbuild`.
+
+### N-M1. Mineurs
+- `db.ts:291-296` + `:331` : `leagueAny` sans autre filtre donne une requête SQL invalide (exécuté). Ajouter `1=1` ou n'écrire `WHERE` que si `sql` n'est pas vide.
+- `sync/route.ts:113-116` : `nudge` accepte n'importe quel `period` fini (`1.5`, `99`). La clé `"1.5"` est stockée, puis toute écriture `{global_offset}` ultérieure échoue en 400 (`:143-144` revalide `current.quarter_offsets`).
+- `MatchClient.tsx:236-242` : le bouton « Statistiques du match » ne fait que basculer son propre libellé (`showStats` n'est jamais lu). Il est toujours actif, y compris avant la fin du match. Préexistant, voir la spec.
+- `MatchClient.tsx:321` : la liste des ancres affiche le `video_ts` brut (offsets retirés). Signalé en 2e revue, inchangé.
+- `MatchClient.tsx:161-170` : un clic ± par quart avant le retour de `loadSync` envoie `{}` complété d'une seule clé, ce qui écrase les offsets de quart du serveur.
+- `hls.ts:192` : coquille « descargar ».
+
+## Cohérence spec ↔ code
+
+| Spec | Code | Écart |
+|---|---|---|
+| `SPEC.md:14`, `:288` : better-sqlite3 | `node:sqlite` (avec `ExperimentalWarning` à chaque démarrage) | Divergence non documentée dans la spec. |
+| `SPEC.md:220` : « chaque requête master.m3u8 doit re-résoudre » | `videoProxy.ts:48` : cache réutilisé (`force:false`) | Divergence volontaire (M4), spec à mettre à jour. |
+| `SPEC.md:290` : ports 3000 + **8080 (health)** | `Dockerfile:43` : 3000 seul, health sur `/api/health` | Spec obsolète. |
+| `SPEC.md:259`, critère 8 : bouton « Statistiques » actif seulement sur match terminé | Bouton toujours actif et sans effet (`MatchClient.tsx:236-242`). Le panneau est en revanche bien conditionné par `isFinal` (`matchs/[id]/page.tsx:92`) | Critère satisfait par la section, **pas** par le bouton. |
+| `SPEC.md:261` : `/equipes/[abbr]` | Implémentée | OK. Pas d'index `/equipes` (la spec n'en demande pas, mais le prompt en parle). |
+| `SPEC.md:267` : affichage si `video_ts <= t <= end_ts` | `VideoPlayer.tsx:111-121` (tolérances +0,05 et +0,5 s) | OK. |
+| `SPEC.md:24` : `dates=2026&limit=1000` | Le code découpe par jour ou par mois (`espn.ts:338-389`) | Cohérent : la spec ne parle pas des plages, que le code refuse à juste titre. |
+| `SPEC.md:226` : `{ masterUrl, expiresAt, variants[] }`, cache 30-60 s | `okru.ts:136-150` (45 s, et jamais à moins de 60 s de l'expiration) | OK. |
+| `SPEC.md:338-339` : `user_clips` + `/clips`, colonne `league` | Présents (`db.ts:151`, `api/matches/[id]/clips`) | OK. |
+| Modèle de données (`SPEC.md:90-200`) | Le code ajoute `league`, `stats_synced_at`, `wallclock` dans les ancres, un profil audio | Spec en retard, sans contradiction. |
+| `SPEC.md:268` : réglage ± 0,5 s persisté | OK (`MatchClient.tsx:149-158`) | Sujet à N-U1. |
+| `/api/standings` | Existe, absent du tableau des routes de la spec | Mineur. |
+
+## Points vérifiés sans problème
+
+- Une seule application de l'offset (`sync.ts:402`). Sens documenté, testé et cohérent avec les libellés.
+- `consistentAnchors` : la priorité du code (`METHOD_PRIORITY` manual 3 > auto 2 > audio 1) correspond au commentaire.
+- Bannière : préfixe limité à `primary`, émission seule sinon, `extras.pop()` borné à la même action. Plus de catégories en dur.
+- Pas de doublon ni de renumérotation des `seq`. Tri final stable.
+- Index de la série de lancers francs : pas d'action intercalée sautée à tort (un temps mort reste commenté).
+- Proxy : corps et en-têtes relayés depuis la réponse redirigée. Destination 3xx validée **avant** d'être suivie (segment et playlist). 2e saut 3xx refusé. okId inconnu → 404, master connu → 200 (exécuté).
+- `leagueAny` : aucun autre appelant ne perd le filtre de ligue, et il n'est pas injectable via la query string.
+- Polling d'analyse : pas de boucle ni de dépendance manquante, `clearInterval` au démontage et au changement de statut.
+- `stats_synced_at` : 0 match `final` en attente sur la vraie base.
+- Bornes d'environnement OCR et parallélisme. Comparaison du jeton par SHA-256. Timeout et SIGKILL de `filterImage`.
+- `actorFromText` : particules (« da », « de ») et diacritiques via `\p{L}` avec le flag `u`.
+- Le garde-fou `fetchScoreboard` rejette les plages avec un message explicite.
+- `/equipes/[abbr]` : validation de `abbr` (`^[A-Z]{2,4}$`), 404 si aucune donnée, aucun appel réseau à l'affichage. Rendu 200 sur `BOS` (exécuté).
+- `tsc` OK, 159/159 tests, `next build` OK.
+
+## Couverture
+
+- **Lu** :
+  - le diff `3f488eb..a8b9f75` et les messages de commit des corrections ;
+  - `vf.ts` (`buildCommentary` complet), `sync.ts` (`applyOffsets`, `timeLines`, `consistentAnchors`), `videoProxy.ts`, `http.ts`, `okru.ts` (résolution, cache, hôtes) et `hls.ts` ;
+  - `db.ts` (`whereFor`, `listMatches`, requêtes de synchro), `api.ts`, la route `sync`, `subtitles`, `schedule`, `matches`, `playlist.m3u8` ;
+  - `ingest.ts` (`runLogged`, détails, vidéos, analyse, jeton), `ocr.ts` (`filterImage`, `scanVideoClock`), `espn.ts` (`actorFromText`, `fetchScoreboard*`, `mapSeasonType`), `bv.ts` (complet), `scheduler.ts` ;
+  - `MatchClient.tsx`, `VideoPlayer.tsx`, `equipes/[abbr]/page.tsx`, le diff de `matchs/[id]/page.tsx`, `MatchCard.tsx` (en-tête) et `StatsPanel.tsx` (en-tête) ;
+  - `Dockerfile`, `package.json`, le README (variables d'environnement, démarrage) et `docs/SPEC.md`.
+- **Exécuté** (dans une copie `git archive` `/tmp/blr3-run`, `node_modules` liés depuis `/workspace/basketland`) :
+  - `tsc --noEmit` OK, `vitest run` 159/159, `next build` OK ;
+  - tests ad hoc (fichier temporaire supprimé) : `isOriginAllowed`, Content-Type, lancers francs sans acteur, bannière avec `maxLines`, cooldown N4 (ESPN et ok.ru simulés en échec), `leagueAny` seul, cache des listes avec deux dates (`fetch` simulé), réécriture `URI=` ;
+  - serveur standalone sur le port 3999 avec une **copie** (`VACUUM INTO`) de `/tmp/bl-data/basketland.db` : static 404, contournement du Content-Type (200), `req.url` mesuré (`0.0.0.0`), proxy okId inconnu et connu, `/equipes/BOS`, `/equipes`. Serveur arrêté ensuite. Le serveur de l'utilisateur sur `/tmp/bl-data` (port 3000) n'a pas été touché.
+- **Aucun fichier du dépôt modifié** (`git status` : seul `PROMPT3.md`, non suivi, préexistant).
+- **Non vérifié** :
+  - un vrai scraping de basketball-video.com (R-1 est démontré avec un `fetch` simulé ; le nombre d'entrées par page réelle détermine à partir de quel âge les replays sont manqués) ;
+  - le comportement en navigateur réel (N-C1 est démontré avec curl ; la nature « simple » de la requête découle de la spécification Fetch) ;
+  - les redirections ok.ru réelles (N-P1) ;
+  - `next dev` (N-C2).

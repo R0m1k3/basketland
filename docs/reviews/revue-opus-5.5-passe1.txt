@@ -1,0 +1,147 @@
+## Synthèse
+
+Le code est globalement propre. Le typecheck passe, les 121 tests passent, le SQL est entièrement paramétré et il n'y a aucun rendu de HTML brut. Je n'ai rien trouvé de critique certain. Bilan : 3 findings élevés, 4 moyens, 9 faibles. Les trois points les plus importants :
+
+1. **SSRF sur le proxy vidéo.** Les paramètres `s` et `u` acceptent une URL absolue, autorisent `http:` et suivent les redirections sans les revalider.
+2. **Le décalage VF global s'annule au rechargement.** Il est appliqué deux fois, côté serveur et côté lecteur, avec des signes opposés. Le réglage manuel ne tient donc pas.
+3. **`POST /api/matches/[id]/sync` n'a aucune authentification**, alors qu'il modifie l'état et lance des analyses ffmpeg/OCR lourdes.
+
+Deux bugs de la VF sont confirmés par reproduction : un crash sur la clé primaire de `subtitles` et des lancers francs commentés en double.
+
+## Findings critiques
+
+Aucun confirmé. H1 deviendrait critique si l'on trouve une redirection ouverte sur l'un des domaines autorisés.
+
+## Findings élevés
+
+### H1. SSRF : URL absolue acceptée pour les segments et playlists, schéma `http:` autorisé, redirections suivies sans contrôle
+- Fichiers : `src/lib/hls.ts:50`, `src/lib/videoProxy.ts:43-47`, `src/lib/videoProxy.ts:68-72`, `src/lib/okru.ts:171`, `src/lib/http.ts:31`
+- Sévérité : élevé
+- Symptôme :
+  - `resolveSegmentUrl` renvoie telle quelle toute valeur `s` commençant par `http(s)://`.
+  - Le seul contrôle ensuite est `isAllowedMediaHost`. Il ne vérifie pas le schéma et accepte `ok.ru`, `vk.com`, `userapi.com`, etc.
+  - `fetchWithRetry` utilise `redirect: 'follow'`, et le corps de la réponse est renvoyé intégralement au client.
+  - Exemple : `GET /api/video/<n'importe quel okId public>/segment.ts?v=sd&s=https://vk.com/<redirection>` permet de lire en entier une ressource interne, dès qu'un domaine autorisé possède une redirection ouverte (`vk.com/away.php` et `ok.ru/dk?cmd=logExternal` sont des candidats connus).
+  - Le paramètre `?u=` de `playlist.m3u8` présente la même faille. Le client ne s'en sert jamais : c'est une surface d'attaque morte.
+  - Le helper strict `isAllowedSegmentUrl` (https uniquement) existe dans `hls.ts:22`, mais seuls les tests l'utilisent. Les tests valident donc une protection que la production n'applique pas.
+- Correctif :
+  ```ts
+  // videoProxy.ts – proxiedSegment
+  if (!/^[A-Za-z0-9_-]+\.ts$/.test(s)) throw new ProxyError(400, 'segment invalide');
+  // hls.ts – resolveSegmentUrl : supprimer la branche « URL absolue »
+  // videoProxy.ts – supprimer le paramètre absUrl/`u` de proxiedMedia (et de la route)
+  // http.ts : option redirect:'manual' pour le proxy, ou revalider r.url :
+  if (!isAllowedMediaHost(r.url) || new URL(r.url).protocol !== 'https:') throw new ProxyError(502, 'redirection refusée');
+  // okru.ts – isAllowedMediaHost : exiger u.protocol === 'https:'
+  ```
+- Statut : défaut de validation **confirmé**. L'exploitation complète vers le réseau interne dépend d'une redirection ouverte sur un domaine autorisé : **à confirmer**.
+
+### H2. Le décalage global de la VF est appliqué deux fois en sens opposés, donc il s'annule au rechargement
+- Fichiers : `src/lib/sync.ts:383-385` et `:396` (offset intégré dans `video_ts`), `src/components/VideoPlayer.tsx:104`, `src/components/MatchClient.tsx:65` et `:77`
+- Sévérité : élevé (cœur de la fonction de synchronisation)
+- Symptôme :
+  - Le serveur stocke `video_ts = map(w) + g`.
+  - Le client initialise `offset = g` à partir de `settings.global_offset`, puis affiche un sous-titre quand `video_ts <= current + offset`, soit `current >= map(w)`. Après rechargement, le réglage n'a donc plus aucun effet.
+  - Pendant la session, le sous-titre se déplace uniquement côté client, dans le sens inverse de la convention serveur. « −0,5 s », libellé « Avancer la VF », décale en réalité la VF plus tard (`VideoPlayer.tsx:186`).
+- Correctif : choisir une seule source de vérité. Le plus simple est que le client n'ajoute plus d'offset (`position = current`). `changeOffset` refait ensuite un fetch de `/subtitles` après le POST, ou applique localement le delta `next - offsetServeur` jusqu'au rechargement. Corriger les libellés en conséquence.
+- Statut : confirmé (raisonnement direct sur le code).
+
+### H3. `POST /api/matches/[id]/sync` sans authentification
+- Fichier : `src/app/api/matches/[id]/sync/route.ts:66`
+- Sévérité : élevé (moyen si l'application n'est jamais exposée hors du réseau local)
+- Symptôme : n'importe quel client qui atteint le serveur peut :
+  - remettre à zéro ou écraser les offsets et ancres de tous les matchs (`reset`, `anchors`, `global_offset`) ;
+  - lancer `analyze` / `analyze-audio` (`:81`), soit jusqu'à 45 min de ffmpeg plus tesseract par match. `ANALYSIS_MAX_PARALLEL` limite le parallélisme, mais un attaquant peut monopoliser l'unique slot en permanence.
+
+  `/api/ingest`, lui, est bien protégé (voir plus bas).
+- Correctif : appliquer `checkIngestAuth` (ou un jeton d'administration distinct, ou un cookie de session) sur le POST. Au minimum, protéger `analyze*` et `reset`, et vérifier l'en-tête `Origin` pour bloquer le CSRF venant d'une autre page ouverte dans le navigateur de l'utilisateur.
+- Statut : confirmé.
+
+## Findings moyens
+
+### M1. Crash `UNIQUE constraint failed: subtitles.match_id, subtitles.seq` si la première action de la 1re période n'est pas un entre-deux
+- Fichier : `src/lib/vf.ts:413`
+- Sévérité : moyen
+- Symptôme :
+  - La bannière « Coup d'envoi » est poussée avec le `seq` de l'action. Si cette action n'est pas un `jumpball` (par exemple « Start of the 1st Quarter », ou un tir quand l'entre-deux manque dans le flux ESPN), le `switch` pousse une seconde ligne avec le même `seq`.
+  - `replaceSubtitles` lève alors une exception et sa transaction est annulée.
+  - Conséquences : `ingestMatchDetails` échoue après `markStatsSynced` (la VF n'est donc jamais retentée par `syncStats`), `/subtitles` renvoie 502 à chaque appel, et `/sync` POST renvoie 500.
+- Reproduit : un script avec `[Start of the 1st Quarter, made shot, …]` donne `[1,"Coup d'envoi du match !"], [1,"Début du 1er quart"]`, puis `INSERT FAIL: UNIQUE constraint failed`.
+- Correctif : ne pas émettre de bannière séparée. On peut préfixer le texte de la première ligne (`head + ' ' + translatePlay(p)`) puis `continue`. Autre option : donner à la bannière un `seq` dérivé unique (par exemple `seq - 0.5`, ce qui suppose une colonne REAL), ou dédoublonner par `seq` avant l'insertion.
+- Statut : confirmé (reproduit).
+
+### M2. Série de lancers francs commentée deux fois quand un remplacement ou un temps mort s'intercale
+- Fichier : `src/lib/vf.ts:478-479`
+- Sévérité : moyen (qualité de la VF, cas très fréquent en NBA)
+- Symptôme :
+  - La série inclut bien le 2e lancer situé après le remplacement.
+  - Mais la boucle n'avance `i` que sur des éléments contigus de la série. Elle s'arrête sur le remplacement, et le 2e lancer est ensuite retraité comme une nouvelle série.
+  - Reproduit : on obtient « B : 2/2 aux lancers francs » puis « B marque le lancer franc 2 sur 2 ».
+- Correctif : garder un `Set<number>` global des `seq` déjà consommés, et faire `if (consumed.has(p.seq)) continue;` en tête de boucle.
+- Statut : confirmé (reproduit).
+
+### M3. La VF affichée n'est jamais rechargée après une ancre, un offset de quart ou une analyse
+- Fichier : `src/components/MatchClient.tsx:58-71` (seul `setSubtitles`), `:88-98`, `:119-134`
+- Sévérité : moyen
+- Symptôme : les sous-titres ne sont chargés qu'une fois, au montage. Après « poser une ancre », un réglage ± d'un quart ou la fin d'une analyse, le serveur régénère la VF, mais le lecteur garde les anciens `video_ts`. Le calibrage paraît sans effet jusqu'au rechargement de la page. Combiné à H2, l'utilisateur ne peut pas calibrer de manière fiable.
+- Correctif : la réponse du POST `/sync` contient déjà l'état. Il faut refaire un `GET /subtitles` après chaque POST réussi, et faire du polling sur `analysis.status` tant qu'il vaut `running`.
+- Statut : confirmé.
+
+### M4. Proxy ok.ru ouvert, avec re-résolution forcée sans limite de débit
+- Fichiers : `src/lib/videoProxy.ts:26-28`, `src/lib/okru.ts:141`
+- Sévérité : moyen
+- Symptôme :
+  - N'importe quel `okId` numérique est accepté, pas seulement ceux présents en base. Le serveur sert donc de proxy de bande passante pour n'importe quelle vidéo ok.ru.
+  - Chaque requête sur `master.m3u8` force `doResolve` (embed + master), sans cache ni limiteur. Une boucle de requêtes provoque une amplification vers ok.ru, avec un risque de bannissement de l'IP du serveur.
+  - Lors d'une vague de 403 (signature expirée), chaque segment en parallèle force aussi sa propre re-résolution.
+- Correctif :
+  - Vérifier que l'`okId` correspond à un match `video_available = 1`.
+  - Dans `proxiedMaster`, réutiliser le cache tant qu'il reste plus de 60 s avant `expiresAt`.
+  - Dédoublonner les re-résolutions forcées en vol (garder la promesse en cours si elle date de moins de 5 s).
+- Statut : confirmé (comportement). L'impact chez ok.ru est à confirmer.
+
+## Findings faibles
+
+- **L1. Calendrier tronqué sans avertissement** — `src/app/api/schedule/route.ts:18`. Avec `days_back = days_ahead = 60`, on couvre 121 jours, soit environ 1 200 matchs, au-delà de `limit: 1000`. Les derniers jours disparaissent sans signal. Correctif : borner la plage à environ 45 jours au total, ou paginer. *Confirmé (calcul).*
+- **L2. `timingSafeEqual` lève une exception sur un jeton non ASCII de même longueur** — `src/lib/ingest.ts:300-302`. L'égalité de `length` porte sur les unités UTF-16, pas sur les octets. Un jeton contenant « é » fait lever une `RangeError` (réponse 500 au lieu de 401). Sans impact sécurité. Correctif : comparer `Buffer.byteLength`, ou comparer des hachages SHA-256 de taille fixe. *Confirmé.*
+- **L3. `stats_synced_at` est posé même si le boxscore ou le play-by-play est incomplet** — `src/lib/ingest.ts:86`. Si ESPN passe à `post` avant d'avoir publié toutes les actions, les stats et la VF ne sont jamais rafraîchies. Le route `/stats` affichera alors « pas encore publiées » indéfiniment. Correctif : ne marquer le match que si `players.length > 0` et qu'une action `game_end` est présente. *À confirmer (dépend du timing ESPN).*
+- **L4. L'OCR utilise une URL signée résolue une seule fois pour tout le balayage** — `src/lib/ingest.ts:243-257`. Cela représente environ 134 frames, chacune avec ffmpeg, trois filtres et tesseract, soit potentiellement plus d'une heure. Les échecs après expiration de la signature sont avalés (`ocr.ts:320`), d'où des ancres manquantes en fin de match. Correctif : re-résoudre toutes les N frames ou dès le premier échec. *À confirmer (durée de vie réelle des signatures).*
+- **L5. Configuration fragile** :
+  - `OCR_STEP_SEC=0` fait tourner `scanVideoClock` en boucle infinie jusqu'à saturer la mémoire (`ocr.ts:310`).
+  - Une valeur non numérique de `ANALYSIS_MAX_PARALLEL` donne `NaN`, et la limite saute (`ingest.ts:230`).
+  - Correctif : `Math.max(10, Number(x) || 60)`. *Confirmé.*
+- **L6. `filterImage` n'a pas de timeout** — `src/lib/ocr.ts:255`. Un ffmpeg bloqué garde le slot d'analyse occupé jusqu'au redémarrage (`analysis.delete` n'est jamais atteint). *Soupçon.*
+- **L7. Balises HLS avec `URI=` transmises sans réécriture** — `src/lib/hls.ts:88-90`, `:115-117`. `#EXT-X-KEY`, `#EXT-X-MAP`, `#EXT-X-MEDIA` et `#EXT-X-I-FRAME-STREAM-INF` sont bien conservées, mais leur `URI` relative serait résolue contre `/api/video/...` (404), et une `URI` absolue serait chargée sans `Referer` (403). Les fixtures ok.ru actuelles n'en contiennent pas, donc il n'y a pas d'impact aujourd'hui. Risque latent si la source change.
+- **L8. Les ancres brutes et l'action `anchor` ne suivent pas la même convention** — `sync/route.ts`. L'action `anchor` retire l'offset global et l'offset de quart avant de stocker, mais pas la liste `anchors[]` brute. Une même position donne donc deux résultats différents selon l'API utilisée. *Confirmé.*
+- **L9. Scraping répété des listes** — `src/lib/bv.ts:452`. La clé de cache inclut `oldestUsDate`, donc chaque date de match crée une clé différente. `syncVideos` sur 21 jours peut relire jusqu'à 15 pages par date, à raison d'une page toutes les 2 s. Correctif : mettre en cache par page (`season:page`). *Confirmé (efficacité, pas de faille).*
+
+Code mort ou doublons ayant un impact : `isAllowedSegmentUrl` (voir H1), la variable `absolute` inutilisée (`hls.ts:121`), le paramètre `u`, `STATUS_FR` (`present.ts:85`, jamais importé) et `computeRmsDb` (utilisé seulement par les tests). La logique de clé de variante est dupliquée entre `rewriteMasterPlaylist` et `parseMasterVariants`, et diverge : seule la seconde saute un commentaire placé entre `#EXT-X-STREAM-INF` et l'URI. Le commentaire de `consistentAnchors` (`sync.ts:155`) annonce « manuel > audio > auto » alors que le code applique manuel > auto > audio.
+
+## Points vérifiés sans problème
+
+- **SQL** : toutes les valeurs externes passent par des paramètres nommés (`$x`). `ORDER` est choisi dans une liste blanche, et `whereFor` n'assemble que des fragments fixes. `listMatches` et `countMatches` partagent exactement le même `whereFor`. `LIMIT`/`OFFSET` sont bornés. Aucune injection.
+- **XSS** : aucun `dangerouslySetInnerHTML` ni `innerHTML`. Les noms ESPN passent par du JSX échappé. Le VTT échappe `& < > -->`, y compris pour le `speaker`. Le `Content-Disposition` n'utilise qu'un identifiant numérique.
+- **`/api/ingest`** : jeton Bearer comparé en temps constant, liste blanche des jobs. Le jeton est généré aléatoirement (24 octets) avec le mode 0600 si la variable d'environnement est absente. Un fichier de jeton vide ne permet aucun accès.
+- **Validation de base** : `okId` doit correspondre à `^\d{5,25}$`. Les noms de segments relatifs sont filtrés par `^[A-Za-z0-9_-]+\.ts$` (`../` est rejeté, c'est testé). `isAllowedMediaHost` est correctement ancré sur `(^|\.)domaine$`.
+- **Réécriture HLS** : `#EXTM3U` n'est pas dupliqué. `BANDWIDTH` est distingué d'`AVERAGE-BANDWIDTH`. Les clés QUALITY sont cohérentes entre la playlist maître et `pickVariant`. Les URL signées ne sont jamais exposées au client. Retry sur 400/403/404/410 et propagation du 416.
+- **Synchro** : les ancres sont filtrées en ordre strictement monotone. `sigma ≥ 0` et `ρ ∈ [0,1]` dans chaque segment, donc le mapping ne régresse jamais dans le temps. `video_ts` est borné à `[0, durée]`, et une valeur `NaN` est remplacée par 0. Seuls les offsets par quart peuvent réordonner les lignes, et c'est voulu.
+- **ESPN** : scores à `null` pour les matchs à venir, matchs reportés ou annulés traités comme non terminés, prolongations gérées (5 min), `seq` rendu strictement croissant, trous de wallclock comblés, `parseClock` gère `mm:ss` et les dixièmes. Normalisation ISO. `parisDayStartUtc` est correct aux changements d'heure.
+- **Réseau** : timeout de 20 à 60 s, 2 retries sur 5xx et erreurs réseau. Le 429 n'est pas retenté mais est remonté proprement en erreur (pas de 200 vide).
+- **Limiteur de débit bv** : chaîne de promesses sérialisée, effective.
+- **Singletons** : la base, le cache ok.ru et l'état d'analyse sont sur `globalThis`. Dans le build existant, `instrumentation.js` et les routes partagent `webpack-runtime.js`, donc un seul module `ingest` et un seul `Set running`. Le verrou anti-chevauchement des jobs fonctionne en `next start`, qui ne lance qu'un processus. Ce n'est pas adapté au serverless, mais ce n'est pas la cible.
+- **Erreurs des routes** : les `catch` renvoient 502 avec un motif, je n'ai pas trouvé de 200 vide qui masquerait une erreur. Les transactions SQLite sont synchrones (aucun `await` à l'intérieur), donc pas d'entrelacement.
+- **Scheduler** : garde globale `__basketlandCron`, `unref`, pas de chevauchement grâce à `runLogged`.
+
+## Couverture
+
+- **Lu intégralement** : `src/lib/{hls,okru,videoProxy,http,api,db,ingest,bv,espn,time,present,vtt,sync,audio,ocr,vf,scheduler}.ts`, `src/instrumentation.ts`, toutes les routes `src/app/api/**`, `VideoPlayer.tsx`, et la logique réseau de `MatchClient.tsx`.
+- **Survolé** : `types.ts`, les pages (`matchs/[id]`, `matchs`, `page`, `classement`), `StatsPanel`, `MatchCard`, les fixtures `ok-master.m3u8` et `ok-media.m3u8`. Je n'ai pas lu les tests en détail, seulement repéré ce qu'ils couvrent (`hls.test.ts`).
+- **Commandes lancées** :
+  - Le worktree n'a pas de `node_modules`. J'ai donc lancé `tsc --noEmit --incremental false` (OK) et `vitest run` (7 fichiers, 121 tests réussis) depuis `/workspace/basketland`, qui est au même commit `3f488eb` et sans modification.
+  - Deux reproductions (M1 et M2) avec `node --experimental-strip-types` sur base en mémoire, via un script temporaire dans `/tmp/blreview-scratch`, supprimé ensuite.
+  - Inspection du build `.next` existant pour vérifier le partage des modules.
+  - Aucun fichier du dépôt n'a été modifié.
+- **Non vérifié** :
+  - Les appels réels à ok.ru, ESPN et basketball-video.com (pas de test réseau). Cela concerne l'existence d'une redirection ouverte (H1), la durée de vie des signatures (L4) et le timing ESPN (L3).
+  - Le comportement en `next dev` (HMR).
+  - `npm run build`, non relancé : j'ai utilisé le build existant.
