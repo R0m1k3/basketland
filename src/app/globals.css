@@ -8,11 +8,18 @@
 
 html,
 body {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
-  @apply bg-[#0b0e14] text-slate-200 antialiased;
+  @apply bg-ink-950 font-sans text-paper antialiased;
+  /* Halo discret en haut de page : rappelle l'éclairage d'une salle. */
+  background-image: radial-gradient(1200px 500px at 50% -200px, rgba(255, 90, 31, 0.08), transparent 70%);
+  background-repeat: no-repeat;
+}
+
+::selection {
+  @apply bg-flame/40 text-paper;
 }
 
 /* Scrollbar discrète */
@@ -24,10 +31,72 @@ body {
   @apply bg-transparent;
 }
 ::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-slate-700;
+  @apply rounded-full bg-ink-600;
 }
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-slate-600;
+  @apply bg-ink-500;
+}
+
+@layer components {
+  /* Surfaces */
+  .panel {
+    @apply rounded-2xl border border-ink-700/80 bg-ink-900/80 shadow-card;
+  }
+  .panel-soft {
+    @apply rounded-2xl border border-ink-700/60 bg-ink-850/60;
+  }
+
+  /* Petit titre en capitales au-dessus d'une section */
+  .kicker {
+    @apply font-display text-[13px] font-semibold uppercase tracking-[0.18em] text-paper-mute;
+  }
+  .title-xl {
+    @apply font-display text-4xl font-extrabold uppercase leading-[0.95] tracking-tight sm:text-6xl;
+  }
+  .title-lg {
+    @apply font-display text-2xl font-bold uppercase tracking-tight sm:text-3xl;
+  }
+
+  /* Chiffres de tableau d'affichage */
+  .num {
+    @apply font-display tabular-nums;
+  }
+
+  /* Boutons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-ink-600 bg-ink-850 px-4 py-2 text-sm font-medium text-paper transition hover:border-ink-500 hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-flame px-4 py-2 text-sm font-semibold text-ink-950 transition hover:bg-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-3 py-1.5 text-sm text-paper-dim transition hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+  }
+
+  /* Pastilles */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-850 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-paper-dim;
+  }
+  .chip-flame {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-flame/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-flame-hot;
+  }
+  .chip-live {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-live/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-live;
+  }
+
+  /* Tableaux de stats */
+  .table-stats {
+    @apply w-full text-sm;
+  }
+  .table-stats th {
+    @apply whitespace-nowrap px-2 py-2 text-right text-[11px] font-semibold uppercase tracking-wider text-paper-faint;
+  }
+  .table-stats td {
+    @apply whitespace-nowrap px-2 py-2 text-right tabular-nums text-paper-dim;
+  }
+  .table-stats tbody tr {
+    @apply border-t border-ink-700/60 transition-colors hover:bg-ink-800/50;
+  }
 }
 
 /* Sous-titre affiché sur la vidéo */
@@ -37,15 +106,231 @@ body {
     0 0 2px rgba(0, 0, 0, 1);
 }
 
-@keyframes pulse-live {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
+/* Liseré aux couleurs d'une équipe (variables posées par le composant) */
+.team-stripe {
+  background: linear-gradient(90deg, var(--team-a, #ff5a1f), var(--team-b, #ff5a1f));
+}
+
+/* Rangée défilante sans barre visible (sélecteur de jours) */
+.scroll-row {
+  scrollbar-width: none;
+}
+.scroll-row::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }
-.live-dot {
-  animation: pulse-live 1.6s ease-in-out infinite;
+
+/* ==================================================================
+   Pages (accueil, calendrier, équipes, classement)
+   ================================================================== */
+
+/* --- Mode « scores masqués » ------------------------------------------
+   La page porte data-spoilers="show|hide" ; chaque match data-scope={id}
+   (data-revealed quand l'utilisateur révèle ce match précis). */
+.tone-loss {
+  @apply text-paper-faint;
+}
+[data-spoilers='hide'] [data-scope]:not([data-revealed]) .spoil-show {
+  display: none !important;
+}
+[data-spoilers='show'] .spoil-only,
+[data-scope][data-revealed] .spoil-only {
+  display: none !important;
+}
+/* Sans score, plus de vainqueur ni de vaincu : tons neutres. */
+[data-spoilers='hide'] [data-scope]:not([data-revealed]) .tone-loss {
+  color: inherit;
+}
+.score-mask {
+  @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-ink-500 bg-ink-900/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper-mute transition hover:border-flame/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+}
+
+/* --- Titres de section ------------------------------------------------ */
+.section-title {
+  @apply font-display text-[26px] font-extrabold uppercase leading-none tracking-tight sm:text-[32px];
+}
+.link-more {
+  @apply inline-flex items-center gap-1.5 rounded-full text-sm font-medium text-paper-mute transition hover:text-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+}
+
+/* --- Filigrane de logo (bannières, tuiles) ---------------------------- */
+.watermark {
+  @apply pointer-events-none absolute select-none opacity-[0.13] mix-blend-luminosity;
+  filter: grayscale(0.2) contrast(1.1);
+}
+
+/* Grain léger sur les grandes surfaces colorées */
+.grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.6) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+/* ==========================================================================
+   Fiche match (/matchs/[id]) : en-tête tableau d'affichage, lecteur,
+   VF en direct, statistiques. Le mode « scores masqués » réutilise la
+   section commune « Pages » (data-spoilers / data-scope / .spoil-show).
+   ========================================================================== */
+
+/* En-tête : lavis aux couleurs des deux équipes */
+.match-hero-wash {
+  background:
+    radial-gradient(70% 120% at 0% 50%, color-mix(in srgb, var(--team-a-deep) 45%, transparent), transparent 70%),
+    radial-gradient(70% 120% at 100% 50%, color-mix(in srgb, var(--team-b-deep) 45%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
+}
+.win-caret {
+  @apply absolute top-1/2 h-0 w-0 -translate-y-1/2 border-y-[7px] border-y-transparent sm:border-y-[10px];
+}
+.win-caret-left {
+  @apply -left-4 border-l-[8px] border-l-flame sm:-left-6 sm:border-l-[11px];
+}
+.win-caret-right {
+  @apply -right-4 border-r-[8px] border-r-flame sm:-right-6 sm:border-r-[11px];
+}
+
+/* Linescore */
+.linescore {
+  @apply text-sm;
+}
+.linescore th,
+.linescore td {
+  @apply px-2 py-1 text-center font-display tabular-nums;
+}
+.linescore thead th {
+  @apply text-[11px] font-semibold uppercase tracking-wider text-paper-faint;
+}
+.linescore tbody th {
+  @apply font-semibold text-paper-dim;
+}
+.linescore tbody td {
+  @apply text-base text-paper-mute;
+}
+.linescore tbody tr + tr {
+  @apply border-t border-ink-700/50;
+}
+
+/* Lecteur */
+.player {
+  container-type: inline-size;
+}
+.player:fullscreen {
+  @apply rounded-none;
+}
+.player-controls {
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.45) 55%, transparent);
+}
+.player-volume {
+  accent-color: #ff5a1f;
+  height: 4px;
+}
+.poster {
+  background:
+    radial-gradient(60% 90% at 15% 50%, color-mix(in srgb, var(--team-a-deep) 55%, transparent), transparent 70%),
+    radial-gradient(60% 90% at 85% 50%, color-mix(in srgb, var(--team-b-deep) 55%, transparent), transparent 70%),
+    radial-gradient(120% 80% at 50% 120%, rgba(255, 90, 31, 0.18), transparent 60%),
+    #0b0b0e;
+}
+
+/* Sous-titres français superposés : taille proportionnelle au lecteur */
+.subtitle-box {
+  @apply relative inline-flex max-w-[min(92%,52rem)] items-stretch overflow-hidden rounded-lg bg-black/70 backdrop-blur-[2px];
+}
+.subtitle-team {
+  @apply w-1 shrink-0;
+}
+.subtitle-text {
+  @apply px-3 py-1.5 text-center font-semibold leading-snug text-white;
+  font-size: clamp(14px, calc(var(--sub-scale, 1) * 2.3cqw), 46px);
+}
+.subtitle-banner {
+  @apply bg-ink-950/85 ring-1 ring-flame/50;
+}
+/* Roll-up : entrée par le bas, la ligne précédente remonte et s'estompe. */
+@keyframes subtitle-in {
+  from {
+    opacity: 0;
+    transform: translateY(40%);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.subtitle-roll {
+  animation: subtitle-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+.subtitle-older {
+  opacity: 0.62;
+  transform: scale(0.94);
+}
+.subtitle-banner .subtitle-text {
+  @apply font-display uppercase tracking-wide;
+}
+
+/* Transcript « VF en direct » */
+.transcript-row[data-state='active'] > button {
+  box-shadow: inset 3px 0 0 #ff5a1f;
+}
+.transcript-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
+/* Play-by-play */
+.pbp-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
+}
+.pbp-row[data-scoring] {
+  box-shadow: inset 3px 0 0 var(--row-accent, #ff5a1f);
+}
+
+/* Box score : en-tête et colonne joueur collants */
+.boxscore thead th {
+  @apply sticky top-0 z-[2] bg-ink-900;
+}
+.boxscore .boxscore-sticky {
+  @apply sticky left-0 z-[1] max-w-[150px] bg-ink-900 pl-4 shadow-[1px_0_0_rgba(52,52,63,0.8)] sm:max-w-[240px];
+}
+.boxscore thead .boxscore-sticky {
+  @apply z-[3];
+}
+.boxscore tfoot .boxscore-sticky {
+  @apply bg-ink-850;
+}
+.boxscore tbody tr:hover .boxscore-sticky {
+  @apply bg-ink-850;
+}
+.boxscore tbody th[scope='row'] {
+  @apply text-sm normal-case tracking-normal text-paper-dim;
+}
+.boxscore-group {
+  @apply sticky left-0 bg-ink-950/60 !py-1.5 !pl-4 !text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-flame-hot/80;
+}
+
+/* États */
+.spoiler-veil {
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 12px, transparent 12px 24px);
+}
+.upcoming-glow {
+  background: radial-gradient(60% 80% at 50% 0%, rgba(255, 90, 31, 0.12), transparent 70%);
+}
+.countdown-cell {
+  @apply min-w-[2.2ch] rounded-xl border border-ink-700 bg-ink-950/70 px-2 py-1 text-center leading-none shadow-card sm:px-3 sm:py-2;
 }

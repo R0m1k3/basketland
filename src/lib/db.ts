@@ -213,7 +213,23 @@ export function openDatabase(file: string): DatabaseSyncType {
   }
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA_SQL);
+  migrate(db);
   return db;
+}
+
+/**
+ * Migrations de colonnes, idempotentes : `CREATE TABLE IF NOT EXISTS` ne
+ * modifie pas une table existante, une base déjà en service n'aurait donc
+ * jamais les nouvelles colonnes.
+ */
+function migrate(db: DatabaseSyncType): void {
+  const cols = new Set(
+    (db.prepare('PRAGMA table_info(matches)').all() as { name: string }[]).map((c) => c.name),
+  );
+  // Type de flux du replay : 'hls' (traitement ok.ru terminé) ou 'mp4'
+  // (qualité « mobile » seule, en attendant le HLS). NULL sur les lignes
+  // antérieures : un replay disponible sans type est considéré HLS.
+  if (!cols.has('video_kind')) db.exec('ALTER TABLE matches ADD COLUMN video_kind TEXT');
 }
 
 export function getDb(): DatabaseSyncType {
@@ -399,23 +415,66 @@ export function liveMatches(): MatchRow[] {
   return all<MatchRow>(`SELECT * FROM matches WHERE status = 'live' ORDER BY date_utc`);
 }
 
-export function finalMatchesNeedingVideo(sinceIso: string, recheckBeforeIso: string, limit = 30): MatchRow[] {
-  return all<MatchRow>(
-    `SELECT * FROM matches WHERE status = 'final' AND video_available = 0 AND date_utc >= $since
+export type VideoKind = 'hls' | 'mp4';
+
+/**
+ * Matchs terminés dont le replay est à (re)chercher : sans replay, OU
+ * trouvé en MP4 seul (pour passer en HLS dès qu'ok.ru a fini le
+ * traitement). Même cadence de revérification dans les deux cas.
+ */
+export function finalMatchesNeedingVideo(
+  sinceIso: string,
+  recheckBeforeIso: string,
+  limit = 30,
+): (MatchRow & { video_kind: string | null })[] {
+  return all<MatchRow & { video_kind: string | null }>(
+    `SELECT * FROM matches WHERE status = 'final' AND (video_available = 0 OR video_kind = 'mp4') AND date_utc >= $since
        AND (video_checked_at IS NULL OR video_checked_at < $recheck)
      ORDER BY date_utc DESC LIMIT $limit`,
     { since: sinceIso, recheck: recheckBeforeIso, limit },
   );
 }
 
+/**
+ * Matchs terminés depuis `sinceIso`, avec replay, sans ancre OCR ('auto') :
+ * candidats à l'analyse automatique (les plus récents d'abord).
+ */
+/**
+ * Matchs à analyser automatiquement.
+ *
+ * Un replay encore en MP4 seul (`video_kind = 'mp4'`) est exclu : ok.ru n'a
+ * alors que la qualité « mobile », trop petite pour lire le chrono. Chaque
+ * tentative échouerait et consommerait le backoff ; le match revient ici dès
+ * que `syncVideos` le fait passer en HLS.
+ */
+export function finalMatchesNeedingAnalysis(sinceIso: string, limit = 30): MatchRow[] {
+  return all<MatchRow>(
+    `SELECT * FROM matches m WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL
+       AND COALESCE(m.video_kind, 'hls') = 'hls'
+       AND m.date_utc >= $since
+       AND NOT EXISTS (SELECT 1 FROM sync_anchors a WHERE a.match_id = m.id AND a.method = 'auto')
+     ORDER BY m.date_utc DESC LIMIT $limit`,
+    { since: sinceIso, limit },
+  );
+}
+
 export function setVideo(
   matchId: number,
-  v: { slug: string | null; okId: string | null; duration: number | null; available: boolean },
+  v: { slug: string | null; okId: string | null; duration: number | null; available: boolean; kind?: VideoKind | null },
 ): void {
   run(
     `UPDATE matches SET slug = $slug, video_ok_id = $okId, video_duration = $duration, video_available = $available,
-       video_checked_at = $now, updated_at = $now WHERE id = $id`,
-    { id: matchId, slug: v.slug, okId: v.okId, duration: v.duration, available: v.available ? 1 : 0, now: nowIso() },
+       video_kind = $kind, video_checked_at = $now, updated_at = $now WHERE id = $id`,
+    {
+      id: matchId,
+      slug: v.slug,
+      okId: v.okId,
+      duration: v.duration,
+      available: v.available ? 1 : 0,
+      // Pas de type sans replay lisible.
+      kind: v.available ? (v.kind ?? 'hls') : null,
+      now: nowIso(),
+    },
   );
 }
 

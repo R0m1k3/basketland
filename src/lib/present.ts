@@ -23,11 +23,26 @@ export interface MatchDto {
   venue: string;
   broadcast: string;
   stats_available: boolean;
-  video: { available: boolean; ok_id: string | null; duration: number | null; master: string | null; checked_at: string | null };
+  video: {
+    available: boolean;
+    ok_id: string | null;
+    duration: number | null;
+    /** 'hls' (playlist proxifiée) ou 'mp4' (MP4 progressif relayé, en attendant le HLS). */
+    kind: 'hls' | 'mp4' | null;
+    /** URL à donner au lecteur, selon `kind` ; null sans replay. */
+    src: string | null;
+    /** = `src` quand kind = 'hls', sinon null (compatibilité). */
+    master: string | null;
+    checked_at: string | null;
+  };
 }
 
-export function toDto(m: MatchRow): MatchDto {
+export function toDto(m: MatchRow & { video_kind?: string | null }): MatchDto {
   const available = !!m.video_available && !!m.video_ok_id;
+  // Ligne antérieure à la colonne video_kind (NULL) mais disponible : c'était du HLS.
+  const kind: 'hls' | 'mp4' | null = available ? (m.video_kind === 'mp4' ? 'mp4' : 'hls') : null;
+  const src =
+    kind === 'hls' ? `/api/video/${m.video_ok_id}/master.m3u8` : kind === 'mp4' ? `/api/video/${m.video_ok_id}/file.mp4` : null;
   return {
     id: m.id,
     espn_id: m.espn_id,
@@ -52,7 +67,9 @@ export function toDto(m: MatchRow): MatchDto {
       available,
       ok_id: m.video_ok_id,
       duration: m.video_duration,
-      master: available ? `/api/video/${m.video_ok_id}/master.m3u8` : null,
+      kind,
+      src,
+      master: kind === 'hls' ? src : null,
       checked_at: m.video_checked_at,
     },
   };

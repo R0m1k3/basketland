@@ -159,34 +159,33 @@ Le jeton d'ingestion est soit défini par la variable d'environnement
 
 ### Calibration automatique de la VF
 
-> **À lire avant de juger la synchronisation.** L'analyse automatique
-> (OCR du chrono à l'écran) nécessite `ffmpeg` — présent dans l'image Docker,
-> mais pas forcément dans un environnement de développement local. Sans
-> analyse, l'application calcule une **ancre estimée** à partir de la durée
-> du replay et du temps de jeu cumulé. C'est une approximation : la VF peut
-> être décalée de **plusieurs minutes** sur un match long. L'interface
-> affiche alors « Synchronisation ESTIMÉE » en jaune. Pour une VF fiable :
-> lancer « Calibrer automatiquement », ou poser une ancre manuelle.
+La synchronisation se fait **toute seule** : toutes les 10 minutes, les
+matchs terminés depuis moins de 10 jours qui ont un replay sont mis en file
+d'analyse (une analyse à la fois, 3 à 6 min chacune). Ouvrir la fiche d'un
+match le fait passer en tête de file. L'état est affiché sous le lecteur
+(« Synchro automatique en cours · 34 % », « VF calée », « Synchro estimée »…).
 
 Le replay coupe une trentaine de minutes de contenu : le décalage entre le
 temps réel du match et la position dans la vidéo n'est donc pas uniforme.
 L'application le calcule en trois temps :
 
-1. **Ancres** — le chrono de jeu affiché à l'écran est lu par OCR
-   (`tesseract.js`, sans dépendance système) et recoupé avec le play-by-play
-   ESPN. C'est ce qui donne les points de calage `(période, chrono) → position
-   vidéo`.
+1. **Ancres** — le bandeau de score est d'abord **localisé** sur quelques
+   images (sa position change selon le diffuseur), puis le chrono et la
+   période y sont lus par OCR (`tesseract.js`) sur toute la vidéo et recoupés
+   avec le play-by-play ESPN. Résultat : des points de calage
+   `(période, chrono) → position vidéo` répartis sur les quatre quarts.
 2. **Interpolation** — entre deux ancres, le temps de jeu avance à vitesse
    réelle, les temps morts sont comprimés.
-3. **Réglage manuel** — décalage global et décalage par quart, persistés.
+3. **Réglage manuel** — si la VF reste décalée, le panneau « La VF est
+   décalée ? » sous le lecteur permet de la décaler de ±0,5 à ±5 s, ou
+   d'indiquer le chrono affiché à l'écran (« Q2 7:43 ») pour caler la VF à
+   cet instant.
 
-Dans la fiche d'un match, le bouton **« Calibrer la synchronisation »** permet
-de lancer l'analyse, de recaler un quart précis et de poser une ancre
-manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
-
-> L'analyse automatique nécessite `ffmpeg`, présent dans l'image Docker. Sans
-> lui, l'application reste fonctionnelle : les sous-titres sont générés et
-> positionnés à partir d'une estimation, et le réglage manuel prend le relais.
+Un replay encore en **qualité mobile** (ok.ru n'a pas fini de produire le
+HD : il est alors lu en MP4) n'est pas analysé automatiquement — l'image est
+trop petite pour lire le chrono. L'analyse part dès que le HD est disponible.
+En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
+24 h).
 
 | Variable | Défaut | Rôle |
 |---|---|---|
@@ -194,8 +193,10 @@ manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
 | `SYNC_WRITE_ORIGINS` | vide | Origines autorisées à modifier la calibration depuis le navigateur, séparées par des virgules (ex. `192.168.1.16,http://nas.local:3012`). **Vide = seule l'origine du serveur est autorisée** (l'en-tête `Host`) : c'est ce qui bloque le CSRF en configuration par défaut. Une origine différente est refusée en 403. |
 | `ANALYSIS_MIN_INTERVAL_MS` | `900000` (15 min) | Délai minimum entre deux analyses automatiques d'un même match. Une analyse coûte 5 à 8 min de CPU : ce garde-fou évite de saturer le NAS. |
 | `ANALYSIS_MAX_PARALLEL` | `1` | Nombre d'analyses simultanées. |
+| `ANALYSIS_TIMEOUT_MS` | `5400000` (90 min) | Durée maximale d'une analyse : au-delà, elle passe en échec et la file continue. |
 | `OCR_DISABLED` | — | `1` désactive la phase OCR. |
-| `OCR_STEP_SEC` | `60` | Pas de balayage du chrono à l'écran (plus petit = plus précis, plus lent). |
+| `OCR_STEP_SEC` | `105` | Pas du balayage grossier du chrono à l'écran (un affinage suit là où les ancres manquent). |
+| `SEGMENT_CACHE_MB` | `192` | Cache mémoire des segments vidéo préchargés (0 le désactive). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
 
