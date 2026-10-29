@@ -177,3 +177,139 @@ body {
   background-image: radial-gradient(rgba(255, 255, 255, 0.6) 1px, transparent 1px);
   background-size: 3px 3px;
 }
+
+/* ==========================================================================
+   Fiche match (/matchs/[id]) : en-tête tableau d'affichage, lecteur,
+   VF en direct, statistiques. Le mode « scores masqués » réutilise la
+   section commune « Pages » (data-spoilers / data-scope / .spoil-show).
+   ========================================================================== */
+
+/* En-tête : lavis aux couleurs des deux équipes */
+.match-hero-wash {
+  background:
+    radial-gradient(70% 120% at 0% 50%, color-mix(in srgb, var(--team-a-deep) 45%, transparent), transparent 70%),
+    radial-gradient(70% 120% at 100% 50%, color-mix(in srgb, var(--team-b-deep) 45%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
+}
+.win-caret {
+  @apply absolute top-1/2 h-0 w-0 -translate-y-1/2 border-y-[7px] border-y-transparent sm:border-y-[10px];
+}
+.win-caret-left {
+  @apply -left-4 border-l-[8px] border-l-flame sm:-left-6 sm:border-l-[11px];
+}
+.win-caret-right {
+  @apply -right-4 border-r-[8px] border-r-flame sm:-right-6 sm:border-r-[11px];
+}
+
+/* Linescore */
+.linescore {
+  @apply text-sm;
+}
+.linescore th,
+.linescore td {
+  @apply px-2 py-1 text-center font-display tabular-nums;
+}
+.linescore thead th {
+  @apply text-[11px] font-semibold uppercase tracking-wider text-paper-faint;
+}
+.linescore tbody th {
+  @apply font-semibold text-paper-dim;
+}
+.linescore tbody td {
+  @apply text-base text-paper-mute;
+}
+.linescore tbody tr + tr {
+  @apply border-t border-ink-700/50;
+}
+
+/* Lecteur */
+.player {
+  container-type: inline-size;
+}
+.player:fullscreen {
+  @apply rounded-none;
+}
+.player-controls {
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.45) 55%, transparent);
+}
+.player-volume {
+  accent-color: #ff5a1f;
+  height: 4px;
+}
+.poster {
+  background:
+    radial-gradient(60% 90% at 15% 50%, color-mix(in srgb, var(--team-a-deep) 55%, transparent), transparent 70%),
+    radial-gradient(60% 90% at 85% 50%, color-mix(in srgb, var(--team-b-deep) 55%, transparent), transparent 70%),
+    radial-gradient(120% 80% at 50% 120%, rgba(255, 90, 31, 0.18), transparent 60%),
+    #0b0b0e;
+}
+
+/* Sous-titres français superposés : taille proportionnelle au lecteur */
+.subtitle-box {
+  @apply relative inline-flex max-w-[min(92%,52rem)] items-stretch overflow-hidden rounded-lg bg-black/70 backdrop-blur-[2px];
+}
+.subtitle-team {
+  @apply w-1 shrink-0;
+}
+.subtitle-text {
+  @apply px-3 py-1.5 text-center font-semibold leading-snug text-white;
+  font-size: clamp(14px, calc(var(--sub-scale, 1) * 2.3cqw), 46px);
+}
+.subtitle-banner {
+  @apply bg-ink-950/85 ring-1 ring-flame/50;
+}
+.subtitle-banner .subtitle-text {
+  @apply font-display uppercase tracking-wide;
+}
+
+/* Transcript « VF en direct » */
+.transcript-row[data-state='active'] > button {
+  box-shadow: inset 3px 0 0 #ff5a1f;
+}
+.transcript-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
+/* Play-by-play */
+.pbp-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
+}
+.pbp-row[data-scoring] {
+  box-shadow: inset 3px 0 0 var(--row-accent, #ff5a1f);
+}
+
+/* Box score : en-tête et colonne joueur collants */
+.boxscore thead th {
+  @apply sticky top-0 z-[2] bg-ink-900;
+}
+.boxscore .boxscore-sticky {
+  @apply sticky left-0 z-[1] max-w-[150px] bg-ink-900 pl-4 shadow-[1px_0_0_rgba(52,52,63,0.8)] sm:max-w-[240px];
+}
+.boxscore thead .boxscore-sticky {
+  @apply z-[3];
+}
+.boxscore tfoot .boxscore-sticky {
+  @apply bg-ink-850;
+}
+.boxscore tbody tr:hover .boxscore-sticky {
+  @apply bg-ink-850;
+}
+.boxscore tbody th[scope='row'] {
+  @apply text-sm normal-case tracking-normal text-paper-dim;
+}
+.boxscore-group {
+  @apply sticky left-0 bg-ink-950/60 !py-1.5 !pl-4 !text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-flame-hot/80;
+}
+
+/* États */
+.spoiler-veil {
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 12px, transparent 12px 24px);
+}
+.upcoming-glow {
+  background: radial-gradient(60% 80% at 50% 0%, rgba(255, 90, 31, 0.12), transparent 70%);
+}
+.countdown-cell {
+  @apply min-w-[2.2ch] rounded-xl border border-ink-700 bg-ink-950/70 px-2 py-1 text-center leading-none shadow-card sm:px-3 sm:py-2;
+}

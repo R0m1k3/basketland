@@ -1,116 +1,233 @@
-import { notFound } from 'next/navigation';
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import MatchClient from '@/components/MatchClient';
+import { notFound } from 'next/navigation';
+import MatchClient, { type PlayLite } from '@/components/MatchClient';
 import StatsPanel from '@/components/StatsPanel';
-import { StatusBadge } from '@/components/MatchCard';
-import { getMatch, getSyncSettings } from '@/lib/db';
+import MatchHeader from '@/components/match/MatchHeader';
+import Countdown from '@/components/match/Countdown';
+import TeamLogo from '@/components/ui/TeamLogo';
+import type { PlayItem } from '@/components/match/PlayByPlay';
+import { FICHE_ROOT_ID } from '@/components/match/format';
+import { spoilerMode } from '@/components/ui/spoilers';
+import { getMatch, getPlays } from '@/lib/db';
+import { computeLinescore } from '@/lib/linescore';
 import { toDto } from '@/lib/present';
+import { teamInfo } from '@/lib/teams';
+import { parisDateLabel } from '@/lib/time';
+import { classifyPlay, translatePlay } from '@/lib/vf';
+import type { PlayRow } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export default async function MatchPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const numericId = Number(id);
-  if (!Number.isInteger(numericId) || numericId <= 0) notFound();
+type Params = { params: Promise<{ id: string }> };
 
-  const row = getMatch(numericId);
-  if (!row) notFound();
+function loadMatch(raw: string) {
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const row = getMatch(id);
+  return row ? toDto(row) : null;
+}
 
-  const match = toDto(row);
-  const settings = getSyncSettings(numericId);
+export async function generateMetadata({ params }: Params): Promise<Metadata> {
+  const match = loadMatch((await params).id);
+  if (!match) return { title: 'Match introuvable' };
+  const a = teamInfo(match.away.abbr).nick;
+  const h = teamInfo(match.home.abbr).nick;
+  const what = match.status === 'final' ? (match.video.available ? 'replay en VF' : 'statistiques') : 'avant-match';
+  return {
+    title: `${a} – ${h} · ${what}`,
+    description: `${match.away.name} contre ${match.home.name}, ${parisDateLabel(match.date_utc)} à ${match.time_paris} (heure de Paris).`,
+  };
+}
+
+const PERIOD_CATS = new Set(['period_start', 'period_end', 'game_end']);
+const EXTRA_KEY_CATS = new Set(['blocked_fg', 'foul_flagrant', 'foul_technical', 'ejection', 'review', 'challenge']);
+
+/** Prépare le play-by-play pour l'onglet « Actions » : texte traduit, points marqués. */
+function toPlayItems(plays: PlayRow[]): PlayItem[] {
+  let prevTotal = 0;
+  return plays.map((p) => {
+    const total = p.home_score !== null && p.away_score !== null ? p.home_score + p.away_score : null;
+    const pts = p.scoring && total !== null ? Math.max(0, Math.min(4, total - prevTotal)) : 0;
+    if (total !== null) prevTotal = total;
+    const cat = classifyPlay(p.event_type, p.text_en, !!p.scoring);
+    let text: string;
+    try {
+      text = translatePlay({ ...p, score_value: pts });
+    } catch {
+      text = p.text_en;
+    }
+    return {
+      seq: p.seq,
+      period: p.period,
+      clock: p.clock_display,
+      text,
+      team: p.team_abbr ?? '',
+      away: p.away_score,
+      home: p.home_score,
+      pts,
+      key: !!p.is_key || pts > 0 || EXTRA_KEY_CATS.has(cat),
+      type: PERIOD_CATS.has(cat) ? 'period' : 'play',
+    };
+  });
+}
+
+export default async function MatchPage({ params }: Params) {
+  const match = loadMatch((await params).id);
+  if (!match) notFound();
+
   const isFinal = match.status === 'final';
+  const isLive = match.status === 'live';
+  const upcoming = !isFinal && !isLive;
+  const plays = upcoming ? [] : getPlays(match.id);
+  const linescore = computeLinescore(plays);
+  const items = toPlayItems(plays);
+  const lite: PlayLite[] = plays.map((p) => [p.seq, p.period, p.clock_sec, p.clock_display]);
+  const hasVideo = isFinal && match.video.available && !!match.video.src;
+  const away = teamInfo(match.away.abbr);
+  const home = teamInfo(match.home.abbr);
+  // Mode « scores masqués » commun au site (cookie lu côté serveur : pas de clignotement).
+  const spoilers = await spoilerMode();
 
   return (
-    <div className="space-y-6">
-      <nav className="text-sm text-slate-500">
-        <Link href="/matchs" className="hover:text-white">
-          ← Retour aux matchs
-        </Link>
-      </nav>
-
-      <header className="rounded-xl border border-slate-800 bg-[#111621] p-5">
-        <div className="mb-4 flex flex-wrap items-center gap-3 text-sm text-slate-400">
-          <StatusBadge status={match.status} detail={match.status_detail} />
-          <span>
-            {match.date_paris} à {match.time_paris} <span className="text-slate-600">(Paris)</span>
-          </span>
-          {match.venue && <span>· {match.venue}</span>}
-          {match.broadcast && <span>· {match.broadcast}</span>}
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-1 items-center gap-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={match.away.logo} alt={match.away.name} width={44} height={44} />
-            <div>
-              <Link
-                href={`/equipes/${match.away.abbr}`}
-                className="text-lg font-semibold text-white hover:text-court-400 hover:underline"
-              >
-                {match.away.name}
-              </Link>
-              <div className="text-2xl font-bold tabular-nums text-slate-300">
-                {match.away.score ?? '—'}
-              </div>
-            </div>
-          </div>
-
-          <div className="text-center text-sm text-slate-500">
-            {match.status === 'live'
-              ? `Q${match.period} · ${match.clock_display}`
-              : match.status === 'final'
-                ? 'Terminé'
-                : 'À venir'}
-          </div>
-
-          <div className="flex flex-1 items-center justify-end gap-3 sm:justify-end">
-            <div className="text-right">
-              <Link
-                href={`/equipes/${match.home.abbr}`}
-                className="text-lg font-semibold text-white hover:text-court-400 hover:underline"
-              >
-                {match.home.name}
-              </Link>
-              <div className="text-2xl font-bold tabular-nums text-slate-300">
-                {match.home.score ?? '—'}
-              </div>
-            </div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={match.home.logo} alt={match.home.name} width={44} height={44} />
-          </div>
-        </div>
-      </header>
-
-      <MatchClient
-        matchId={match.id}
-        masterUrl={match.video.master}
-        initialOffset={settings.global_offset ?? 0}
-      />
-
-      <section className="rounded-xl border border-slate-800 bg-[#111621] p-5">
-        <h2 className="mb-3 text-lg font-semibold text-white">Statistiques du match</h2>
-        {isFinal ? (
-          <StatsPanel matchId={match.id} enabled />
-        ) : (
-          <p className="text-sm text-slate-500">
-            Les statistiques détaillées seront disponibles dès la fin du match.
-            {match.status === 'live' && ' Le match est en cours.'}
-          </p>
-        )}
-      </section>
-
-      {isFinal && match.video.available && (
-        <p className="text-xs text-slate-600">
-          Export des sous-titres :{' '}
-          <a
-            href={`/api/matches/${match.id}/subtitles.vtt`}
-            className="text-court-400 underline"
-            download
+    <div data-spoilers={spoilers}>
+      <div id={FICHE_ROOT_ID} data-scope={match.id} className="space-y-6 sm:space-y-8">
+        <nav aria-label="Fil d’Ariane" className="flex items-center gap-2 text-sm text-paper-mute">
+          <Link
+            href="/matchs"
+            className="inline-flex items-center gap-1.5 rounded-full py-1 pr-2 transition hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60"
           >
-            WebVTT
-          </a>
-        </p>
-      )}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+            Calendrier
+          </Link>
+          <span className="text-ink-500">/</span>
+          <span className="truncate text-paper-faint">
+            {away.nick} – {home.nick}
+          </span>
+        </nav>
+
+        <MatchHeader match={match} linescore={linescore} spoilers={spoilers} />
+
+        {hasVideo && (
+          <MatchClient
+            matchId={match.id}
+            video={{ kind: match.video.kind, src: match.video.src, duration: match.video.duration }}
+            awayAbbr={match.away.abbr}
+            homeAbbr={match.home.abbr}
+            plays={lite}
+          />
+        )}
+
+        {isFinal && !hasVideo && (
+          <Notice
+            away={match.away.abbr}
+            home={match.home.abbr}
+            kicker="Replay"
+            title="Replay pas encore trouvé"
+            text="Les replays apparaissent en général quelques heures après la fin du match. Nouvelle recherche automatique toutes les 2 h : revenez un peu plus tard, la VF sera prête en même temps."
+          />
+        )}
+
+        {isLive && (
+          <Notice
+            away={match.away.abbr}
+            home={match.home.abbr}
+            kicker="En direct"
+            title="Match en cours"
+            text="Le replay et la VF synchronisée seront disponibles quelques heures après le coup de sifflet final."
+            live
+          />
+        )}
+
+        {upcoming && (
+          <section className="panel relative overflow-hidden px-4 py-8 text-center sm:px-8 sm:py-12" aria-label="Avant-match">
+            <div className="upcoming-glow pointer-events-none absolute inset-0" aria-hidden="true" />
+            <div className="relative">
+              <p className="kicker">Coup d’envoi dans</p>
+              <div className="mt-4">
+                <Countdown dateUtc={match.date_utc} title={`${match.away.name} – ${match.home.name}`} location={match.venue} />
+              </div>
+              <p className="mx-auto mt-6 max-w-lg text-sm text-paper-mute">
+                <span className="first-letter:uppercase">{parisDateLabel(match.date_utc)}</span> à{' '}
+                <strong className="font-semibold text-paper">{match.time_paris}</strong> (heure de Paris)
+                {match.broadcast ? ` · ${match.broadcast}` : ''}.
+                <br />
+                Le replay et la VF seront disponibles après le match.
+              </p>
+              <ul className="mx-auto mt-8 grid max-w-2xl gap-3 text-left sm:grid-cols-3">
+                {[
+                  ['Replay intégral', 'Trouvé automatiquement après le match.'],
+                  ['VF synchronisée', 'Commentaires en français calés sur la vidéo.'],
+                  ['Stats complètes', 'Leaders, duel d’équipes, box score, actions.'],
+                ].map(([t, d]) => (
+                  <li key={t} className="panel-soft px-4 py-3">
+                    <p className="font-display text-sm font-bold uppercase tracking-wider text-paper">{t}</p>
+                    <p className="mt-0.5 text-xs text-paper-mute">{d}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        )}
+
+        {(isFinal || items.length > 0) && (
+          <StatsPanel
+            matchId={match.id}
+            final={isFinal}
+            awayAbbr={match.away.abbr}
+            homeAbbr={match.home.abbr}
+            plays={items}
+            hasVideo={hasVideo}
+          />
+        )}
+      </div>
     </div>
+  );
+}
+
+function Notice({
+  away,
+  home,
+  kicker,
+  title,
+  text,
+  live,
+}: {
+  away: string;
+  home: string;
+  kicker: string;
+  title: string;
+  text: string;
+  live?: boolean;
+}) {
+  return (
+    <section className="panel relative overflow-hidden" aria-label={title}>
+      <div className="grid items-center gap-6 p-6 sm:grid-cols-[auto_1fr] sm:p-8">
+        <div className="relative mx-auto grid aspect-video w-56 place-items-center overflow-hidden rounded-xl border border-ink-700 bg-ink-950 sm:w-64">
+          <div
+            className="poster absolute inset-0"
+            style={{ '--team-a-deep': teamInfo(away).primary, '--team-b-deep': teamInfo(home).primary } as React.CSSProperties}
+          />
+          <div className="relative flex items-center gap-3 opacity-80">
+            <TeamLogo abbr={away} size={52} />
+            <span className="font-display text-sm font-bold uppercase tracking-[0.2em] text-white/40">vs</span>
+            <TeamLogo abbr={home} size={52} />
+          </div>
+          <span className="absolute bottom-2 right-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-paper-mute">
+            {live ? 'Live' : 'Bientôt'}
+          </span>
+        </div>
+        <div className="text-center sm:text-left">
+          <p className={live ? 'chip-live' : 'kicker'}>
+            {live && <span className="h-1.5 w-1.5 animate-pulse-live rounded-full bg-live" />}
+            {kicker}
+          </p>
+          <h2 className="title-lg mt-2">{title}</h2>
+          <p className="mx-auto mt-2 max-w-xl text-sm text-paper-mute sm:mx-0">{text}</p>
+        </div>
+      </div>
+    </section>
   );
 }
