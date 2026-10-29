@@ -127,13 +127,30 @@ export function matchListingEntry(entries: ListingEntry[], match: MatchLike): Li
 
 // ------------------------------------------------------------------ cache de listes
 
-const listingCache = new Map<string, { at: number; entries: ListingEntry[] }>();
+/**
+ * Cache des pages de liste d'une saison, par saison.
+ *
+ * La clé est la SEASON seule, pas la date de référence : le balayage
+ * remonte les pages jusqu'à dépasser la date cherchée, donc une même
+ * saison_scrapée pour deux dates différentes produit (presque) le même
+ * résultat. Avec une clé par date, le cache n'était JAMAIS réutilisé
+ * (la date de référence change à chaque match) et la Map grossissait
+ * sans borne, conservant 15 pages d'entrées par date consultée.
+ */
+const listingCache = new Map<number, { at: number; entries: ListingEntry[] }>();
 
-/** Parcourt les pages de la saison jusqu'à dépasser `oldestUsDate` (ou maxPages). */
+/** Durée de vie d'une entrée de cache (le contenu du site bouge lentement). */
+const LISTING_TTL_MS = 30 * 60_000;
+
+/**
+ * Parcourt les pages de la saison jusqu'à dépasser `oldestUsDate` (ou maxPages).
+ *
+ * Le résultat est mis en cache par saison : les pages parcourues sont les
+ * mêmes pour toute la saison, seule la quantité parcourue change.
+ */
 export async function fetchSeasonListing(season: number, oldestUsDate: string, maxPages = 15): Promise<ListingEntry[]> {
-  const key = `${season}:${oldestUsDate}`;
-  const c = listingCache.get(key);
-  if (c && Date.now() - c.at < 10 * 60_000) return c.entries;
+  const c = listingCache.get(season);
+  if (c && Date.now() - c.at < LISTING_TTL_MS) return c.entries;
   const base = `${BV_BASE}/${seasonLabel(season)}`;
   const all = new Map<string, ListingEntry>();
   let maxPage = 1;
@@ -146,8 +163,19 @@ export async function fetchSeasonListing(season: number, oldestUsDate: string, m
     if (dates.length && dates.every((d) => d < oldestUsDate)) break;
   }
   const entries = [...all.values()];
-  listingCache.set(key, { at: Date.now(), entries });
+  // On borne le nombre de saisons conservées : le cache est en mémoire,
+  // dans le processus, et les saisons s'accumulent au fil des mois.
+  if (listingCache.size >= 4) {
+    const oldestKey = [...listingCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldestKey !== undefined) listingCache.delete(oldestKey);
+  }
+  listingCache.set(season, { at: Date.now(), entries });
   return entries;
+}
+
+/** Vide le cache des listes (utile en test et après un échec de scrape). */
+export function clearListingCache(): void {
+  listingCache.clear();
 }
 
 export interface ReplayLookup {
