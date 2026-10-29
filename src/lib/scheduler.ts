@@ -1,12 +1,14 @@
 /**
  * Cron interne (setInterval) démarré par `instrumentation.ts` côté serveur Node.
  * Fréquences (spec) : calendrier 15 min, stats après match (5 min), vidéos 2 h,
- * VF après stats, analyse vidéo (synchro auto) 10 min. Désactivable avec DISABLE_CRON=1.
+ * VF après stats, analyse vidéo (synchro auto) 10 min, traduction des commentaires
+ * 10 min. Désactivable avec DISABLE_CRON=1.
  */
 import { countMatches } from './db';
 import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
 import { enqueueRecentAnalyses } from './analysis';
+import { enqueueRecentCommentaries } from './commentary';
 
 const g = globalThis as unknown as { __basketlandCron?: boolean };
 
@@ -45,4 +47,11 @@ export function startScheduler(): void {
     const n = enqueueRecentAnalyses();
     if (n) console.log(`[cron] ${n} analyse(s) vidéo mise(s) en file`);
   }, 4 * MIN);
+  // Traduction des commentaires : un travail à la fois (GPU partagé), pour
+  // les matchs terminés depuis ≤ 10 jours avec replay et sans piste traduite.
+  // Inactif tant que TRANSCRIBE_URL / TRANSLATE_URL ne sont pas configurés.
+  every(10 * MIN, async () => {
+    const n = enqueueRecentCommentaries();
+    if (n) console.log(`[cron] ${n} traduction(s) de commentaires mise(s) en file`);
+  }, 6 * MIN);
 }
