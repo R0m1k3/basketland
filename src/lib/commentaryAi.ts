@@ -59,6 +59,14 @@ export interface CommentaryConfig {
   batch: number;
   /** Durée d'un tronçon audio (s). */
   chunkSec: number;
+  /**
+   * `COMMENTARY_GPU_SEQUENTIAL=1` : ancien enchaînement — tout transcrire,
+   * fermer Whisper, puis traduire (un seul modèle à la fois en mémoire GPU,
+   * pour un gros modèle de traduction). Par défaut, Whisper et le modèle de
+   * traduction restent chargés ensemble et le match est traité tronçon par
+   * tronçon.
+   */
+  gpuSequential: boolean;
   /** Raison de l'inactivité de la fonctionnalité, ou null si elle est active. */
   disabledReason: string | null;
 }
@@ -100,6 +108,7 @@ export function commentaryConfig(): CommentaryConfig {
     translateEngine: engineFor(translateModel, process.env.TRANSLATE_ENGINE),
     batch: intEnv('TRANSLATE_BATCH', 20, 1, 60),
     chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 600, 60, 3600),
+    gpuSequential: process.env.COMMENTARY_GPU_SEQUENTIAL === '1',
     disabledReason,
   };
 }

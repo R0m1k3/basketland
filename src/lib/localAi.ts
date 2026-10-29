@@ -3,17 +3,21 @@
  *
  * L'image Docker contient faster-whisper (environnement Python
  * /opt/whisper, bibliothèques CUDA comprises) et le binaire Ollama. Ils ne
- * tournent pas en permanence : un travail de traduction les démarre l'un
- * après l'autre, puis les arrête.
+ * tournent pas en permanence : un travail de traduction les démarre au
+ * premier besoin, puis les arrête à la fin (ou sur erreur / abandon).
  *
  *   transcription : processus Python `scripts/whisper_worker.py`, modèle
- *                   chargé une fois pour tout le match, arrêté à la fin ;
+ *                   chargé une fois pour tout le match ;
  *   traduction    : `ollama serve` lancé à la demande, modèle téléchargé au
- *                   premier usage, arrêté à la fin.
+ *                   premier usage.
  *
- * Les deux ne sont donc jamais en mémoire GPU en même temps : chacun dispose
- * de toute la carte (10-12 Go suffisent largement). Les modèles sont rangés
- * dans `/data/models` et survivent aux mises à jour du conteneur.
+ * Par défaut les deux restent chargés ENSEMBLE pendant tout le travail
+ * (traitement tronçon par tronçon, sous-titres publiés au fil de l'eau) :
+ * distil-large-v3 en fp16 (~1,5-2 Go) et MiLMMT-46-4B en Q8 (~4,5 Go)
+ * tiennent dans une carte de 10-12 Go. `COMMENTARY_GPU_SEQUENTIAL=1` revient
+ * à l'enchaînement « Whisper, puis arrêt, puis Ollama » pour un modèle de
+ * traduction plus gros (voir commentary.ts). Les modèles sont rangés dans
+ * `/data/models` et survivent aux mises à jour du conteneur.
  *
  * Si TRANSCRIBE_URL / TRANSLATE_URL sont définis, les serveurs externes
  * correspondants sont utilisés à la place (voir commentaryAi.ts).

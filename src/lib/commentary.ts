@@ -1,17 +1,29 @@
 /**
  * Traduction française des commentaires des replays, 100 % locale.
  *
- * Chaîne d'un match :
- *   audio du replay (ffmpeg, mono 16 kHz, Opus 24 kb/s, tronçons de 10 min)
- *   → transcription Whisper horodatée (speaches, GPU du NAS)
+ * Chaîne d'un match, TRONÇON PAR TRONÇON (10 min de vidéo) :
+ *   audio du tronçon (ffmpeg, mono 16 kHz, Opus 24 kb/s)
+ *   → transcription Whisper horodatée (GPU du NAS)
  *   → filtre des hallucinations, découpage en sous-titres lisibles
- *   → traduction EN→FR par lots (Ollama)
- *   → table `commentary_cues` (+ `commentary_tracks`) → API.
+ *   → traduction EN→FR des sous-titres devenus STABLES (Ollama)
+ *   → publication dans `commentary_cues` (+ `commentary_tracks`, complete=0)
+ *   → tronçon suivant… ; à la fin, la piste est marquée complète.
+ * Les sous-titres arrivent ainsi par tranches de 10 min : on peut regarder
+ * le début du match pendant que la suite est traduite. Whisper et le modèle
+ * de traduction restent chargés ensemble pendant tout le travail ;
+ * `COMMENTARY_GPU_SEQUENTIAL=1` revient à « tout transcrire, arrêter
+ * Whisper, puis traduire » (publication progressive pendant la traduction).
+ *
+ * Stabilité des sous-titres publiés : un sous-titre publié n'est plus jamais
+ * modifié ni renuméroté (voir `nextStableCues`) ; le cache de traduction
+ * (clé seq + texte anglais) reste donc valable d'un tronçon à l'autre et
+ * d'un essai à l'autre.
  *
  * Les fichiers intermédiaires (tronçons audio, transcriptions, traductions
  * déjà faites) vivent dans `${dataDir()}/commentary/<okId>/` : un travail
  * interrompu (serveur éteint, flux coupé, redémarrage) reprend là où il
- * s'était arrêté. Le dossier est supprimé après succès.
+ * s'était arrêté, et ce qui était déjà publié reste affiché. Le dossier est
+ * supprimé après succès.
  *
  * File : un seul travail à la fois (le GPU est partagé entre Whisper et le
  * LLM, et avec le reste du NAS). Alimentation :
@@ -43,7 +55,7 @@ import {
   type TranslateContext,
   type TranslateLine,
 } from './commentaryAi';
-import { buildCues, filterTranscript, mergeTranscripts, shiftTranscript, wordsFromTranscript, type Cue, type Transcript } from './commentaryCues';
+import { buildCues, filterTranscript, shiftTranscript, wordsFromTranscript, type AsrWord, type Cue, type Transcript } from './commentaryCues';
 import { BROWSER_UA } from './http';
 import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
 import { addDays } from './time';
@@ -57,7 +69,17 @@ export type CommentaryPhase = 'extraction' | 'preparation' | 'transcription' | '
 export interface CommentaryStatus {
   status: CommentaryStatusName;
   phase?: CommentaryPhase;
+  /**
+   * Avancement de la phase. Extraction, transcription, traduction : en
+   * tronçons de 10 min (`done` = tronçons dont les sous-titres sont publiés) ;
+   * préparation : téléchargement d'un modèle, en Mo (0/0 sinon).
+   */
   progress?: { done: number; total: number };
+  /**
+   * Piste pas encore complète : secondes de vidéo couvertes par les
+   * sous-titres déjà publiés (« disponibles jusqu'à 34:10 »).
+   */
+  available_until?: number;
   /** Rang dans la file (1 = prochain travail). */
   position?: number;
   reason?: string;
@@ -307,6 +329,8 @@ export interface CommentaryProgress {
   phase: CommentaryPhase;
   done: number;
   total: number;
+  /** Secondes de vidéo couvertes par les sous-titres publiés jusqu'ici. */
+  availableUntil?: number;
 }
 
 export interface CommentaryOutcome {
@@ -350,11 +374,33 @@ function unavailableReason(matchId: number): string | null {
   return null;
 }
 
-/** La piste traduite correspond-elle au replay actuel ? */
-export function commentaryReady(matchId: number): boolean {
+/** Piste (complète ou partielle) produite pour le replay ACTUEL, sinon undefined. */
+function currentTrack(matchId: number): db.CommentaryTrackRow | undefined {
   const m = db.getMatch(matchId);
   const t = db.getCommentaryTrack(matchId);
-  return !!(m?.video_ok_id && t && t.ok_id === m.video_ok_id && t.cues > 0);
+  return m?.video_ok_id && t && t.ok_id === m.video_ok_id && t.cues > 0 ? t : undefined;
+}
+
+/** La piste traduite correspond-elle au replay actuel, et est-elle complète ? */
+export function commentaryReady(matchId: number): boolean {
+  return currentTrack(matchId)?.complete === 1;
+}
+
+/**
+ * Sous-titres à servir : ceux déjà publiés pour le replay actuel, même si la
+ * piste est encore partielle (travail en cours, ou interrompu à mi-match).
+ * Une piste d'un autre replay n'est jamais servie.
+ */
+export function servedCommentaryCues(matchId: number): db.CommentaryCueRow[] {
+  return currentTrack(matchId) ? db.getCommentaryCues(matchId) : [];
+}
+
+/** Couverture d'une piste partielle (s), d'après l'avancement ou, à défaut, la base. */
+function availableUntil(matchId: number, progress: CommentaryProgress | null): number | undefined {
+  if (progress?.availableUntil) return progress.availableUntil;
+  const t = currentTrack(matchId);
+  if (!t || t.complete) return undefined;
+  return db.commentaryPublishedUntil(matchId) || undefined;
 }
 
 export function commentaryQueuePosition(matchId: number): number | null {
@@ -477,14 +523,19 @@ function currentModels(): { transcribe: string; translate: string } {
 export function commentaryStatus(matchId: number): CommentaryStatus {
   if (st.running?.job.matchId === matchId) {
     const p = st.running.progress;
+    const until = availableUntil(matchId, p);
     return {
       status: 'running',
       ...(p ? { phase: p.phase, progress: { done: p.done, total: p.total } } : {}),
+      ...(until ? { available_until: until } : {}),
       models: currentModels(),
     };
   }
   const position = commentaryQueuePosition(matchId);
-  if (position) return { status: 'queued', position, models: currentModels() };
+  if (position) {
+    const until = availableUntil(matchId, null);
+    return { status: 'queued', position, ...(until ? { available_until: until } : {}), models: currentModels() };
+  }
   if (commentaryReady(matchId)) {
     const t = db.getCommentaryTrack(matchId) as db.CommentaryTrackRow;
     return {
@@ -499,8 +550,9 @@ export function commentaryStatus(matchId: number): CommentaryStatus {
   if (unavailable) return { status: 'none', reason: unavailable };
   const rec = getCommentaryRecord(matchId);
   const okId = db.getMatch(matchId)?.video_ok_id ?? null;
-  if (rec && !rec.ok && (!rec.okId || rec.okId === okId)) return { status: 'failed', reason: rec.reason };
-  return { status: 'none' };
+  const until = availableUntil(matchId, null);
+  if (rec && !rec.ok && (!rec.okId || rec.okId === okId)) return { status: 'failed', reason: rec.reason, ...(until ? { available_until: until } : {}) };
+  return { status: 'none', ...(until ? { available_until: until } : {}) };
 }
 
 /**
@@ -557,9 +609,10 @@ export interface CommentaryDeps {
   transcribe: (file: string, cfg: CommentaryConfig, o: { prompt?: string; signal?: AbortSignal }) => Promise<Transcript>;
   translate: (lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext) => Promise<TranslatedLine[]>;
   /**
-   * Services embarqués (localAi.ts) : démarrés juste avant leur phase,
-   * arrêtés juste après — Whisper et le modèle de traduction ne sont jamais
-   * en mémoire GPU en même temps. Absents (tests, serveurs externes) : on
+   * Services embarqués (localAi.ts) : ouverts au premier besoin, fermés en
+   * fin de travail (ou sur erreur / abandon). Par défaut les deux restent
+   * ouverts ensemble ; en mode `gpuSequential`, Whisper est fermé avant
+   * l'ouverture du traducteur. Absents (tests, serveurs externes) : on
    * appelle `transcribe` / `translate` directement.
    */
   openTranscriber?: (cfg: CommentaryConfig, signal: AbortSignal) => Promise<Transcriber>;
@@ -615,17 +668,73 @@ function checkAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new Error('travail interrompu');
 }
 
+/** Mots horodatés d'un tronçon : hallucinations retirées, remis à leur place dans la vidéo. */
+export function chunkWords({ plan, transcript }: { plan: ChunkPlan; transcript: Transcript }, prompt?: string): AsrWord[] {
+  // Chaque tronçon est lu SEUL (mots de niveau supérieur ou synthétiques,
+  // ponctuation) : l'arrivée d'un tronçon ne change rien aux mots des autres.
+  return wordsFromTranscript(shiftTranscript(filterTranscript(transcript, { prompt }).transcript, plan.start, plan.keepFrom, plan.keepTo));
+}
+
+/** Mots de plusieurs tronçons, dans l'ordre chronologique. */
+export function wordsFromChunks(chunks: { plan: ChunkPlan; transcript: Transcript }[], prompt?: string): AsrWord[] {
+  return chunks.flatMap((c) => chunkWords(c, prompt)).sort((a, b) => a.start - b.start);
+}
+
 /** Sous-titres (anglais) d'un match à partir des transcriptions de ses tronçons. */
 export function cuesFromChunks(chunks: { plan: ChunkPlan; transcript: Transcript }[], prompt?: string): Cue[] {
-  const placed = chunks.map(({ plan, transcript }) =>
-    shiftTranscript(filterTranscript(transcript, { prompt }).transcript, plan.start, plan.keepFrom, plan.keepTo),
-  );
-  return buildCues(wordsFromTranscript(mergeTranscripts(placed)));
+  return buildCues(wordsFromChunks(chunks, prompt));
 }
 
 /**
- * Un travail complet. Les tronçons et transcriptions déjà présents dans le
- * dossier de travail sont réutilisés (reprise après échec).
+ * Marge (s) avant la fin de la zone gardée d'un tronçon : un sous-titre qui
+ * se termine avant `keepTo - marge` ne bougera plus quand le tronçon suivant
+ * arrivera. Les mots du tronçon suivant ont leur milieu après `keepTo` : le
+ * premier commence au plus tôt ~0,5 s avant, soit plus de 1,5 s (la pause
+ * qui coupe TOUJOURS un sous-titre dans `buildCues`) après le dernier mot
+ * d'un sous-titre stable — qui finit au moins 0,5 s avant sa fin affichée.
+ */
+export const STABLE_MARGIN_SEC = 2;
+
+/** Limite de stabilité après le tronçon `plan` (tout est stable après le dernier). */
+export function stableCutoff(plan: ChunkPlan): number {
+  return Number.isFinite(plan.keepTo) ? plan.keepTo - STABLE_MARGIN_SEC : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Sous-titres à FIGER après un nouveau tronçon.
+ *
+ * `frozen` : sous-titres déjà publiés (seq 1..n), jamais modifiés. Seuls les
+ * mots qui suivent le dernier d'entre eux sont regroupés à nouveau ; les
+ * sous-titres obtenus qui se terminent avant `cutoff` sont stables et rendus
+ * avec les seq n+1, n+2… Comme le regroupement de `buildCues` avance mot à
+ * mot et repart d'un groupe vide après chaque sous-titre, le résultat est
+ * celui d'un découpage complet du match (la marge de `STABLE_MARGIN_SEC`
+ * l'assure) ; et si un tronçon suivant venait malgré tout perturber la
+ * frontière (mot anormalement long, horodatage décalé), seuls les
+ * sous-titres non encore publiés en tiendraient compte : la numérotation
+ * publiée, et donc le cache de traduction (seq + anglais), ne change pas.
+ */
+export function nextStableCues(words: AsrWord[], frozen: Cue[], cutoff: number): Cue[] {
+  const last = frozen[frozen.length - 1];
+  const rest = last ? words.filter((w) => (w.start + w.end) / 2 > last.end) : words;
+  const out: Cue[] = [];
+  for (const c of buildCues(rest)) {
+    if (c.end > cutoff) break; // fins croissantes : les suivants ne sont pas stables non plus
+    // Jamais de chevauchement avec le dernier sous-titre publié.
+    const start = last && !out.length ? Math.max(c.start, last.end) : c.start;
+    out.push({ seq: frozen.length + out.length + 1, start, end: Math.max(c.end, Math.round((start + 0.01) * 100) / 100), text: c.text });
+  }
+  return out;
+}
+
+/** Flux vidéo inaccessible pendant l'extraction d'un tronçon (échec « reseau »). */
+class StreamUnavailable extends Error {}
+
+/**
+ * Un travail complet, tronçon par tronçon (voir l'en-tête). Les tronçons,
+ * transcriptions et traductions déjà présents dans le dossier de travail
+ * sont réutilisés (reprise après échec) ; les sous-titres déjà publiés
+ * restent en base si le travail échoue en route.
  */
 export async function runCommentary(
   job: Job,
@@ -642,7 +751,6 @@ export async function runCommentary(
   const dir = workDir(okId);
   fs.mkdirSync(dir, { recursive: true });
 
-  // --- extraction
   let stream: Pick<OkStream, 'variants' | 'duration'>;
   try {
     stream = await deps.resolveStream(okId);
@@ -652,18 +760,50 @@ export async function runCommentary(
   const duration = match.video_duration ?? stream.duration ?? 0;
   if (!duration) throw new Error('durée de la vidéo inconnue');
   const plans = planChunks(duration, cfg.chunkSec);
+  const total = plans.length;
   const headers = { userAgent: BROWSER_UA, referer: OK_REFERER };
-  let done = plans.filter((p) => fs.existsSync(chunkAudio(dir, p.index))).length;
-  progress({ phase: 'extraction', done, total: plans.length });
-  for (const plan of plans) {
-    checkAborted(signal);
-    const out = chunkAudio(dir, plan.index);
-    if (fs.existsSync(out)) continue;
-    let ok = false;
+  const roster = [
+    ...new Set(
+      db
+        .getPlayerStats(job.matchId)
+        .map((p) => p.player_name)
+        .filter(Boolean),
+    ),
+  ];
+  const prompt = whisperPrompt(match.home_name, match.away_name, roster);
+  const names = [match.away_name, match.home_name, ...roster].join(', ');
+  const track: db.CommentaryTrackMeta = { ok_id: okId, transcribe_model: cfg.transcribeModel, translate_model: cfg.translateModel };
+
+  const cacheFile = path.join(dir, 'translation.json');
+  const cache: TranslationCache = readJson<TranslationCache>(cacheFile) ?? { model: cfg.translateModel, lines: {} };
+  if (cache.model !== cfg.translateModel) Object.assign(cache, { model: cfg.translateModel, lines: {} });
+
+  /** Secondes de vidéo couvertes par les sous-titres publiés. */
+  let coveredUntil = 0;
+  const report = (phase: CommentaryPhase, done: number, tot = total) =>
+    progress({ phase, done, total: tot, ...(coveredUntil > 0 ? { availableUntil: coveredUntil } : {}) });
+
+  // Sessions ouvertes au premier besoin (une reprise dont tout est en cache
+  // ne charge aucun modèle), fermées en fin de travail, sur erreur ou abandon.
+  let asr: Transcriber | null = null;
+  let mt: { close(): Promise<void> } | null = null;
+  let mtOpen = false;
+  const closeAsr = async () => {
+    const s = asr;
+    asr = null;
+    await s?.close();
+  };
+  const closeMt = async () => {
+    const s = mt;
+    mt = null;
+    await s?.close();
+  };
+
+  /** Extrait l'audio d'un tronçon (toutes les sources, puis une re-résolution du flux). */
+  const extract = async (plan: ChunkPlan, out: string) => {
     let lastErr = '';
-    // Toutes les sources du flux, puis une seconde fois après re-résolution
-    // (URL signée expirée pendant un long travail).
-    for (let round = 0; round < 2 && !ok; round++) {
+    // URL signée expirée pendant un long travail : on re-résout une fois.
+    for (let round = 0; round < 2; round++) {
       if (round === 1) {
         try {
           stream = await deps.resolveStream(okId);
@@ -681,108 +821,135 @@ export async function runCommentary(
         checkAborted(signal);
         try {
           await deps.extract(s.url, plan.start, plan.length, out, { ...headers, signal });
-          ok = true;
-          break;
+          return;
         } catch (e) {
           lastErr = short(e);
         }
       }
     }
-    if (!ok) return networkOutcome(`tronçon ${plan.index + 1}/${plans.length} : ${lastErr}`, job.matchId);
-    progress({ phase: 'extraction', done: ++done, total: plans.length });
+    throw new StreamUnavailable(`tronçon ${plan.index + 1}/${total} : ${lastErr}`);
+  };
+
+  /** Transcription d'un tronçon : cache, sinon extraction (si besoin) puis Whisper. */
+  const transcribeChunk = async (plan: ChunkPlan): Promise<Transcript> => {
+    const cacheJson = chunkJson(dir, plan.index);
+    const cached = readJson<ChunkCache>(cacheJson);
+    if (cached && cached.model === cfg.transcribeModel && cached.transcript) return cached.transcript;
+    const audio = chunkAudio(dir, plan.index);
+    if (!fs.existsSync(audio)) {
+      report('extraction', plan.index);
+      await extract(plan, audio);
+    }
+    checkAborted(signal);
+    if (!asr) {
+      report('preparation', 0, 0);
+      asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
+    }
+    report('transcription', plan.index);
+    const transcript = await asr.transcribe(audio, prompt, signal);
+    writeJson(cacheJson, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
+    return transcript;
+  };
+
+  const words: AsrWord[] = [];
+  const frozen: Cue[] = [];
+  let batches = 0;
+
+  /** Fige, traduit et publie les sous-titres devenus stables après le tronçon `plan`. */
+  const translateAndPublish = async (plan: ChunkPlan) => {
+    const fresh = nextStableCues(words, frozen, stableCutoff(plan));
+    const todoAll = fresh.filter((c) => cache.lines[c.seq]?.en !== c.text);
+    if (todoAll.length && !mtOpen) {
+      report('preparation', 0, 0);
+      mt = deps.openTranslator ? await deps.openTranslator(cfg, signal, (done, tot) => report('preparation', done, tot)) : null;
+      mtOpen = true;
+    }
+    if (fresh.length) report('traduction', plan.index);
+    const all = [...frozen, ...fresh];
+    for (let k = 0; k < fresh.length; k += cfg.batch) {
+      checkAborted(signal);
+      const batch = fresh.slice(k, k + cfg.batch);
+      batches++;
+      const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
+      if (!todo.length) continue;
+      const first = frozen.length + k;
+      const context = all.slice(Math.max(0, first - 4), first).map((c) => c.text);
+      const res = await deps.translate(
+        todo.map((c) => ({ i: c.seq, en: c.text })),
+        context,
+        cfg,
+        { names, signal },
+      );
+      for (const r of res) {
+        const c = todo.find((x) => x.seq === r.i);
+        if (c) cache.lines[c.seq] = { en: c.text, fr: r.fr, untranslated: r.untranslated };
+      }
+      writeJson(cacheFile, cache);
+    }
+    if (fresh.length) {
+      db.publishCommentaryCues(
+        job.matchId,
+        track,
+        fresh.map((c) => {
+          const t = cache.lines[c.seq];
+          const translated = t && t.en === c.text && !t.untranslated;
+          return { seq: c.seq, start_ts: c.start, end_ts: c.end, text_en: c.text, text_fr: translated ? t.fr : c.text, untranslated: translated ? 0 : 1 };
+        }),
+      );
+      frozen.push(...fresh);
+    }
+    const cutoff = stableCutoff(plan);
+    coveredUntil = Number.isFinite(cutoff) ? cutoff : Math.max(duration, frozen[frozen.length - 1]?.end ?? 0);
+    report('traduction', plan.index + 1);
+  };
+
+  try {
+    if (cfg.gpuSequential) {
+      // Ancien enchaînement : tout transcrire, libérer le GPU, puis traduire.
+      const transcripts: Transcript[] = [];
+      for (const plan of plans) {
+        checkAborted(signal);
+        transcripts.push(await transcribeChunk(plan));
+        report('transcription', plan.index + 1);
+      }
+      await closeAsr();
+      for (const plan of plans) {
+        checkAborted(signal);
+        words.push(...chunkWords({ plan, transcript: transcripts[plan.index] }, prompt));
+        words.sort((a, b) => a.start - b.start);
+        await translateAndPublish(plan);
+      }
+    } else {
+      for (const plan of plans) {
+        checkAborted(signal);
+        const transcript = await transcribeChunk(plan);
+        words.push(...chunkWords({ plan, transcript }, prompt));
+        words.sort((a, b) => a.start - b.start);
+        await translateAndPublish(plan);
+      }
+    }
+  } catch (e) {
+    if (e instanceof StreamUnavailable) return networkOutcome(e.message, job.matchId);
+    throw e;
+  } finally {
+    await closeAsr();
+    await closeMt();
   }
 
-  // --- transcription
-  const roster = [
-    ...new Set(
-      db
-        .getPlayerStats(job.matchId)
-        .map((p) => p.player_name)
-        .filter(Boolean),
-    ),
-  ];
-  const prompt = whisperPrompt(match.home_name, match.away_name, roster);
-  const chunks: { plan: ChunkPlan; transcript: Transcript }[] = [];
-  // Le transcripteur n'est ouvert qu'au premier tronçon à transcrire : une
-  // reprise dont tout est déjà en cache ne charge pas le modèle.
-  let asr: Transcriber | null = null;
-  try {
-    for (const plan of plans) {
-      checkAborted(signal);
-      const cacheFile = chunkJson(dir, plan.index);
-      const cached = readJson<ChunkCache>(cacheFile);
-      let transcript: Transcript;
-      if (cached && cached.model === cfg.transcribeModel && cached.transcript) transcript = cached.transcript;
-      else {
-        if (!asr) {
-          progress({ phase: 'preparation', done: 0, total: 0 });
-          asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
-          progress({ phase: 'transcription', done: chunks.length, total: plans.length });
-        }
-        transcript = await asr.transcribe(chunkAudio(dir, plan.index), prompt, signal);
-        writeJson(cacheFile, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
-      }
-      chunks.push({ plan, transcript });
-      progress({ phase: 'transcription', done: chunks.length, total: plans.length });
-    }
-  } finally {
-    await asr?.close();
-  }
-  const cues = cuesFromChunks(chunks, prompt);
-  if (!cues.length) {
+  if (!frozen.length) {
     return { ok: false, kind: 'contenu', reason: 'Aucune parole détectée dans le replay (transcription vide après filtrage)' };
   }
-
-  // --- traduction
-  const cacheFile = path.join(dir, 'translation.json');
-  const cache: TranslationCache = readJson<TranslationCache>(cacheFile) ?? { model: cfg.translateModel, lines: {} };
-  if (cache.model !== cfg.translateModel) Object.assign(cache, { model: cfg.translateModel, lines: {} });
-  const names = [match.away_name, match.home_name, ...roster].join(', ');
-  const batches: Cue[][] = [];
-  for (let i = 0; i < cues.length; i += cfg.batch) batches.push(cues.slice(i, i + cfg.batch));
-  let mt: { close(): Promise<void> } | null = null;
-  try {
-    if (batches.some((batch) => batch.some((c) => cache.lines[c.seq]?.en !== c.text))) {
-      progress({ phase: 'preparation', done: 0, total: 0 });
-      mt = deps.openTranslator ? await deps.openTranslator(cfg, signal, (done, total) => progress({ phase: 'preparation', done, total })) : null;
-    }
-    progress({ phase: 'traduction', done: 0, total: batches.length });
-    for (const [b, batch] of batches.entries()) {
-      checkAborted(signal);
-      const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
-      if (todo.length) {
-        const first = cues.indexOf(batch[0]);
-        const context = cues.slice(Math.max(0, first - 4), first).map((c) => c.text);
-        const res = await deps.translate(
-          todo.map((c) => ({ i: c.seq, en: c.text })),
-          context,
-          cfg,
-          { names, signal },
-        );
-        for (const r of res) {
-          const c = todo.find((x) => x.seq === r.i);
-          if (c) cache.lines[c.seq] = { en: c.text, fr: r.fr, untranslated: r.untranslated };
-        }
-        writeJson(cacheFile, cache);
-      }
-      progress({ phase: 'traduction', done: b + 1, total: batches.length });
-    }
-  } finally {
-    await mt?.close();
-  }
-
-  const rows = cues.map((c) => {
-    const t = cache.lines[c.seq];
-    const translated = t && t.en === c.text && !t.untranslated;
-    return { seq: c.seq, start_ts: c.start, end_ts: c.end, text_en: c.text, text_fr: translated ? t.fr : c.text, untranslated: translated ? 0 : 1 };
-  });
-  db.replaceCommentary(job.matchId, { ok_id: okId, transcribe_model: cfg.transcribeModel, translate_model: cfg.translateModel }, rows);
+  db.completeCommentary(job.matchId, track, frozen.length);
   fs.rmSync(dir, { recursive: true, force: true });
-  const untranslated = rows.filter((r) => r.untranslated).length;
+  const untranslated = frozen.filter((c) => {
+    const t = cache.lines[c.seq];
+    return !(t && t.en === c.text && !t.untranslated);
+  }).length;
   return {
     ok: true,
     reason:
-      `${rows.length} sous-titres traduits${untranslated ? ` (${untranslated} laissés en anglais)` : ''} ; ` +
-      `${plans.length} tronçon(s), ${batches.length} lot(s) ; ${cfg.transcribeModel} + ${cfg.translateModel} ; ${Math.round((Date.now() - t0) / 1000)} s`,
+      `${frozen.length} sous-titres traduits${untranslated ? ` (${untranslated} laissés en anglais)` : ''} ; ` +
+      `${plans.length} tronçon(s), ${batches} lot(s)${cfg.gpuSequential ? ', GPU séquentiel' : ''} ; ` +
+      `${cfg.transcribeModel} + ${cfg.translateModel} ; ${Math.round((Date.now() - t0) / 1000)} s`,
   };
 }

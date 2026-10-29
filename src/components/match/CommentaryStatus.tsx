@@ -1,5 +1,7 @@
 'use client';
 
+import { fmtTime } from '@/components/match/format';
+
 /** État de la traduction des commentateurs, tel que renvoyé par GET /subtitles. */
 export interface CommentaryState {
   status: 'disabled' | 'none' | 'queued' | 'running' | 'ready' | 'failed';
@@ -7,6 +9,8 @@ export interface CommentaryState {
   progress?: { done: number; total: number };
   position?: number;
   reason?: string;
+  /** Piste en cours : secondes de vidéo déjà couvertes par les sous-titres publiés. */
+  available_until?: number;
 }
 
 const PHASE_LABEL: Record<NonNullable<CommentaryState['phase']>, string> = {
@@ -54,7 +58,10 @@ export default function CommentaryStatus({
     tone = 'text-flame-hot';
     spinning = true;
     title = `${state.phase ? PHASE_LABEL[state.phase] : 'Traduction des commentaires'}${pct(state.progress, state.phase)}`;
-    detail = 'Le replay se regarde déjà ; les sous-titres apparaîtront à la fin.';
+    detail =
+      state.available_until && state.available_until > 0
+        ? `Sous-titres disponibles jusqu’à ${fmtTime(state.available_until)} — la suite arrive.`
+        : 'Le replay se regarde déjà ; les sous-titres arrivent par tranches de 10 minutes.';
   } else if (status === 'queued') {
     tone = 'text-flame-hot';
     dot = 'bg-flame';
