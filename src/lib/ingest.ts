@@ -83,7 +83,11 @@ export async function ingestMatchDetails(match: MatchRow): Promise<string> {
   db.replaceStats(match.id, s.teams, s.players, s.leaders);
   db.replacePlays(match.id, s.plays);
   const fresh = db.getMatch(match.id);
-  if (fresh?.status === 'final') db.markStatsSynced(match.id);
+  // On ne marque le match comme synchronisé que si les données sont
+  // complètes : sinon ESPN les republiera plus tard et le match ne serait
+  // jamais réanalysé (stats et VF figées à un état partiel).
+  const complete = s.players.length > 0 && s.plays.some((p) => p.event_type.toLowerCase().includes('end of game'));
+  if (fresh?.status === 'final' && complete) db.markStatsSynced(match.id);
   const subs = regenerateSubtitles(match.id, s.plays);
   return `${match.away_abbr}@${match.home_abbr}: ${s.players.length} joueurs, ${s.plays.length} actions, ${subs} sous-titres`;
 }
@@ -239,9 +243,12 @@ export function startVideoAnalysis(matchId: number, opts: { withAudio?: boolean 
   if (!match?.video_ok_id || !match.video_available) return { started: false, reason: 'pas de replay' };
   if (!ffmpegAvailable()) return { started: false, reason: 'ffmpeg absent' };
   if (analysis.has(matchId)) return { started: false, reason: 'déjà en cours' };
-  if (analysis.size >= Number(process.env.ANALYSIS_MAX_PARALLEL ?? 1)) return { started: false, reason: 'une analyse est déjà en cours' };
+  // Une valeur non numérique donnerait NaN, et toute comparaison avec NaN
+  // est fausse : la limite serait silencieusement désactivée.
+  const maxParallel = Math.max(1, Math.trunc(Number(process.env.ANALYSIS_MAX_PARALLEL) || 1));
+  if (analysis.size >= maxParallel) return { started: false, reason: 'une analyse est déjà en cours' };
   // Cooldown : une analyse coûte 5 à 8 min de CPU, on borne la fréquence.
-  const minInterval = Number(process.env.ANALYSIS_MIN_INTERVAL_MS ?? 15 * 60_000);
+  const minInterval = Math.max(0, Math.trunc(Number(process.env.ANALYSIS_MIN_INTERVAL_MS) || 15 * 60_000));
   const last = analysisLast.get(matchId) ?? 0;
   const since = Date.now() - last;
   if (last && since < minInterval) {
@@ -319,8 +326,14 @@ export function ingestToken(): string {
 export function checkIngestAuth(header: string | null): boolean {
   const expected = ingestToken();
   const got = (header ?? '').replace(/^Bearer\s+/i, '').trim();
-  if (!got || got.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+  if (!got) return false;
+  // Comparaison sur des HACHAGES de taille fixe : `Buffer.from` encode en
+  // UTF-8, dont la longueur en octets diffère de la longueur en unités
+  // UTF-16. Un jeton contenant un caractère non-ASCII faisait donc lever
+  // une RangeError dans timingSafeEqual (500 au lieu de 401).
+  const a = crypto.createHash('sha256').update(got).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 export async function runJob(name: JobName, arg?: number) {

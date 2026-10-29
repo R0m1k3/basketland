@@ -122,6 +122,27 @@ function cleanText(s: unknown): string {
 }
 
 /**
+ * Nom du joueur principal déduit du texte ESPN.
+ *
+ * Repli indispensable : ESPN ne renseigne PAS `participants` pour les
+ * lancers francs (mesuré sur le match Portland@Lakers : `participants=[None]`).
+ * Sans ce repli, `actor` est vide sur ces actions et les séries de lancers
+ * francs ne peuvent jamais être regroupées par tireur.
+ *
+ * Formats rencontrés :
+ *   "Luka Doncic makes free throw 1 of 2"
+ *   "Brandon Miller makes 24-foot three point jump shot"
+ *   "Pascal Siakam defensive rebound"
+ */
+export function actorFromText(text: string): string {
+  const clean = cleanText(text);
+  const m = clean.match(
+    /^([A-Z][\w.'’-]*(?: [A-Z][\w.'’-]*){0,2})\s+(?:makes|misses|blocks|steals|grabs|commits|enters|leaves|is called for|tosses|defensive rebound|offensive rebound|turnover|traveling)/,
+  );
+  return m ? m[1] : '';
+}
+
+/**
  * Parse le play-by-play ESPN. `teamIdToAbbr` et `athleteNames` viennent du boxscore.
  * Les numéros de séquence ESPN sont uniques et croissants ; on retombe sur l'index sinon.
  */
@@ -164,7 +185,7 @@ export function parsePlays(
       wallclock: p?.wallclock ? normalizeIsoUtc(p.wallclock) : '',
       event_type: eventType,
       text_en: text,
-      actor: participants[0] ?? '',
+      actor: participants[0] ?? actorFromText(text),
       team_abbr: teamIdToAbbr[String(p?.team?.id ?? '')] ?? '',
       home_score: intOrNull(p?.homeScore),
       away_score: intOrNull(p?.awayScore),

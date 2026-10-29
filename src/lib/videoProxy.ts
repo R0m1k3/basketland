@@ -1,5 +1,6 @@
 /** Logique commune aux 3 routes du proxy vidéo. */
 import { fetchWithRetry } from './http';
+import * as db from './db';
 import { isAllowedMediaHost, isValidOkId, OK_HEADERS, pickVariant, resolveOkStream, type OkStream, type Variant } from './okru';
 import { isValidPlaylist, resolveSegmentUrl, rewriteMasterPlaylist, rewriteMediaPlaylist } from './hls';
 
@@ -18,6 +19,18 @@ export class ProxyError extends Error {
   }
 }
 
+/**
+ * Vérifie qu'un `okId` correspond bien à un match connu de la base.
+ *
+ * Sans cette vérification, le proxy sert de relais pour N'IMPORTE QUEL flux
+ * ok.ru : un appelant pourrait faire consommer la bande passante du NAS
+ * pour des vidéos sans rapport avec le site.
+ */
+function assertKnownOkId(okId: string): void {
+  const rows = db.listMatches({ videoOkId: okId, video: true, limit: 1 });
+  if (!rows.length) throw new ProxyError(404, 'replay inconnu');
+}
+
 export function assertOkId(okId: string): void {
   if (!isValidOkId(okId)) throw new ProxyError(400, 'okId invalide');
 }
@@ -25,7 +38,11 @@ export function assertOkId(okId: string): void {
 /** Master : ré-résolution systématique de l'embed (URL signée fraîche), réécriture des variantes. */
 export async function proxiedMaster(okId: string): Promise<string> {
   assertOkId(okId);
-  const stream = await resolveOkStream(okId, { force: true });
+  assertKnownOkId(okId);
+  // On réutilise le cache quand la signature est encore valable : forcer la
+  // re-résolution à chaque requête amplifie les appels vers ok.ru et
+  // augmente le risque de bannissement d'IP.
+  const stream = await resolveOkStream(okId, { force: false });
   if (!isValidPlaylist(stream.masterText)) throw new ProxyError(502, 'playlist maître invalide');
   return rewriteMasterPlaylist(stream.masterText, stream.masterUrl, okId);
 }
@@ -37,22 +54,27 @@ async function variantFor(okId: string, key: string | null, force = false): Prom
   return { stream, variant };
 }
 
-/** Playlist média : réécrit les segments vers /segment.ts. Retente une fois si la signature a expiré. */
-export async function proxiedMedia(okId: string, key: string | null, absUrl: string | null): Promise<string> {
+/**
+ * Playlist média : réécrit les segments vers /segment.ts. Retente une fois si la signature a expiré.
+ *
+ * Le paramètre `absUrl` a été supprimé : il permettait à l'appelant de
+ * faire lire par le proxy une playlist arbitraire d'un hôte autorisé, via
+ * notamment une redirection ouverte. La variante est toujours retrouvée
+ * depuis sa clé (QUALITY), côté serveur.
+ */
+export async function proxiedMedia(okId: string, key: string | null): Promise<string> {
   assertOkId(okId);
-  if (absUrl) {
-    if (!isAllowedMediaHost(absUrl)) throw new ProxyError(400, 'hôte non autorisé');
-    const r = await fetchWithRetry(absUrl, { headers: OK_HEADERS });
-    if (!r.ok) throw new ProxyError(502, `amont HTTP ${r.status}`);
-    return rewriteMediaPlaylist(await r.text(), r.url || absUrl, okId, key ?? 'u');
-  }
+  assertKnownOkId(okId);
   for (let attempt = 0; attempt < 2; attempt++) {
     const { variant } = await variantFor(okId, key, attempt > 0);
     const r = await fetchWithRetry(variant.url, { headers: OK_HEADERS });
     if (r.ok) {
+      // Après redirection, l'hôte doit toujours être autorisé et le schéma https.
+      const finalUrl = r.url || variant.url;
+      if (!isAllowedMediaHost(finalUrl)) throw new ProxyError(502, 'redirection refusée');
       const text = await r.text();
       if (!isValidPlaylist(text)) throw new ProxyError(502, 'playlist média invalide');
-      return rewriteMediaPlaylist(text, r.url || variant.url, okId, variant.key);
+      return rewriteMediaPlaylist(text, finalUrl, okId, variant.key);
     }
     if (![400, 403, 404, 410].includes(r.status) || attempt > 0) throw new ProxyError(502, `amont HTTP ${r.status}`);
   }
@@ -62,6 +84,7 @@ export async function proxiedMedia(okId: string, key: string | null, absUrl: str
 /** Segment .ts : stream binaire avec support Range ; ré-résolution si 4xx (expiration). */
 export async function proxiedSegment(okId: string, key: string | null, s: string | null, range: string | null): Promise<Response> {
   assertOkId(okId);
+  assertKnownOkId(okId);
   if (!s) throw new ProxyError(400, 'paramètre s manquant');
   for (let attempt = 0; attempt < 2; attempt++) {
     const { variant } = await variantFor(okId, key, attempt > 0);
@@ -71,6 +94,10 @@ export async function proxiedSegment(okId: string, key: string | null, s: string
     if (range) headers.Range = range;
     const r = await fetchWithRetry(url, { headers, timeoutMs: 60_000, retries: 1 });
     if (r.ok || r.status === 206) {
+      // La réponse peut avoir été redirigée : on revalide la destination
+      // effective avant de la relayer au client (anti-SSRF).
+      const finalUrl = r.url || url;
+      if (!isAllowedMediaHost(finalUrl)) throw new ProxyError(502, 'redirection refusée');
       const out = new Headers({
         'Content-Type': 'video/mp2t',
         'Cache-Control': 'public, max-age=3600',

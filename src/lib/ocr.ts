@@ -305,7 +305,9 @@ export interface OcrScanOptions extends FrameGrabOptions {
 
 /** Balaye la vidéo et renvoie les observations OCR brutes. */
 export async function scanVideoClock(playlistUrl: string, o: OcrScanOptions): Promise<FrameObservation[]> {
-  const step = o.stepSec ?? 60;
+  // Pas minimum de 10 s : `OCR_STEP_SEC=0` provoquerait une boucle infinie
+  // d'extraction de frames jusqu'à saturation de la mémoire.
+  const step = Math.max(10, Math.trunc(o.stepSec ?? 60));
   const times: number[] = [];
   for (let t = o.startSec ?? 30; t < o.duration - 5; t += step) times.push(Math.round(t));
   const worker = await createOcrWorker();

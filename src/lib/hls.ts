@@ -9,8 +9,10 @@
  *  - les segments exigent l'en-tête `Referer: https://ok.ru/`.
  */
 
-/** Hôtes autorisés pour les segments (anti-SSRF). */
-const ALLOWED_MEDIA_HOST_RE = /\.(vkuser\.net|okcdn\.ru|vk\.com)$/i;
+/**
+ * Hôtes autorisés pour les segments (anti-SSRF).
+ */
+const ALLOWED_MEDIA_HOST_RE = /\.(vkuser\.net|okcdn\.ru|mycdn\.me|ok\.ru|vk\.com|userapi\.com|vkuseraudio\.net|vkuservideo\.net)$/i;
 
 /** Un segment doit être un nom de fichier .ts (souvent MEDIA/MEDIUM + index). */
 const SEGMENT_NAME_RE = /^[A-Za-z0-9_-]+\.ts$/;
@@ -18,6 +20,10 @@ const SEGMENT_NAME_RE = /^[A-Za-z0-9_-]+\.ts$/;
 /**
  * Vérifie qu'une URL de segment pointe vers un hôte de média autorisé.
  * Empêche un usage SSRF via le paramètre `s`.
+ *
+ * Le schéma est exigé à `https` : `http:` permettrait de viser un service
+ * interne en clair, et surtout de contourner les contrôles du proxy
+ * applicatif (HSTS, redirections).
  */
 export function isAllowedSegmentUrl(url: string): boolean {
   try {
@@ -42,18 +48,27 @@ export function isValidPlaylist(text: string): boolean {
 
 /**
  * Résout l'URL absolue d'un segment.
- * `segment` peut être :
- *  - une URL absolue déjà résolue ;
- *  - un nom de fichier relatif (`MEDIUM00000.ts`) → résolu sur le dossier de la variante.
+ *
+ * `segment` doit être un NOM DE FICHIER (`MEDIUM00000.ts`). Toute URL absolue
+ * est refusée : c'était la faille SSRF (un appelant pouvait faire lire par le
+ * proxy une ressource arbitraire d'un hôte autorisé, voire via une
+ * redirection ouverte). Le dossier de la variante fournit la base.
+ *
+ * Un chemin contenant un `/` est refusé également : on ne veut ni traversée
+ * de répertoire ni segment dans un sous-dossier non prévu.
  */
 export function resolveSegmentUrl(segment: string, variantUrl: string): string {
-  if (segment.startsWith('http://') || segment.startsWith('https://')) return segment;
-  const base = variantUrl.slice(0, variantUrl.lastIndexOf('/') + 1);
-  const name = segment.split('/').pop() ?? segment;
-  if (!SEGMENT_NAME_RE.test(name)) {
-    throw new Error(`nom de segment invalide: ${name}`);
+  if (segment.startsWith('http://') || segment.startsWith('https://')) {
+    throw new Error('URL de segment absolue refusée');
   }
-  return `${base}${name}`;
+  if (segment.includes('/')) {
+    throw new Error(`chemin de segment invalide: ${segment}`);
+  }
+  if (!SEGMENT_NAME_RE.test(segment)) {
+    throw new Error(`nom de segment invalide: ${segment}`);
+  }
+  const base = variantUrl.slice(0, variantUrl.lastIndexOf('/') + 1);
+  return `${base}${segment}`;
 }
 
 /**

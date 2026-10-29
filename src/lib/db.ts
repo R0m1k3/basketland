@@ -266,6 +266,8 @@ export interface MatchFilters {
   from?: string; // ISO UTC inclusif
   to?: string; // ISO UTC exclusif
   video?: boolean;
+  /** Restreint aux matchs portant cet identifiant de flux ok.ru. */
+  videoOkId?: string;
   limit?: number;
   offset?: number;
   order?: 'asc' | 'desc';
@@ -297,6 +299,10 @@ function whereFor(f: MatchFilters): { sql: string; params: Params } {
   if (f.video !== undefined) {
     clauses.push('video_available = $video');
     params.video = f.video ? 1 : 0;
+  }
+  if (f.videoOkId) {
+    clauses.push('video_ok_id = $videoOkId');
+    params.videoOkId = f.videoOkId;
   }
   return { sql: clauses.join(' AND '), params };
 }

@@ -55,6 +55,22 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
       .catch(() => undefined);
   }, [matchId]);
 
+  /**
+   * Recharge les sous-titres : le serveur les régénère (positions video_ts
+   * recalculées) après chaque écriture de calibration. Sans ce rechargement,
+   * le lecteur garde les anciennes positions et le calibrage paraît sans
+   * effet jusqu'au rechargement de la page.
+   */
+  const reloadSubtitles = useCallback(() => {
+    fetch(`/api/matches/${matchId}/subtitles`)
+      .then((r) => r.json())
+      .then((d: { subtitles?: Subtitle[]; settings?: { global_offset?: number } }) => {
+        setSubtitles(d.subtitles ?? []);
+        if (typeof d.settings?.global_offset === 'number') setOffset(d.settings.global_offset);
+      })
+      .catch(() => undefined);
+  }, [matchId]);
+
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/matches/${matchId}/subtitles`)
@@ -71,7 +87,30 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
     };
   }, [matchId, loadSync]);
 
-  /** Persiste le décalage côté serveur (recharge la VF sans tout recalculer). */
+  /**
+   * L'analyse automatique tourne en tâche de fond (5 à 8 min de CPU pour un
+   * scan complet). On interroge son état périodiquement et on recharge la VF
+   * dès qu'elle se termine.
+   */
+  useEffect(() => {
+    if (analysis !== 'running') return;
+    const timer = setInterval(() => {
+      fetch(`/api/matches/${matchId}/sync`)
+        .then((r) => r.json())
+        .then((d: SyncState) => {
+          const st = d.analysis?.status;
+          if (st && st !== 'running') {
+            setAnalysis(st);
+            reloadSubtitles();
+            loadSync();
+          }
+        })
+        .catch(() => undefined);
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [analysis, matchId, loadSync, reloadSubtitles]);
+
+  /** Persiste le décalage côté serveur puis recharge les sous-titres. */
   const changeOffset = useCallback(
     (next: number) => {
       setOffset(next);
@@ -79,9 +118,11 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ global_offset: next }),
-      }).catch(() => undefined);
+      })
+        .then(() => reloadSubtitles())
+        .catch(() => undefined);
     },
-    [matchId],
+    [matchId, reloadSubtitles],
   );
 
   /** Ajuste le décalage d'un seul quart. */
@@ -93,9 +134,11 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quarter_offsets: next }),
-      }).catch(() => undefined);
+      })
+        .then(() => reloadSubtitles())
+        .catch(() => undefined);
     },
-    [matchId, quarterOffsets],
+    [matchId, quarterOffsets, reloadSubtitles],
   );
 
   /** Lance l'analyse automatique (OCR du chrono à l'écran + énergie audio). */
@@ -127,11 +170,13 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
         const d = await res.json();
         setMessage(d.message ?? 'Ancre posée.');
         loadSync();
+        // Le serveur a recalculé les positions : on recharge la VF.
+        reloadSubtitles();
       } catch {
         setMessage('Impossible de poser l’ancre.');
       }
     },
-    [matchId, currentTime, loadSync],
+    [matchId, currentTime, loadSync, reloadSubtitles],
   );
 
   const removeAnchor = useCallback(
@@ -143,11 +188,12 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
           body: JSON.stringify({ action: 'delete-anchor', period, clock_sec: clockSec }),
         });
         loadSync();
+        reloadSubtitles();
       } catch {
         /* ignoré */
       }
     },
-    [matchId, loadSync],
+    [matchId, loadSync, reloadSubtitles],
   );
 
   const periods = [1, 2, 3, 4, 5];

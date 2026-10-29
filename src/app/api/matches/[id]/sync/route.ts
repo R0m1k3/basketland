@@ -138,11 +138,16 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
     }
     for (const a of body.anchors ?? []) {
       if (!finite(a.period) || !finite(a.clock_sec) || !finite(a.video_ts) || a.video_ts < 0) return error(400, 'ancre invalide');
+      // Même convention que l'action `anchor` : les ancres stockées sont des
+      // positions BRUTES, les offsets globaux et par quart sont ré-appliqués
+      // ensuite lors du calcul des video_ts. Sans cette correction, une même
+      // position donnait deux résultats selon l'API utilisée.
+      const rawOffset = current.global_offset + (Number(current.quarter_offsets[String(Math.trunc(a.period))]) || 0);
       upsertAnchor({
         match_id: id,
         period: Math.trunc(a.period),
         clock_sec: Math.trunc(a.clock_sec),
-        video_ts: a.video_ts,
+        video_ts: Math.round((a.video_ts - rawOffset) * 100) / 100,
         method: 'manual',
         wallclock: a.wallclock ?? null,
       });

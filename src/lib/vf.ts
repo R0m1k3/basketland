@@ -389,29 +389,64 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
   const primary: CommentaryLine[] = [];
   const extras: CommentaryLine[] = [];
   let firstPlayDone = false;
+  // Préfixe de bannière « Coup d'envoi » : appliqué à la première ligne
+  // réellement commentée, pour ne pas créer de ligne supplémentaire (et donc
+  // pas de doublon de `seq`, qui est la clé primaire en base).
+  let startBanner = '';
 
-  const push = (list: CommentaryLine[], p: PlayRow, text: string, priority: number, kind: SubtitleKind = 'action') =>
+  const push = (list: CommentaryLine[], p: PlayRow, text: string, priority: number, kind: SubtitleKind = 'action') => {
+    // La bannière de coup d'envoi préfixe la première ligne commentée plutôt
+    // que d'en créer une supplémentaire : deux lignes de même `seq`
+    // violeraient la contrainte UNIQUE (match_id, seq).
+    let finalText = text;
+    let finalKind = kind;
+    if (startBanner) {
+      finalText = `${startBanner} ${text}`;
+      finalKind = 'banniere';
+      startBanner = '';
+    }
     list.push({
       seq: p.seq,
       period: p.period,
       clock_sec: p.clock_sec,
       wallclock: p.wallclock,
-      text_fr: text,
-      kind,
+      text_fr: finalText,
+      kind: finalKind,
       speaker: p.team_abbr,
       priority,
-      hold: holdFor(text),
+      hold: holdFor(finalText),
     });
+  };
+
+  // Actions déjà commentées (dans une série de lancers francs par exemple) :
+  // sans ce suivi, elles seraient commentées une seconde fois.
+  const consumed = new Set<number>();
 
   for (let i = 0; i < sorted.length; i++) {
     const p = sorted[i];
+    // Une action déjà consommée par une série précédente ne doit pas être
+    // commentée une seconde fois (une série de lancers francs peut être
+    // interrompue par un remplacement : le 2e lancer serait alors rejoué).
+    if (consumed.has(p.seq)) continue;
     const cat = classifyPlay(p.event_type, p.text_en, !!p.scoring);
 
     if (!firstPlayDone && p.period === 1) {
       firstPlayDone = true;
-      const head = cat === 'jumpball' ? `Coup d'envoi ! ${translatePlay(p)}` : "Coup d'envoi du match !";
-      push(primary, p, head, 100, 'banniere');
-      if (cat === 'jumpball') continue;
+      // La bannière de coup d'envoi ne doit pas voler l'action à la VF :
+      // si l'action est déjà commentable (tir, lancer franc…), on la laisse
+      // au traitement normal et la bannière n'est qu'un préfixe.
+      const commented = !['jumpball', 'other', 'substitution', 'timeout'].includes(cat);
+      const head = cat === 'jumpball' ? `Coup d'envoi ! ${translatePlay(p)}` : 'Coup d\'envoi du match !';
+      if (!commented) {
+        // La bannière porte le `seq` de l'action : si l'action génère aussi
+        // sa propre ligne juste après, les deux porteraient le même `seq` et
+        // l'insertion violerait la contrainte UNIQUE (match_id, seq).
+        push(primary, p, head, 100, 'banniere');
+        consumed.add(p.seq);
+        continue;
+      }
+      // L'action reste commentée normalement ; on note seulement le début.
+      startBanner = head;
     }
 
     switch (cat) {
@@ -446,14 +481,22 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
       }
       case 'ft_made':
       case 'ft_missed': {
-        // Regroupe la série (même tireur, même période, même chrono).
+        // Regroupe la série de lancers francs.
+        //
+        // Le même tireur, la même période, et un chrono qui avance de peu :
+        // entre deux lancers d'une même série, le chrono de jeu descend
+        // normalement de quelques secondes (un lancer prend ~1 s, l'arrêt
+        // de jeu peut en prendre davantage). Exiger un chrono identique
+        // ne regroupait donc jamais les séries réelles.
+        const MAX_GAP_SEC = 30;
         const series: PlayRow[] = [p];
         let j = i + 1;
         while (j < sorted.length) {
           const q = sorted[j];
           const qc = classifyPlay(q.event_type, q.text_en, !!q.scoring);
           if (qc === 'ft_made' || qc === 'ft_missed') {
-            if (q.actor === p.actor && q.period === p.period && q.clock_sec === p.clock_sec) {
+            const gap = p.clock_sec - q.clock_sec;
+            if (q.actor === p.actor && q.period === p.period && gap >= 0 && gap <= MAX_GAP_SEC) {
               series.push(q);
               j++;
               continue;
@@ -461,7 +504,7 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
             break;
           }
           // Les remplacements/temps morts s'intercalent souvent entre deux lancers.
-          if ((qc === 'substitution' || qc === 'timeout') && q.clock_sec === p.clock_sec) {
+          if ((qc === 'substitution' || qc === 'timeout') && q.period === p.period) {
             j++;
             continue;
           }
@@ -474,9 +517,15 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
             ? translatePlay(p)
             : `${who} : ${made}/${series.length} aux lancers francs`;
         push(made > 0 ? primary : extras, p, text, made > 0 ? 60 : 30);
-        // Les actions intercalées (temps mort) restent traitées : on ne saute que les lancers.
-        const skip = new Set(series.map((s) => s.seq));
-        while (i + 1 < sorted.length && skip.has(sorted[i + 1].seq)) i++;
+        // Toute la série est consommée : le 2e lancer ne doit pas être
+        // re-commenté quand un remplacement l'a séparée du 1er dans le flux.
+        for (const s of series) consumed.add(s.seq);
+        // On avance l'index jusqu'au dernier élément de la série, en sautant
+        // les actions intercalées (remplacement, temps mort) : sans cela, la
+        // boucle principale les retraite et le 2e lancer est re-commenté.
+        let last = i;
+        while (last + 1 < sorted.length && consumed.has(sorted[last + 1].seq)) last++;
+        i = last;
         break;
       }
       case 'turnover':
@@ -516,14 +565,29 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
   if (lines.length > maxLines) {
     // Retire d'abord les lignes de plus faible priorité (les plus récentes en dernier recours).
     const keep = [...lines].sort((a, b) => b.priority - a.priority || a.seq - b.seq).slice(0, maxLines);
-    const keepSet = new Set(keep.map((l) => l.seq));
-    lines = lines.filter((l) => keepSet.has(l.seq));
+    // On garde les objets retenus (pas leurs `seq`) : deux lignes peuvent
+    // partager le même `seq` sans être la même ligne.
+    const keepSet = new Set(keep);
+    lines = lines.filter((l) => keepSet.has(l));
   } else if (lines.length < minLines && extras.length) {
     const need = minLines - lines.length;
     const add = [...extras].sort((a, b) => b.priority - a.priority || a.seq - b.seq).slice(0, need);
     lines = [...lines, ...add];
   }
-  return lines.sort((a, b) => a.seq - b.seq);
+
+  // `seq` est la clé primaire (match_id, seq) : on garantit des valeurs
+  // uniques et croissantes, quelle que soit la façon dont les lignes ont
+  // été produites. Sans cela, une insertion peut échouer sur une contrainte
+  // UNIQUE et laisser le match sans VF.
+  const sortedLines = lines.sort((a, b) => a.seq - b.seq);
+  const seen = new Set<number>();
+  let next = 0;
+  for (const l of sortedLines) {
+    while (seen.has(l.seq)) l.seq = ++next;
+    seen.add(l.seq);
+    next = Math.max(next, l.seq);
+  }
+  return sortedLines.sort((a, b) => a.seq - b.seq);
 }
 
 function lineFrom(p: PlayRow, text: string, priority: number): CommentaryLine {

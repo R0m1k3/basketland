@@ -111,13 +111,20 @@ describe('resolveSegmentUrl', () => {
     );
   });
 
-  it('laisse passer une URL absolue', () => {
-    const abs = 'https://ok6-29.vkuser.net/x/MEDIUM1.ts';
-    expect(resolveSegmentUrl(abs, variant)).toBe(abs);
+  it('REFUSE une URL absolue (surface SSRF)', () => {
+    // Régression : une URL absolue allowait à l'appelant de faire lire par
+    // le proxy une ressource arbitraire (éventuellement via une redirection
+    // ouverte sur un hôte autorisé).
+    expect(() => resolveSegmentUrl('https://ok6-29.vkuser.net/evil', variant)).toThrow();
+    expect(() => resolveSegmentUrl('http://127.0.0.1/admin', variant)).toThrow();
   });
 
   it('refuse un nom de segment dangereux', () => {
+    // Traversée de répertoire : refusée.
     expect(() => resolveSegmentUrl('../../etc/passwd', variant)).toThrow();
+    expect(() => resolveSegmentUrl('../MEDIUM1.ts', variant)).toThrow();
+    // Un chemin avec un slash est refusé : seuls les noms simples .ts passent.
+    expect(() => resolveSegmentUrl('dir/MEDIUM1.ts', variant)).toThrow();
   });
 });
 

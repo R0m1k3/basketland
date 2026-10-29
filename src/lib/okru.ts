@@ -167,11 +167,20 @@ export function lightestVariant(stream: OkStream): Variant | undefined {
   return [...stream.variants].sort((a, b) => a.bandwidth - b.bandwidth)[0];
 }
 
-/** Hôtes autorisés pour les segments (anti-SSRF). */
+/**
+ * Hôtes autorisés pour les segments (anti-SSRF).
+ *
+ * Le schéma `https` est exigé : `http:` permettrait de viser un service
+ * interne en clair. La liste est volontairement restreinte aux hôtes de
+ * média réellement servis par ok.ru.
+ */
 export function isAllowedMediaHost(url: string): boolean {
   try {
-    const h = new URL(url).hostname;
-    return /(^|\.)(vkuser\.net|okcdn\.ru|mycdn\.me|ok\.ru|vk\.com|userapi\.com|vkuseraudio\.net|vkuservideo\.net)$/.test(h);
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+    return /(^|\.)(vkuser\.net|okcdn\.ru|mycdn\.me|ok\.ru|vk\.com|userapi\.com|vkuseraudio\.net|vkuservideo\.net)$/.test(
+      u.hostname,
+    );
   } catch {
     return false;
   }

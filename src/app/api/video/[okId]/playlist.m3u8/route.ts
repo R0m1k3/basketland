@@ -9,7 +9,9 @@ export async function GET(req: NextRequest, ctx: RouteCtx<{ okId: string }>) {
   try {
     const { okId } = await ctx.params;
     const sp = req.nextUrl.searchParams;
-    return new Response(await proxiedMedia(okId, sp.get('v'), sp.get('u')), { headers: M3U8_HEADERS });
+    // Le paramètre `u` (URL absolue) a été supprimé : c'était une surface
+    // SSRF. La variante est identifiée par sa clé QUALITY, résolue serveur.
+    return new Response(await proxiedMedia(okId, sp.get('v')), { headers: M3U8_HEADERS });
   } catch (e) {
     return proxyErrorResponse(e);
   }
