@@ -23,7 +23,17 @@ export interface MatchDto {
   venue: string;
   broadcast: string;
   stats_available: boolean;
-  video: { available: boolean; ok_id: string | null; duration: number | null; master: string | null; checked_at: string | null };
+  video: {
+    available: boolean;
+    ok_id: string | null;
+    duration: number | null;
+    /** Type de flux : playlist HLS ou MP4 progressif (contrat lecteur). */
+    kind: 'hls' | 'mp4' | null;
+    /** URL à donner au lecteur (selon `kind`). */
+    src: string | null;
+    master: string | null;
+    checked_at: string | null;
+  };
 }
 
 export function toDto(m: MatchRow): MatchDto {
@@ -52,6 +62,8 @@ export function toDto(m: MatchRow): MatchDto {
       available,
       ok_id: m.video_ok_id,
       duration: m.video_duration,
+      kind: available ? 'hls' : null,
+      src: available ? `/api/video/${m.video_ok_id}/master.m3u8` : null,
       master: available ? `/api/video/${m.video_ok_id}/master.m3u8` : null,
       checked_at: m.video_checked_at,
     },
