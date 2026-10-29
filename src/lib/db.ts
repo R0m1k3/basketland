@@ -161,7 +161,10 @@ CREATE TABLE IF NOT EXISTS user_clips (
 
 -- Traduction des commentaires : sous-titres (anglais transcrit + français)
 -- et piste produite (vidéo source, modèles). Une piste n'est valable que pour
--- l'ok_id qui l'a produite : si le replay change, elle est refaite.
+-- l'ok_id qui l'a produite : si le replay change, elle est refaite. Les
+-- sous-titres sont publiés par tranches pendant le travail : la colonne
+-- « complete » (ajoutée par migrate) ne passe à 1 qu'une fois tout le match
+-- traduit.
 CREATE TABLE IF NOT EXISTS commentary_cues (
   match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,
@@ -255,6 +258,16 @@ function migrate(db: DatabaseSyncType): void {
   // (qualité « mobile » seule, en attendant le HLS). NULL sur les lignes
   // antérieures : un replay disponible sans type est considéré HLS.
   if (!cols.has('video_kind')) db.exec('ALTER TABLE matches ADD COLUMN video_kind TEXT');
+  const trackCols = new Set(
+    (db.prepare('PRAGMA table_info(commentary_tracks)').all() as { name: string }[]).map((c) => c.name),
+  );
+  // Piste complète (1) ou publication partielle (0, sous-titres progressifs).
+  // Les pistes antérieures étaient écrites d'un bloc à la fin du travail :
+  // elles sont complètes.
+  if (!trackCols.has('complete')) {
+    db.exec('ALTER TABLE commentary_tracks ADD COLUMN complete INTEGER NOT NULL DEFAULT 0');
+    db.exec('UPDATE commentary_tracks SET complete = 1');
+  }
 }
 
 export function getDb(): DatabaseSyncType {
@@ -743,35 +756,73 @@ export interface CommentaryTrackRow {
   cues: number;
   untranslated: number;
   created_at: string;
+  /** 1 : tout le match est traduit ; 0 : publication partielle (travail en cours ou interrompu). */
+  complete: number;
 }
 
-/** Remplace d'un bloc la piste traduite d'un match (sous-titres + métadonnées). */
-export function replaceCommentary(
-  matchId: number,
-  track: { ok_id: string; transcribe_model: string; translate_model: string },
-  cues: Omit<CommentaryCueRow, 'match_id'>[],
-): void {
+export interface CommentaryTrackMeta {
+  ok_id: string;
+  transcribe_model: string;
+  translate_model: string;
+}
+
+type CueInput = Omit<CommentaryCueRow, 'match_id'>;
+
+function insertCues(matchId: number, cues: CueInput[]): void {
+  const st = getDb().prepare(
+    `INSERT OR REPLACE INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated)
+     VALUES ($m, $seq, $start, $end, $en, $fr, $u)`,
+  );
+  for (const c of cues)
+    st.run({ m: matchId, seq: c.seq, start: c.start_ts, end: c.end_ts, en: c.text_en, fr: c.text_fr, u: c.untranslated ? 1 : 0 });
+}
+
+/** Métadonnées de la piste ; compteurs recalculés sur les sous-titres en base. */
+function writeTrack(matchId: number, track: CommentaryTrackMeta, complete: boolean): void {
+  run(
+    `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at, complete)
+     SELECT $m, $ok, $tm, $lm, COUNT(*), COALESCE(SUM(untranslated != 0), 0), $now, $c FROM commentary_cues WHERE match_id = $m`,
+    { m: matchId, ok: track.ok_id, tm: track.transcribe_model, lm: track.translate_model, now: nowIso(), c: complete ? 1 : 0 },
+  );
+}
+
+/** Remplace d'un bloc la piste traduite d'un match (sous-titres + métadonnées), marquée complète. */
+export function replaceCommentary(matchId: number, track: CommentaryTrackMeta, cues: CueInput[]): void {
   tx(() => {
     run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
-    const st = getDb().prepare(
-      `INSERT INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated)
-       VALUES ($m, $seq, $start, $end, $en, $fr, $u)`,
-    );
-    for (const c of cues)
-      st.run({ m: matchId, seq: c.seq, start: c.start_ts, end: c.end_ts, en: c.text_en, fr: c.text_fr, u: c.untranslated ? 1 : 0 });
-    run(
-      `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at)
-       VALUES ($m, $ok, $tm, $lm, $n, $u, $now)`,
-      {
-        m: matchId,
-        ok: track.ok_id,
-        tm: track.transcribe_model,
-        lm: track.translate_model,
-        n: cues.length,
-        u: cues.filter((c) => c.untranslated).length,
-        now: nowIso(),
-      },
-    );
+    insertCues(matchId, cues);
+    writeTrack(matchId, track, true);
+  });
+}
+
+/**
+ * Publication PARTIELLE (sous-titres progressifs) : les sous-titres `cues`
+ * (seq consécutifs) remplacent tout ce qui était publié à partir du premier
+ * d'entre eux, si bien que la piste publiée reste un préfixe continu du
+ * match. Une piste d'une autre vidéo (ok_id) est d'abord effacée. La piste
+ * reste incomplète jusqu'à `completeCommentary`.
+ */
+export function publishCommentaryCues(matchId: number, track: CommentaryTrackMeta, cues: CueInput[]): void {
+  tx(() => {
+    const prev = getCommentaryTrack(matchId);
+    if (!prev || prev.ok_id !== track.ok_id) run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
+    else if (cues.length) {
+      const from = cues.reduce((m, c) => Math.min(m, c.seq), Number.POSITIVE_INFINITY);
+      run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $from', { id: matchId, from });
+    }
+    insertCues(matchId, cues);
+    writeTrack(matchId, track, false);
+  });
+}
+
+/**
+ * Fin du travail : la piste compte exactement les seq 1 à `total` (un
+ * reliquat d'un essai précédent est retiré) et devient complète.
+ */
+export function completeCommentary(matchId: number, track: CommentaryTrackMeta, total: number): void {
+  tx(() => {
+    run('DELETE FROM commentary_cues WHERE match_id = $id AND seq > $n', { id: matchId, n: total });
+    writeTrack(matchId, track, true);
   });
 }
 
@@ -783,10 +834,16 @@ export function getCommentaryCues(matchId: number): CommentaryCueRow[] {
   return all<CommentaryCueRow>('SELECT * FROM commentary_cues WHERE match_id = $id ORDER BY start_ts, seq', { id: matchId });
 }
 
+/** Fin (s) du dernier sous-titre en base, 0 s'il n'y en a pas. */
+export function commentaryPublishedUntil(matchId: number): number {
+  return one<{ t: number | null }>('SELECT MAX(end_ts) AS t FROM commentary_cues WHERE match_id = $id', { id: matchId })?.t ?? 0;
+}
+
 /**
  * Matchs (parmi `ids`) dont la traduction des commentaires est prête pour le
  * replay ACTUEL (badge « VF » des listes). Une piste produite pour un autre
- * ok_id ne compte pas.
+ * ok_id ne compte pas, une piste partielle (publication en cours ou
+ * interrompue) non plus.
  */
 export function commentaryReadyIds(ids: number[]): Set<number> {
   const list = [...new Set(ids.filter((n) => Number.isInteger(n)))];
@@ -794,7 +851,7 @@ export function commentaryReadyIds(ids: number[]): Set<number> {
   return new Set(
     all<{ match_id: number }>(
       `SELECT t.match_id FROM commentary_tracks t JOIN matches m ON m.id = t.match_id
-       WHERE t.ok_id = m.video_ok_id AND t.cues > 0 AND t.match_id IN (SELECT value FROM json_each($ids))`,
+       WHERE t.ok_id = m.video_ok_id AND t.cues > 0 AND t.complete = 1 AND t.match_id IN (SELECT value FROM json_each($ids))`,
       { ids: JSON.stringify(list) },
     ).map((r) => r.match_id),
   );
@@ -802,13 +859,15 @@ export function commentaryReadyIds(ids: number[]): Set<number> {
 
 /**
  * Matchs terminés depuis `sinceIso`, avec replay (HLS ou MP4 : l'audio du
- * MP4 « mobile » suffit), sans piste traduite pour la vidéo actuelle.
+ * MP4 « mobile » suffit), sans piste traduite COMPLÈTE pour la vidéo
+ * actuelle (une piste partielle, laissée par un travail interrompu, est à
+ * reprendre).
  */
 export function finalMatchesNeedingCommentary(sinceIso: string, limit = 30): MatchRow[] {
   return all<MatchRow>(
     `SELECT * FROM matches m WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL
        AND m.date_utc >= $since
-       AND NOT EXISTS (SELECT 1 FROM commentary_tracks t WHERE t.match_id = m.id AND t.ok_id = m.video_ok_id)
+       AND NOT EXISTS (SELECT 1 FROM commentary_tracks t WHERE t.match_id = m.id AND t.ok_id = m.video_ok_id AND t.complete = 1)
      ORDER BY m.date_utc DESC LIMIT $limit`,
     { since: sinceIso, limit },
   );

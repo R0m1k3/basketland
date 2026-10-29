@@ -22,6 +22,10 @@ interface Props {
 
 const POLL_MS = 12_000;
 
+function sameSubtitles(a: Subtitle[], b: Subtitle[]): boolean {
+  return a.length === b.length && a.every((s, i) => s.seq === b[i].seq && s.video_ts === b[i].video_ts && s.end_ts === b[i].end_ts && s.text === b[i].text);
+}
+
 /**
  * Salle de projection : lecteur + sous-titres français des commentateurs.
  *
@@ -43,7 +47,12 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
       .then((r) => r.json())
       .then((d: { subtitles?: Subtitle[]; commentary?: CommentaryState }) => {
         if (my !== reqSeq.current) return null;
-        setSubtitles((d.subtitles ?? []).slice().sort((a, b) => a.video_ts - b.video_ts || a.seq - b.seq));
+        // Pendant la traduction, chaque tranche publiée s'ajoute à la liste :
+        // le lecteur la reçoit par props (→ playback.setSubtitles) et l'affiche
+        // sans interrompre la lecture. Liste inchangée : même référence, pas
+        // de re-rendu du lecteur à chaque interrogation.
+        const next = (d.subtitles ?? []).slice().sort((a, b) => a.video_ts - b.video_ts || a.seq - b.seq);
+        setSubtitles((prev) => (sameSubtitles(prev, next) ? prev : next));
         setCommentary(d.commentary ?? null);
         return d.commentary ?? null;
       })
