@@ -353,7 +353,15 @@ export async function fetchScoreboardRange(
   const errors: string[] = [];
   let attempts = 0;
 
-  if (spanDays < 40) {
+  // Découpage : on privilégie l'appel MENSUEL dès que la période couvre
+  // plus de quelques jours. Un appel par jour sur 15 jours, répété toutes
+  // les 15 minutes par le planificateur, faisait 1 440 requêtes ESPN par
+  // jour pour rien. Deux appels `YYYYMM` donnent le même résultat (le mois
+  // ESPN tient largement sous le plafond de 1 000 matchs).
+  //
+  // On ne garde le découpage journalier que pour les très courtes périodes,
+  // où il évite de ramener un mois entier de matchs.
+  if (spanDays < 8) {
     for (let t = start; t <= end; t += 86400_000) {
       const d = new Date(t);
       attempts++;
@@ -386,6 +394,12 @@ export async function fetchScoreboardRange(
   // faire échouer la collecte : les jours restants restent exploitables.
   if (!out.length && attempts > 0 && errors.length === attempts) {
     throw new Error(errors.join(' | '));
+  }
+  // Les erreurs PARTIELLES sont signalées (et donc tracées dans ingest_log) :
+  // sans cela, une journée manquante disparaissait sans trace, et le
+  // calendrier semblait complet alors qu'il ne l'était pas.
+  if (errors.length) {
+    console.error(`[espn] ${errors.length}/${attempts} période(s) en échec : ${errors.join(' | ')}`);
   }
   return out;
 }

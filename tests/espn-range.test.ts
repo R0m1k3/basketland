@@ -47,7 +47,7 @@ describe('fetchScoreboardRange', () => {
       return { events: [] };
     });
 
-    // 4 mois : au-delà de 40 jours, on passe par mois (plafond de 1 000).
+    // 4 mois : au-delà de 8 jours, on passe par mois (plafond de 1 000).
     const from = new Date(Date.UTC(2026, 8, 1));
     const to = new Date(Date.UTC(2026, 11, 31));
     await fetchScoreboardRange(from, to, 'nba', 1000);
@@ -56,6 +56,26 @@ describe('fetchScoreboardRange', () => {
     for (const url of seen) expect(url).toMatch(/dates=\d{6}&/); // YYYYMM
     expect(seen[0]).toContain('202609');
     expect(seen[3]).toContain('202612');
+  });
+
+  it('préfère le découpage mensuel sur une période de 15 jours', async () => {
+    // Le planificateur appelle syncSchedule toutes les 15 min : un
+    // découpage journalier sur 15 jours faisait 1 440 requêtes ESPN par
+    // jour pour rien. Deux appels mensuels suffisent.
+    const seen: string[] = [];
+    vi.spyOn(http, 'fetchJson').mockImplementation(async (url: string) => {
+      seen.push(String(url));
+      return { events: [] };
+    });
+
+    const from = new Date(Date.UTC(2026, 9, 22));
+    const to = new Date(Date.UTC(2026, 10, 6));
+    await fetchScoreboardRange(from, to, 'nba', 1000);
+
+    expect(seen).toHaveLength(2);
+    for (const url of seen) expect(url).toMatch(/dates=\d{6}&/);
+    expect(seen[0]).toContain('202610');
+    expect(seen[1]).toContain('202611');
   });
 
   it('renvoie un tableau vide si la période est inversée', async () => {

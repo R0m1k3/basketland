@@ -47,8 +47,13 @@ export function TeamBadge({
   );
 }
 
-/** Carte compacte d'un match, utilisée dans les listes. */
-export function MatchCard({ match }: { match: MatchDto }) {
+/**
+ * Carte compacte d'un match, utilisée dans les listes.
+ *
+ * `showDate` affiche la date à côté de l'heure : sur la page équipe, les
+ * matchs ne sont pas groupés par jour, l'heure seule était ambiguë.
+ */
+export function MatchCard({ match, showDate = false }: { match: MatchDto; showDate?: boolean }) {
   const playing = match.status === 'live';
   return (
     <Link
@@ -56,7 +61,10 @@ export function MatchCard({ match }: { match: MatchDto }) {
       className="block rounded-xl border border-slate-800 bg-[#111621] p-3 transition hover:border-slate-600 hover:bg-[#151b28]"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs tabular-nums text-slate-400">{match.time_paris}</span>
+        <span className="text-xs tabular-nums text-slate-400">
+          {showDate && <span className="mr-1.5">{match.day_paris}</span>}
+          {match.time_paris}
+        </span>
         <div className="flex items-center gap-2">
           {playing && match.clock_display && (
             <span className="text-xs tabular-nums text-red-400">

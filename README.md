@@ -126,7 +126,7 @@ manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `INGEST_TOKEN` | généré dans `/data/ingest_token` | Jeton d'accès à `POST /api/ingest` et aux jobs de synchronisation. |
-| `SYNC_WRITE_ORIGINS` | vide (toute origine acceptée) | Origines ou IP autorisées à modifier la calibration depuis le navigateur, séparées par des virgules (ex. `192.168.1.16,http://nas.local:3000`). Vide = non restreint, adapté à un usage sur le LAN. |
+| `SYNC_WRITE_ORIGINS` | vide | Origines autorisées à modifier la calibration depuis le navigateur, séparées par des virgules (ex. `192.168.1.16,http://nas.local:3000`). **Vide = seule l'origine du serveur est autorisée** (l'en-tête `Host`) : c'est ce qui bloque le CSRF en configuration par défaut. Une origine différente est refusée en 403. |
 | `ANALYSIS_MIN_INTERVAL_MS` | `900000` (15 min) | Délai minimum entre deux analyses automatiques d'un même match. Une analyse coûte 5 à 8 min de CPU : ce garde-fou évite de saturer le NAS. |
 | `ANALYSIS_MAX_PARALLEL` | `1` | Nombre d'analyses simultanées. |
 | `OCR_DISABLED` | — | `1` désactive la phase OCR. |
@@ -141,7 +141,7 @@ npm install
 npm run dev          # http://localhost:3000
 npm run build        # build de production
 npm run typecheck    # vérification TypeScript
-npm test             # 137 tests (dont 32 sur captures réelles)
+npm test             # 162 tests (dont 32 sur captures réelles)
 ```
 
 Le build utilise `output: 'standalone'` (comme l'image Docker). Le serveur
@@ -151,8 +151,14 @@ interfaces :
 
 ```bash
 npm run build
-HOSTNAME=0.0.0.0 npm start
+npm start
 ```
+
+`npm start` passe par `scripts/start-standalone.mjs`, qui recopie `.next/static`
+et `public` dans `.next/standalone` avant de lancer le serveur : sans cette
+étape, les pages étaient servies **sans leur CSS ni leur JavaScript** (404 sur
+`/_next/static/...`), donc sans lecteur vidéo ni calibration. Le Dockerfile
+fait la même chose à la construction de l'image.
 
 `npm run start:next` lance `next start` (non compatible avec `standalone` :
 Next.js le signale à chaque démarrage).

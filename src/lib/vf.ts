@@ -406,6 +406,12 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
     if (startBanner && list === primary) {
       finalText = `${startBanner} ${text}`;
       finalKind = 'banniere';
+      // La bannière est l'information la plus importante de la VF : elle
+      // doit survivre au plafonnement `maxLines`, qui retire les lignes de
+      // plus faible priorité. Sans ce relèvement, une ligne préfixée
+      // héritait de la priorité de l'action (60 pour un entre-deux, 70
+      // pour un panier) et pouvait être écartée.
+      priority = Math.max(priority, 100);
       startBanner = '';
     }
     list.push({
@@ -504,7 +510,10 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
           const qc = classifyPlay(q.event_type, q.text_en, !!q.scoring);
           if (qc === 'ft_made' || qc === 'ft_missed') {
             const gap = p.clock_sec - q.clock_sec;
-            if (q.actor === p.actor && q.period === p.period && gap >= 0 && gap <= MAX_GAP_SEC) {
+            // Sans acteur connu, on ne regroupe PAS : deux séries de
+            // joueurs différents (tireurs non renseignés par ESPN) seraient
+            // fusionnées en une seule, avec un nom vide et un ratio faux.
+            if (p.actor && q.actor === p.actor && q.period === p.period && gap >= 0 && gap <= MAX_GAP_SEC) {
               series.push(q);
               j++;
               continue;

@@ -218,6 +218,8 @@ CREATE TABLE ingest_log (
 ### Proxy vidéo — points critiques
 
 1. L'URL m3u8 expire (`expires=` timestamp). Chaque requête `master.m3u8` doit **re-résoudre** l'embed ok.ru pour obtenir une URL signée fraîche, puis la fetcher.
+
+   *Implémentation réelle* : la résolution est **mise en cache en mémoire** (45 s, et jamais si l'URL expire dans moins de 60 s). Re-résoudre à chaque requête amplifiait le trafic vers ok.ru et le risque de bannissement d'IP ; le cache garantit que l'URL servie n'est jamais expirée.
 2. La playlist maître contient des chemins **absolus** vers un host de segments différent. Il faut les réécrire vers `/api/video/[okId]/playlist.m3u8?...`.
 3. La playlist média contient des chemins **relatifs** (`MEDIUM00000.ts`). Il faut les résoudre et les réécrire vers `/api/video/[okId]/segment.ts?...`.
 4. Le proxy doit supporter les requêtes **Range** pour permettre le seeking.

@@ -328,7 +328,11 @@ function whereFor(f: MatchFilters): { sql: string; params: Params } {
 export function listMatches(f: MatchFilters = {}): MatchRow[] {
   const { sql, params } = whereFor(f);
   const order = f.order === 'desc' ? 'DESC' : 'ASC';
-  return all<MatchRow>(`SELECT * FROM matches WHERE ${sql} ORDER BY date_utc ${order}, id ${order} LIMIT $limit OFFSET $offset`, {
+  // `whereFor` peut ne produire AUCUNE clause (ex. `leagueAny` sans autre
+  // filtre) : un `WHERE` vide donne une erreur SQL. On n'écrit `WHERE` que
+  // s'il y a quelque chose à filtrer.
+  const where = sql ? `WHERE ${sql}` : '';
+  return all<MatchRow>(`SELECT * FROM matches ${where} ORDER BY date_utc ${order}, id ${order} LIMIT $limit OFFSET $offset`, {
     ...params,
     limit: Math.min(Math.max(f.limit ?? 50, 1), 1000),
     offset: Math.max(f.offset ?? 0, 0),
@@ -337,7 +341,8 @@ export function listMatches(f: MatchFilters = {}): MatchRow[] {
 
 export function countMatches(f: MatchFilters = {}): number {
   const { sql, params } = whereFor(f);
-  return one<{ n: number }>(`SELECT COUNT(*) AS n FROM matches WHERE ${sql}`, params)?.n ?? 0;
+  const where = sql ? `WHERE ${sql}` : '';
+  return one<{ n: number }>(`SELECT COUNT(*) AS n FROM matches ${where}`, params)?.n ?? 0;
 }
 
 export function listTeams(league = 'nba'): { abbr: string; name: string }[] {

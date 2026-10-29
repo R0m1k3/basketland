@@ -50,8 +50,27 @@ describe('requestOrigin', () => {
 });
 
 describe('isOriginAllowed', () => {
-  it('accepte tout si la liste est vide', () => {
-    expect(isOriginAllowed(req({ origin: 'http://nimportequoi:1234' }), [])).toBe(true);
+  it('refuse une origine étrangère même si la liste est vide (anti-CSRF)', () => {
+    // La liste vide n'autorise PLUS tout : elle autorise la seule origine
+    // du serveur. Un site tiers envoie un `Origin` différent → refusé.
+    // C'est ce qui bloquait le CSRF en configuration par défaut.
+    expect(isOriginAllowed(req({ origin: 'http://nimportequoi:1234' }), [])).toBe(false);
+  });
+
+  it('accepte la requête quand l’origine est celle de l’hôte servi', () => {
+    const r = new Request('http://nas.local:3000/api/matches/1/sync', {
+      method: 'POST',
+      headers: { origin: 'http://nas.local:3000', host: 'nas.local:3000' },
+    });
+    expect(isOriginAllowed(r, [])).toBe(true);
+  });
+
+  it('refuse une origine étrangère quand l’hôte servi est connu', () => {
+    const r = new Request('http://nas.local:3000/api/matches/1/sync', {
+      method: 'POST',
+      headers: { origin: 'https://evil.example', host: 'nas.local:3000' },
+    });
+    expect(isOriginAllowed(r, [])).toBe(false);
   });
 
   it('accepte une origine listée', () => {

@@ -99,26 +99,28 @@ export function requestOrigin(req: Request): string | null {
 
 /**
  * Vérifie qu'une requête vient d'une origine autorisée.
- * `allowed` vide = tout est accepté.
  *
- * L'hôte de la requête elle-même est toujours autorisé : une page servie
- * par l'application (même origine) doit pouvoir écrire, même si la
- * configuration ne liste pas explicitement son nom d'accès.
+ * Règle : l'origine de la requête doit être celle de l'hôte qui a servi la
+ * page (en-tête `Host`), ou figurer dans la liste blanche.
+ *
+ * - La liste vide n'autorise PLUS tout : elle autorise la seule origine
+ *   du serveur. Un site tiers envoie un `Origin` différent → refusé.
+ *   C'est ce qui bloque le CSRF en configuration par défaut.
+ * - `X-Forwarded-For` n'est PAS utilisé (forgeable par le client).
  */
 export function isOriginAllowed(req: Request, allowed: string[]): boolean {
-  if (!allowed.length) return true;
   const o = requestOrigin(req);
-  if (!o) return false;
+  // En-tête Host : l'hôte réellement servi (c'est l'origine de la page
+  // pour le navigateur).
+  const self = req.headers.get('host');
+  if (self && o && o === self) return true;
+  if (!o) {
+    // Aucune origine : requête non navigateur (curl, job interne).
+    // Elle est acceptée si la liste est vide, refusée sinon.
+    return allowed.length === 0;
+  }
   if (allowed.includes(o)) return true;
   // Autorise aussi l'IP seule quand l'origine est « ip:port ».
   const host = o.replace(/:\d+$/, '');
-  if (allowed.includes(host)) return true;
-  // L'hôte demandé par le client : la même origine que l'application.
-  try {
-    const self = new URL(req.url).host;
-    if (allowed.includes(self) || allowed.includes(self.replace(/:\d+$/, ''))) return true;
-  } catch {
-    /* URL relative : rien à comparer */
-  }
-  return false;
+  return allowed.includes(host);
 }

@@ -91,8 +91,15 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   // Exiger un Content-Type JSON : sans cela, une requête « simple » cross
   // origin (text/plain) passe le contrôle CORS du navigateur sans
   // preflight, et `req.json()` laparse quand même.
+  //
+  // On compare l'ESSENCE MIME, pas la chaîne complète :
+  // `text/plain;charset=application/json` contient « application/json »
+  // mais reste, pour le navigateur, une requête simple (essence
+  // `text/plain`) — donc sans preflight. Un site tiers pouvait ainsi
+  // décaler la VF d'une heure.
   const ctype = (req.headers.get('content-type') ?? '').toLowerCase();
-  if (!ctype.includes('application/json')) {
+  const essence = ctype.split(';')[0].trim();
+  if (essence !== 'application/json') {
     return error(415, 'Content-Type application/json requis');
   }
 
@@ -111,6 +118,12 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   } else if (body.action === 'nudge') {
     if (!finite(body.delta) || Math.abs(body.delta) > 3600) return error(400, 'delta invalide');
     if (finite(body.period)) {
+      // Le quart doit être un entier : une clé « 1.5 » était stockée telle
+      // quelle, et toute écriture ultérieure revérifiant les offsets de
+      // quart échouait ensuite en 400 (le quart devenait inutilisable).
+      if (!Number.isInteger(body.period) || body.period < 1 || body.period > 10) {
+        return error(400, 'période invalide');
+      }
       const q = { ...current.quarter_offsets };
       q[String(body.period)] = Math.round(((q[String(body.period)] ?? 0) + body.delta) * 100) / 100;
       saveSyncSettings(id, current.global_offset, q);

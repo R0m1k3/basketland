@@ -41,9 +41,12 @@ export default async function TeamPage({ params }: { params: Promise<{ abbr: str
   const finished = all.filter(isFinished);
   const withReplay = finished.filter((m) => m.video_available && m.video_ok_id);
 
-  // Bilan de la saison en cours : la base ne contient que 'preseason' et
-  // 'regular' (valeurs ESPN).
-  const regular = finished.filter((m) => m.season_type === 'regular');
+  // Bilan de la SAISON EN COURS uniquement : sans ce filtre, le bilan
+  // agrégeait toutes les saisons présentes dans l'historique.
+  // `season_type` vaut 'preseason', 'regular' ou 'post' (valeurs ESPN) :
+  // seuls les matchs de saison régulière entrent dans le bilan.
+  const currentSeason = Math.max(...all.map((m) => m.season));
+  const regular = finished.filter((m) => m.season === currentSeason && m.season_type === 'regular');
   let wins = 0;
   let losses = 0;
   for (const m of regular) {
@@ -86,7 +89,7 @@ export default async function TeamPage({ params }: { params: Promise<{ abbr: str
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             {upcoming.slice(0, 2).map((m) => (
-              <MatchCard key={m.id} match={toDto(m)} />
+              <MatchCard key={m.id} match={toDto(m)} showDate />
             ))}
           </div>
         )}
@@ -102,7 +105,7 @@ export default async function TeamPage({ params }: { params: Promise<{ abbr: str
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {finished.slice(0, 12).map((m) => (
-              <MatchCard key={m.id} match={toDto(m)} />
+              <MatchCard key={m.id} match={toDto(m)} showDate />
             ))}
           </div>
         )}
@@ -137,7 +140,7 @@ export default async function TeamPage({ params }: { params: Promise<{ abbr: str
                       {isHome ? 'vs' : '@'} {opponent}
                     </span>
                     <span className="tabular-nums text-slate-400">
-                      {theirs} – {mine}
+                      {mine} – {theirs}
                     </span>
                     <span className={won ? 'text-emerald-400' : 'text-rose-400'}>
                       {won ? 'V' : 'D'}

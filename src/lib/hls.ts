@@ -188,8 +188,18 @@ export function rewriteMediaPlaylist(
  * Réécrit l'attribut `URI="..."` d'une balise HLS vers le proxy vidéo.
  *
  * Seules les balises MEDIA (`#EXT-X-KEY`, `#EXT-X-MAP`) portent une URI.
- * Si l'URI est absolue, on la remplace par l'URL du proxy ; le proxy
- * descargar/relaye la ressource avec le bon `Referer` ok.ru.
+ *
+ * Deux formes à traiter, et les deux doivent passer par le proxy :
+ *  - URI absolue (`https://…/key.bin`) : le nom du fichier est extrait et
+ *    réécrit vers `/asset.ts` ; sans cela, le navigateur chargeait la clé
+ *    en direct depuis ok.ru, sans le `Referer` requis (403) et avec un
+ *    contrôle CORS qui échoue.
+ *  - URI relative (`init.mp4`) : elle serait résolue par le lecteur contre
+ *    l'URL de la playlist — c'est-à-dire contre le proxy — d'où un 404.
+ *    On la réécrit donc explicitement vers `/asset.ts`.
+ *
+ * Le dossier est celui de la variante, résolu côté serveur : la ressource
+ * est bien servie à côté des segments, pas dans le dossier de la clé.
  */
 function rewriteUriAttribute(
   line: string,
@@ -198,11 +208,9 @@ function rewriteUriAttribute(
 ): string {
   if (!/^#EXT-X-(KEY|MAP)/.test(line)) return line;
   return line.replace(/URI="([^"]+)"/, (_m, uri: string) => {
-    // URI déjà relative : conservée telle quelle (elle sera résolue par le
-    // lecteur contre l'URL de la playlist, qui est notre proxy).
-    if (!/^https?:\/\//i.test(uri)) return `URI="${uri}"`;
+    // On ne garde que le NOM du fichier : ni chemin, ni URL.
     const name = uri.split('/').pop() ?? '';
-    if (!SEGMENT_NAME_RE.test(name)) return `URI="${uri}"`;
-    return `URI="/api/video/${okId}/segment.ts?v=${encodeURIComponent(variantKey)}&s=${encodeURIComponent(name)}"`;
+    if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,8}$/.test(name)) return `URI="${uri}"`;
+    return `URI="/api/video/${okId}/asset.ts?v=${encodeURIComponent(variantKey)}&a=${encodeURIComponent(name)}"`;
   });
 }

@@ -319,13 +319,18 @@ export function startVideoAnalysis(matchId: number, opts: { withAudio?: boolean 
     report.push(`${n} sous-titres recalés`);
     return report.join(' ; ');
   })
-    .then(() => {
-      // Le cooldown n'est consommé qu'en cas de SUCCÈS : une analyse qui
-      // échoue en 2 s (ok.ru indisponible) ne doit pas bloquer toute
-      // nouvelle tentative pendant 15 min. Le cooldown est aussi compté
-      // depuis la FIN, pas depuis le début : une analyse de plus de 15 min
-      // ne peut ainsi pas être relancée immédiatement après sa fin.
-      analysisLast.set(matchId, Date.now());
+    .then((res) => {
+      // Le cooldown n'est consommé qu'en cas de SUCCÈS.
+      //
+      // `runLogged` n'ATTIRE PAS l'erreur : il la capture et renvoie
+      // `{ ok: false }`. Un `.then()` sans condition posait donc le cooldown
+      // même après un échec, et une analyse morte en 2 s (ok.ru indisponible)
+      // bloquait toute nouvelle tentative pendant 15 min.
+      //
+      // Le cooldown est aussi compté depuis la FIN, pas depuis le début : une
+      // analyse de plus de 15 min ne peut ainsi pas être relancée
+      // immédiatement après sa fin.
+      if (res.ok) analysisLast.set(matchId, Date.now());
     })
     .finally(() => analysis.delete(matchId));
   return { started: true };

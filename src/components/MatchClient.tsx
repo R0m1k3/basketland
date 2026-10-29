@@ -67,16 +67,22 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
   const offsetRef = useRef(offset);
   offsetRef.current = offset;
 
+  // Compteur de requête : deux réponses arrivant dans le désordre (deux
+  // clics rapides sur ±) doivent être ignorées si elles ne sont pas la
+  // dernière. Comparer l'offset courant à celui du serveur ne suffisait
+  // pas : la garde était satisfaite au moment de la réponse, donc la
+  // réponse désuète écrasait quand même l'état local.
+  const reqSeq = useRef(0);
+
   const reloadSubtitles = useCallback(() => {
+    const myId = ++reqSeq.current;
     fetch(`/api/matches/${matchId}/subtitles`)
       .then((r) => r.json())
       .then((d: { subtitles?: Subtitle[]; settings?: { global_offset?: number } }) => {
+        // Une réponse plus récente a déjà été traitée : on jette celle-ci.
+        if (myId !== reqSeq.current) return;
         setSubtitles(d.subtitles ?? []);
-        // On n'écrase l'offset que s'il est encore celui du serveur : sinon
-        // deux réponses dans le désordre (deux clics rapides sur ±) faisaient
-        // revenir l'affichage à une valeur déjà abandonnée, et le clic
-        // suivant repartait de cette valeur périmée.
-        setOffset((cur) => (cur === offsetRef.current ? (d.settings?.global_offset ?? cur) : cur));
+        setOffset((cur) => d.settings?.global_offset ?? cur);
       })
       .catch(() => undefined);
   }, [matchId]);

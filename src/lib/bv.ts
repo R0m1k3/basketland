@@ -130,14 +130,19 @@ export function matchListingEntry(entries: ListingEntry[], match: MatchLike): Li
 /**
  * Cache des pages de liste d'une saison, par saison.
  *
- * La clé est la SEASON seule, pas la date de référence : le balayage
- * remonte les pages jusqu'à dépasser la date cherchée, donc une même
- * saison_scrapée pour deux dates différentes produit (presque) le même
- * résultat. Avec une clé par date, le cache n'était JAMAIS réutilisé
- * (la date de référence change à chaque match) et la Map grossissait
- * sans borne, conservant 15 pages d'entrées par date consultée.
+ * La clé est la SEASON seule, pas la date de référence : la date de
+ * référence est calculée par match, donc une clé par date n'était jamais
+ * réutilisée et la Map grossissait sans borne.
+ *
+ * On mémorise aussi `oldestCovered` : la date la plus ancienne atteinte par
+ * le parcours. Le cache ne sert QUE s'il couvre la date demandée. Sans
+ * cette précaution, le cache tronquait la recherche : le premier appel
+ * (sur le match le plus récent) ne parcourait qu'une ou deux pages, le
+ * résultat partiel était mis en cache sous la clé de la saison, et tous
+ * les matchs plus anciens sortaient ensuite « replay non listé » pendant
+ * toute la durée de vie du cache.
  */
-const listingCache = new Map<number, { at: number; entries: ListingEntry[] }>();
+const listingCache = new Map<number, { at: number; entries: ListingEntry[]; oldestCovered: string }>();
 
 /** Durée de vie d'une entrée de cache (le contenu du site bouge lentement). */
 const LISTING_TTL_MS = 30 * 60_000;
@@ -145,21 +150,30 @@ const LISTING_TTL_MS = 30 * 60_000;
 /**
  * Parcourt les pages de la saison jusqu'à dépasser `oldestUsDate` (ou maxPages).
  *
- * Le résultat est mis en cache par saison : les pages parcourues sont les
- * mêmes pour toute la saison, seule la quantité parcourue change.
+ * Le résultat est mis en cache par saison, avec la date la plus ancienne
+ * couverte : un appel ultérieur dont la date est plus ancienne que cette
+ * couverture refait le parcours (au lieu de lire un cache tronqué).
  */
 export async function fetchSeasonListing(season: number, oldestUsDate: string, maxPages = 15): Promise<ListingEntry[]> {
   const c = listingCache.get(season);
-  if (c && Date.now() - c.at < LISTING_TTL_MS) return c.entries;
+  // Le cache est valide s'il est frais ET s'il couvre la date demandée
+  // (comparaison de dates ISO : l'ordre lexical est l'ordre chronologique).
+  if (c && Date.now() - c.at < LISTING_TTL_MS && c.oldestCovered <= oldestUsDate) return c.entries;
+
   const base = `${BV_BASE}/${seasonLabel(season)}`;
   const all = new Map<string, ListingEntry>();
   let maxPage = 1;
+  let oldestCovered = '';
   for (let page = 1; page <= Math.min(maxPage, maxPages); page++) {
     const html = await bvFetch(page === 1 ? base : `${base}?page${page}`);
     const parsed = parseListing(html);
     maxPage = Math.max(maxPage, parsed.maxPage);
     for (const e of parsed.entries) all.set(e.slug, e);
     const dates = parsed.entries.map((e) => e.date).filter(Boolean) as string[];
+    if (dates.length) {
+      const pageOldest = dates.reduce((a, b) => (a && a <= b ? a : b));
+      oldestCovered = oldestCovered && oldestCovered <= pageOldest ? oldestCovered : pageOldest;
+    }
     if (dates.length && dates.every((d) => d < oldestUsDate)) break;
   }
   const entries = [...all.values()];
@@ -169,7 +183,7 @@ export async function fetchSeasonListing(season: number, oldestUsDate: string, m
     const oldestKey = [...listingCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
     if (oldestKey !== undefined) listingCache.delete(oldestKey);
   }
-  listingCache.set(season, { at: Date.now(), entries });
+  listingCache.set(season, { at: Date.now(), entries, oldestCovered: oldestCovered || oldestUsDate });
   return entries;
 }
 
