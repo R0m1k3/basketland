@@ -3,12 +3,14 @@
  *
  * 1. Listes : /2026-27, /2026-27?page2… → liens contenant `-vs-` et `nba-full-game-replay`.
  * 2. Page match : blocs « Server #N (LABEL) » suivis d'un lien <a href>.
- * 3. Page cible du Server #1 : PREMIER <iframe src="//ok.ru/videoembed/<id>"> = la bonne vidéo.
+ * 3. Page cible de chaque serveur : PREMIER <iframe src="//ok.ru/videoembed/<id>"> = la bonne vidéo.
+ *    On essaie tous les serveurs (pas seulement le #1) et on retient le premier
+ *    embed lisible (HLS, sinon MP4) d'un match complet.
  *
  * User-Agent navigateur obligatoire + 1 requête / 2 s.
  */
 import { createRateLimiter, fetchText } from './http';
-import { fetchOkEmbed } from './okru';
+import { fetchOkEmbed, type OkEmbedInfo } from './okru';
 import { seasonLabel } from './time';
 
 export const BV_BASE = 'https://basketball-video.com';
@@ -43,6 +45,14 @@ export function parseServerBlocks(html: string): ServerBlock[] {
 export function parseFirstOkIframe(html: string): string | null {
   const re = /<iframe\b[^>]*\bsrc\s*=\s*["']((?:https?:)?\/\/(?:www\.)?ok\.ru\/videoembed\/(\d+)[^"']*)["']/i;
   return html.match(re)?.[2] ?? null;
+}
+
+/** Tous les iframes ok.ru de la page, dans l'ordre, sans doublon. */
+export function parseOkIframes(html: string): string[] {
+  const re = /<iframe\b[^>]*\bsrc\s*=\s*["']((?:https?:)?\/\/(?:www\.)?ok\.ru\/videoembed\/(\d+)[^"']*)["']/gi;
+  const out: string[] = [];
+  for (const m of html.matchAll(re)) if (!out.includes(m[2])) out.push(m[2]);
+  return out;
 }
 
 export interface ListingEntry {
@@ -197,22 +207,71 @@ export interface ReplayLookup {
   okId: string | null;
   duration: number | null;
   available: boolean;
+  /** Type de flux lisible retenu : HLS (traitement ok.ru terminé) ou MP4 progressif seul. */
+  kind: 'hls' | 'mp4' | null;
   reason?: string;
 }
 
 /** Durée minimale pour considérer un match complet (vs teaser). */
 export const FULL_GAME_MIN_SEC = 3600;
 
-export async function resolveReplayFromPage(entryUrl: string): Promise<{ okId: string | null; server: ServerBlock | null }> {
+/** Flux lisible d'un embed : HLS si présent, sinon MP4 progressif, sinon rien. */
+export function embedKind(embed: Pick<OkEmbedInfo, 'hlsManifestUrl' | 'mp4'>): 'hls' | 'mp4' | null {
+  if (embed.hlsManifestUrl) return 'hls';
+  if (embed.mp4.length) return 'mp4';
+  return null;
+}
+
+/**
+ * Identifiants ok.ru candidats d'une page de match, du plus sûr au moins sûr.
+ *
+ * Ordre : le PREMIER iframe de chaque serveur (Server #1, #2, …) — c'est
+ * la règle validée, le premier iframe d'une page cible est le bon match —,
+ * puis les iframes suivants de ces pages et ceux de la page de match. Les
+ * iframes secondaires ne sont essayés qu'en dernier recours : sur une page
+ * cible partagée, ils peuvent appartenir à un autre match (le seuil de
+ * durée écarte au moins les teasers).
+ *
+ * Générateur paresseux : une page cible n'est téléchargée (au rythme du
+ * limiteur) que si les candidats précédents ont échoué.
+ */
+export async function* replayCandidates(entryUrl: string): AsyncGenerator<string> {
   const page = await bvFetch(entryUrl);
   const servers = parseServerBlocks(page);
-  const server = servers.find((s) => s.n === 1) ?? servers.find((s) => /^ok$/i.test(s.label)) ?? servers[0] ?? null;
-  if (!server) {
-    // Certaines pages embarquent directement l'iframe.
-    return { okId: parseFirstOkIframe(page), server: null };
+  const direct = parseOkIframes(page);
+  const seen = new Set<string>();
+  const later: string[] = [];
+  // Sans bloc « Server », certaines pages embarquent directement l'iframe.
+  if (!servers.length && direct.length) {
+    seen.add(direct[0]);
+    yield direct[0];
   }
-  const target = await bvFetch(new URL(server.href, entryUrl).toString());
-  return { okId: parseFirstOkIframe(target), server };
+  for (const server of servers) {
+    let url: URL;
+    try {
+      url = new URL(server.href, entryUrl);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+    let ids: string[];
+    try {
+      ids = parseOkIframes(await bvFetch(url.toString()));
+    } catch {
+      continue; // serveur mort : on passe au suivant
+    }
+    const [first, ...rest] = ids.filter((id) => !seen.has(id));
+    later.push(...rest);
+    if (first) {
+      seen.add(first);
+      yield first;
+    }
+  }
+  for (const id of [...later, ...direct]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    yield id;
+  }
 }
 
 export async function findReplay(match: MatchLike & { season: number }): Promise<ReplayLookup> {
@@ -220,17 +279,28 @@ export async function findReplay(match: MatchLike & { season: number }): Promise
   const oldest = new Date(Date.parse(`${usDate}T00:00:00Z`) - 2 * 86400_000).toISOString().slice(0, 10);
   const entries = await fetchSeasonListing(match.season, oldest);
   const entry = matchListingEntry(entries, match);
-  if (!entry) return { slug: null, okId: null, duration: null, available: false, reason: 'replay non listé' };
-  const { okId } = await resolveReplayFromPage(entry.url);
-  if (!okId) return { slug: entry.slug, okId: null, duration: null, available: false, reason: 'iframe ok.ru introuvable' };
-  const embed = await fetchOkEmbed(okId);
-  const duration = embed.duration;
-  const available = !!embed.hlsManifestUrl && (duration ?? 0) >= FULL_GAME_MIN_SEC;
-  return {
-    slug: entry.slug,
-    okId,
-    duration,
-    available,
-    reason: available ? undefined : duration && duration < FULL_GAME_MIN_SEC ? 'vidéo trop courte (teaser)' : 'flux indisponible',
-  };
+  if (!entry) return { slug: null, okId: null, duration: null, available: false, kind: null, reason: 'replay non listé' };
+  // Premier candidat rencontré : rapporté (okId, durée, raison) si aucun n'est lisible.
+  let first: { okId: string; duration: number | null; reason: string } | null = null;
+  for await (const okId of replayCandidates(entry.url)) {
+    let embed: OkEmbedInfo;
+    try {
+      embed = await fetchOkEmbed(okId);
+    } catch (e) {
+      first ??= { okId, duration: null, reason: `embed ok.ru illisible (${(e as Error).message})` };
+      continue;
+    }
+    const kind = embedKind(embed);
+    const duration = embed.duration;
+    if (kind && (duration ?? 0) >= FULL_GAME_MIN_SEC) {
+      return { slug: entry.slug, okId, duration, available: true, kind };
+    }
+    first ??= {
+      okId,
+      duration,
+      reason: duration && duration < FULL_GAME_MIN_SEC ? 'vidéo trop courte (teaser)' : 'flux indisponible',
+    };
+  }
+  if (!first) return { slug: entry.slug, okId: null, duration: null, available: false, kind: null, reason: 'iframe ok.ru introuvable' };
+  return { slug: entry.slug, okId: first.okId, duration: first.duration, available: false, kind: null, reason: first.reason };
 }
