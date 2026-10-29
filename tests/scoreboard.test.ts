@@ -90,6 +90,7 @@ describe('voteScoreboardRegion', () => {
     period: strong ? 2 : null,
     clock_sec: 400,
     rect: { x, y, w: 0.1, h: 0.03 },
+    clockRect: { x: x + 0.05, y, w: 0.05, h: 0.03 },
     textH: 0.03,
     scores: [],
     scoreRects: [],
