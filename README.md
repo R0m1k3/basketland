@@ -39,21 +39,19 @@ Dans **Unraid → Terminal**, collez :
 
 ```bash
 mkdir -p /mnt/user/appdata/basketland && \
-chown -R 1000:1000 /mnt/user/appdata/basketland && \
 docker run -d \
   --name basketland \
   --restart unless-stopped \
-  -p 3000:3000 \
+  -p 3012:3012 \
   -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
 
-> Le `chown 1000:1000` est nécessaire : le conteneur tourne avec
-> l'utilisateur `node` (uid 1000), et un volume monté sur `/data` remplace
-> le répertoire de l'image — le `chown` fait au build est donc perdu. Sans
-> lui, le dossier appartient à `root` et l'application ne peut pas créer
-> sa base SQLite.
+> Les droits du volume sont gérés automatiquement : au démarrage, le
+> conteneur rend `/data` à l'utilisateur `node` (uid 1000) puis lâche les
+> privilèges root. Aucun `chown` manuel n'est nécessaire, même si le dossier
+> hôte appartient à `root` ou à `nobody:users`.
 
 L'image est **publique** : aucun jeton n'est nécessaire. Le premier
 tirage télécharge l'image (une à deux minutes), puis le conteneur démarre.
@@ -62,13 +60,13 @@ Vérification :
 
 ```bash
 docker logs -f basketland          # doit afficher « Ready »
-curl -s http://localhost:3000/api/health
+curl -s http://localhost:3012/api/health
 ```
 
-Puis l'application est accessible sur `http://<IP-DU-NAS>:3000`.
+Puis l'application est accessible sur `http://<IP-DU-NAS>:3012`.
 
-> Si le port 3000 est déjà pris sur le NAS, remplacez `-p 3000:3000` par
-> `-p 3010:3000` et accédez à `http://<IP-DU-NAS>:3010`.
+> Si le port 3012 est déjà pris sur le NAS, remplacez `-p 3012:3012` par
+> `-p 3013:3012` et accédez à `http://<IP-DU-NAS>:3013`.
 
 ### Option B — l'interface web
 
@@ -80,7 +78,7 @@ Dans Unraid : **Docker → Add Container**
 | Repository | `ghcr.io/r0m1k3/basketland` |
 | Repository : Access Token | *(vide — l'image est publique)* |
 | Network Type | `bridge` |
-| Port (HTTP) | `3000` |
+| Port (HTTP) | `3012` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
@@ -107,7 +105,7 @@ services:
     container_name: basketland
     restart: unless-stopped
     ports:
-      - '3000:3000'
+      - '3012:3012'
     environment:
       TZ: Europe/Paris
     volumes:
@@ -123,7 +121,7 @@ push sur `main`. Pour reprendre la nouvelle version sur le NAS :
 docker pull ghcr.io/r0m1k3/basketland:latest && \
 docker stop basketland && docker rm basketland && \
 docker run -d --name basketland --restart unless-stopped \
-  -p 3000:3000 -e TZ=Europe/Paris \
+  -p 3012:3012 -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
@@ -142,7 +140,7 @@ lancement se fait manuellement :
 
 ```bash
 # Dans le conteneur (ou via l'API d'ingestion)
-curl -X POST http://localhost:3000/api/ingest \
+curl -X POST http://localhost:3012/api/ingest \
   -H "Authorization: Bearer <INGEST_TOKEN>" \
   -H 'Content-Type: application/json' \
   -d '{"jobs":["sync-schedule","sync-stats","sync-videos"]}'
@@ -193,7 +191,7 @@ manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `INGEST_TOKEN` | généré dans `/data/ingest_token` | Jeton d'accès à `POST /api/ingest` et aux jobs de synchronisation. |
-| `SYNC_WRITE_ORIGINS` | vide | Origines autorisées à modifier la calibration depuis le navigateur, séparées par des virgules (ex. `192.168.1.16,http://nas.local:3000`). **Vide = seule l'origine du serveur est autorisée** (l'en-tête `Host`) : c'est ce qui bloque le CSRF en configuration par défaut. Une origine différente est refusée en 403. |
+| `SYNC_WRITE_ORIGINS` | vide | Origines autorisées à modifier la calibration depuis le navigateur, séparées par des virgules (ex. `192.168.1.16,http://nas.local:3012`). **Vide = seule l'origine du serveur est autorisée** (l'en-tête `Host`) : c'est ce qui bloque le CSRF en configuration par défaut. Une origine différente est refusée en 403. |
 | `ANALYSIS_MIN_INTERVAL_MS` | `900000` (15 min) | Délai minimum entre deux analyses automatiques d'un même match. Une analyse coûte 5 à 8 min de CPU : ce garde-fou évite de saturer le NAS. |
 | `ANALYSIS_MAX_PARALLEL` | `1` | Nombre d'analyses simultanées. |
 | `OCR_DISABLED` | — | `1` désactive la phase OCR. |
@@ -205,7 +203,7 @@ manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
 
 ```bash
 npm install
-npm run dev          # http://localhost:3000
+npm run dev          # http://localhost:3012
 npm run build        # build de production
 npm run typecheck    # vérification TypeScript
 npm test             # 162 tests (dont 32 sur captures réelles)
