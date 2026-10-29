@@ -258,7 +258,7 @@ La VF doit rester **courte** (une ligne par action notable) : les actions à 3 p
    - Bandeau : équipes, score, statut, date **heure de Paris**, salle, diffusion TV.
    - Lecteur vidéo HLS (hls.js) si replay disponible, sinon message « replay en attente ».
    - **Panneau de sous-titres français synchronisé** : la ligne active s'affiche sur la vidéo ; lecture/pause synchronisée ; la VF défile avec la vidéo.
-   - **Bouton « Statistiques du match »** : actif uniquement si le match est terminé ; ouvre un panneau avec boxscore équipe + joueurs.
+   - **Section « Statistiques du match »** : n'apparaît qu'une fois le match terminé ; elle affiche le boxscore équipe + joueurs. Sur un match en cours, un message indique que les statistiques détaillées seront disponibles à la fin.
    - Si le match est en cours : score live + période + chrono rafraîchis.
 4. **`/equipes/[abbr]`** — page équipe : prochain match, derniers résultats, replays.
 5. **`/classement`** — classement NBA.

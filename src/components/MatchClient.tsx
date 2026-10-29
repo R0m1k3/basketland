@@ -39,7 +39,6 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
   const [quarterOffsets, setQuarterOffsets] = useState<Record<string, number>>({});
   const [anchors, setAnchors] = useState<Anchor[]>([]);
   const [analysis, setAnalysis] = useState<string>('');
-  const [showStats, setShowStats] = useState(false);
   const [showCalibration, setShowCalibration] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [message, setMessage] = useState('');
@@ -239,13 +238,13 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
       )}
 
       <div className="mt-4 flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={() => setShowStats((v) => !v)}
-          className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          {showStats ? 'Masquer les statistiques' : 'Statistiques du match'}
-        </button>
+        {/*
+          Le panneau de statistiques est rendu par la page, qui ne l'affiche
+          que si le match est terminé (`isFinal`). Ce bouton ne faisait que
+          changer son propre libellé (`showStats` n'était jamais lu) : il
+          était donc visible et actif sur un match en cours, sans effet.
+          Il est retiré au profit du seul panneau conditionné.
+        */}
         {masterUrl && (
           <button
             type="button"
