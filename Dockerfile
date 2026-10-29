@@ -22,11 +22,10 @@ ENV TZ=Europe/Paris
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# `node:sqlite` est intégré à Node 22 : aucune compilation native, aucun
-# toolchain dans l'image finale. C'est le choix qui garde l'image slim.
-RUN groupadd --system --gid 1001 nodejs \
- && useradd --system --uid 1001 --gid nodejs basketland
-
+# L'image officielle `node` fournit déjà l'utilisateur `node` (uid 1000) :
+# on l'utilise plutôt que d'en créer un — `chown user:group` exige que le
+# premier soit bien un utilisateur, sinon chown échoue.
+#
 # ffmpeg sert uniquement à l'analyse audio (détection des coupures) pour
 # calibrer la synchronisation des sous-titres. Il est optionnel : l'appli
 # fonctionne sans, et l'utilisateur peut recaler la VF à la main.
@@ -34,13 +33,13 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder --chown=nodejs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nodejs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nodejs:nodejs /app/public ./public
-RUN mkdir -p /data && chown nodejs:nodejs /data
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
+RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]
 
-USER nodejs
+USER node
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
