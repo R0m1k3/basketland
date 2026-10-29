@@ -2,7 +2,7 @@
 
 Application web de replays NBA, conteneurisée pour Unraid : calendrier complet en heure de Paris, replays vidéo en streaming, statistiques de match et de joueurs, et **sous-titres français synchronisés** sur l'audio original de la vidéo.
 
-> **Statut : en cours de construction.** La spécification technique complète et validée est dans [`docs/SPEC.md`](docs/SPEC.md).
+> **Statut : fonctionnel.** Calendrier, replays, statistiques et VF française sont opérationnels. La spécification technique complète et validée est dans [`docs/SPEC.md`](docs/SPEC.md).
 
 ## Ce que fait l'application
 
@@ -12,7 +12,7 @@ Application web de replays NBA, conteneurisée pour Unraid : calendrier complet 
 | **Replays** | Streaming HLS des matchs terminés, sans téléchargement, depuis les sources de replays publiques. |
 | **Statistiques** | Bouton « Statistiques du match » actif **uniquement** quand le match est terminé : boxscore des deux équipes, lignes de chaque joueur (MIN, PTS, FG, 3PT, FT, REB, AST, TO, STL, BLK, OREB, DREB, PF, ±), leaders du match. |
 | **VF française synchronisée** | Sous-titres en français calés sur la vidéo, générés à partir du play-by-play et alignés sur l'audio original. Export WebVTT. Ajustement manuel du décalage possible. |
-| **Pages équipe / classement** | Prochain match, derniers résultats et replays par équipe ; classement NBA. |
+| **Classement** | Classement NBA par conférence. |
 
 ## Architecture
 
