@@ -129,6 +129,11 @@ export interface OkStream {
    * lisible tant qu'ok.ru n'a produit que la qualité « mobile ».
    */
   mp4: { name: string; url: string }[];
+  /**
+   * ok.ru annonce un HLS mais sa playlist n'a pas pu être lue (erreur réseau
+   * passagère) : le flux est servi en MP4 en attendant, et retenté vite.
+   */
+  hlsError?: boolean;
   duration: number | null;
   poster: string | null;
 }
@@ -155,6 +160,13 @@ export const MP4_ONLY_REFRESH_MS = 10 * 60_000;
  * doivent déclencher qu'UNE résolution.
  */
 export const FORCE_DEDUP_MS = 10_000;
+/**
+ * Un HLS annoncé mais momentanément illisible (`hlsError`) est retenté
+ * après ce délai, et non après MP4_ONLY_REFRESH_MS : sans cela, une seule
+ * erreur réseau faisait servir la qualité MP4 (ou des 404 au lecteur HLS)
+ * pendant dix minutes.
+ */
+export const HLS_ERROR_RETRY_MS = 30_000;
 /** Durée de vie supposée quand l'URL ne porte pas de champ `expires`. */
 const DEFAULT_LIFETIME_MS = 3600_000;
 
@@ -188,6 +200,7 @@ async function doResolve(okId: string): Promise<OkStream> {
   let masterText = '';
   let masterUrl = '';
   let variants: Variant[] = [];
+  let hlsError = false;
   if (embed.hlsManifestUrl) {
     try {
       const res = await fetchWithRetry(embed.hlsManifestUrl, { headers: OK_HEADERS });
@@ -198,6 +211,7 @@ async function doResolve(okId: string): Promise<OkStream> {
     } catch (e) {
       // Sans MP4 de repli, un master illisible est fatal ; sinon on sert le MP4.
       if (!embed.mp4.length) throw e;
+      hlsError = true;
       masterText = '';
       masterUrl = '';
       variants = [];
@@ -214,6 +228,7 @@ async function doResolve(okId: string): Promise<OkStream> {
     fetchedAt: Date.now(),
     variants,
     mp4: embed.mp4,
+    hlsError,
     duration: embed.duration,
     poster: embed.poster,
   };
@@ -250,6 +265,7 @@ function startResolve(okId: string, e: StreamEntry): Promise<OkStream> {
 
 function shouldRefresh(s: OkStream, now: number): boolean {
   if (s.expiresAt - now < STREAM_REFRESH_BEFORE_MS) return true;
+  if (s.hlsError) return now - s.fetchedAt > HLS_ERROR_RETRY_MS;
   return !s.masterText && now - s.fetchedAt > MP4_ONLY_REFRESH_MS;
 }
 

@@ -273,6 +273,16 @@ describe('segments : cache LRU + préchargement', () => {
     expect(embedCalls()).toBe(before + 1);
   });
 
+  it('flux en cache sans HLS (playlist illisible au dernier passage) : re-résolution au lieu d\'un 404', async () => {
+    embed = () => embedHtml({ videos: [{ name: 'sd', url: signedMp4('sd', exp) }] });
+    await expect(proxiedMaster(OK_ID)).rejects.toMatchObject({ status: 404 });
+    embed = () => embedHtml({ hls: signedMaster(exp), videos: [{ name: 'sd', url: signedMp4('sd', exp) }] });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 15_000);
+    const r = await proxiedSegment(OK_ID, 'sd', 'MEDIUM00001.ts', null);
+    expect(await body(r)).toEqual(segBytes(1));
+  });
+
   it('refuse un nom de segment qui n\'est pas un simple fichier .ts', async () => {
     await expect(proxiedSegment(OK_ID, 'sd', '../x.ts', null)).rejects.toMatchObject({ status: 400 });
     await expect(proxiedSegment(OK_ID, 'sd', 'https://evil/x.ts', null)).rejects.toMatchObject({ status: 400 });

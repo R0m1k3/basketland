@@ -72,11 +72,13 @@ describe('resolveOkStream', () => {
   let masterCalls: number;
   let embed: () => string;
   let exp: number;
+  let masterStatus: number;
 
   beforeEach(() => {
     clearOkStreamCache();
     embedCalls = 0;
     masterCalls = 0;
+    masterStatus = 200;
     exp = Date.now() + 24 * 3600_000;
     embed = () => embedHtml({ hls: signedMaster(exp), videos: [{ name: 'sd', url: signedMp4('sd', exp) }] });
     vi.stubGlobal(
@@ -91,7 +93,7 @@ describe('resolveOkStream', () => {
         }
         if (url.includes('video.m3u8')) {
           masterCalls++;
-          return new Response(MASTER, { status: 200 });
+          return masterStatus === 200 ? new Response(MASTER, { status: 200 }) : new Response('', { status: masterStatus });
         }
         return new Response('nope', { status: 404 });
       }),
@@ -181,6 +183,23 @@ describe('resolveOkStream', () => {
     const s = await resolveOkStream(OK_ID);
     expect(s).not.toBe(first);
     expect(s.expiresAt).toBe(exp2);
+  });
+
+  it('HLS momentanément illisible : MP4 en attendant, HLS retenté après 30 s (pas 10 min)', async () => {
+    masterStatus = 403;
+    const degraded = await resolveOkStream(OK_ID);
+    expect(degraded.hlsError).toBe(true);
+    expect(degraded.variants).toEqual([]);
+    masterStatus = 200;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 5_000);
+    expect(await resolveOkStream(OK_ID)).toBe(degraded);
+    vi.setSystemTime(Date.now() + 30_000);
+    expect(await resolveOkStream(OK_ID)).toBe(degraded); // servi pendant le rafraîchissement en fond
+    await new Promise((r) => setTimeout(r, 20));
+    const healed = await resolveOkStream(OK_ID);
+    expect(healed.hlsError).toBe(false);
+    expect(healed.variants.map((v) => v.key)).toEqual(['sd', 'lowest']);
   });
 
   it('un rafraîchissement en échec ne fait pas perdre un flux encore valable', async () => {

@@ -84,8 +84,15 @@ export async function proxiedMaster(okId: string): Promise<string> {
 }
 
 async function variantFor(okId: string, key: string | null, force = false): Promise<{ stream: OkStream; variant: Variant }> {
-  const stream = await resolveOkStream(okId, { force });
-  const variant = pickVariant(stream, key);
+  let stream = await resolveOkStream(okId, { force });
+  let variant = pickVariant(stream, key);
+  // Variante absente d'un flux en cache sans HLS (playlist momentanément
+  // illisible lors de la dernière résolution) : on re-résout une fois
+  // avant d'échouer, sinon une lecture en cours tombait en 404.
+  if (!variant && !force && !stream.masterText) {
+    stream = await resolveOkStream(okId, { force: true });
+    variant = pickVariant(stream, key);
+  }
   if (!variant) throw new ProxyError(404, `variante inconnue: ${key}`);
   return { stream, variant };
 }
