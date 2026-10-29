@@ -197,6 +197,12 @@ et `public` dans `.next/standalone` avant de lancer le serveur : sans cette
 `/_next/static/...`), donc sans lecteur vidéo ni calibration. Le Dockerfile
 fait la même chose à la construction de l'image.
 
+> Après un `npm run build`, il faut **relancer** le serveur : une instance
+> déjà lancée continue de servir l'ancien `.next/static` et renvoie `400` sur
+> les CSS/JS (le fichier n'existe plus, son nom a changé avec le build).
+> C'est le symptôme d'une instance plus ancienne que le build, pas d'un bug
+> de l'application.
+
 `npm run start:next` lance `next start` (non compatible avec `standalone` :
 Next.js le signale à chaque démarrage).
 
