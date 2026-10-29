@@ -6,6 +6,7 @@
  * L'URL expire : on ne la stocke jamais, on la ré-résout à la demande (cache mémoire court).
  */
 import { BROWSER_UA, decodeHtmlEntities, fetchText, fetchWithRetry, HttpError } from './http';
+import { parseMasterVariants as parseMasterVariantsHls } from './hls';
 
 export const OK_REFERER = 'https://ok.ru/';
 export const OK_HEADERS = { Referer: OK_REFERER, 'User-Agent': BROWSER_UA, Origin: 'https://ok.ru' };
@@ -92,27 +93,21 @@ const g = globalThis as unknown as { __okCache?: Map<string, Promise<OkStream>>;
 const cache = (g.__okCache ??= new Map());
 const cacheAt = (g.__okCacheAt ??= new Map());
 
-/** Parse la playlist maître : variantes avec QUALITY/BANDWIDTH/RESOLUTION. */
+/**
+ * Parse les variantes d'une playlist maîtresse ok.ru.
+ *
+ * Delegue au parseur canonique de `hls.ts` : les deux chemins (réécriture de
+ * la playlist pour le proxy et liste des variantes pour l'API) doivent
+ * produire EXACTEMENT les mêmes clés, sinon le client demanderait une
+ * qualité `sd` que le serveur ne retrouve pas.
+ */
 export function parseMasterVariants(text: string, baseUrl: string): Variant[] {
-  const lines = text.split(/\r?\n/);
-  const out: Variant[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i].trim();
-    if (!l.startsWith('#EXT-X-STREAM-INF')) continue;
-    let j = i + 1;
-    while (j < lines.length && (lines[j].trim() === '' || lines[j].trim().startsWith('#'))) j++;
-    if (j >= lines.length) break;
-    const uri = lines[j].trim();
-    const q = l.match(/QUALITY=([^,]+)/)?.[1];
-    out.push({
-      key: (q ?? `v${out.length}`).replace(/[^a-zA-Z0-9_-]/g, ''),
-      bandwidth: Number(l.match(/[^-]BANDWIDTH=(\d+)/)?.[1] ?? 0),
-      resolution: l.match(/RESOLUTION=([^,]+)/)?.[1] ?? '',
-      url: new URL(uri, baseUrl).toString(),
-    });
-    i = j;
-  }
-  return out;
+  return parseMasterVariantsHls(text, baseUrl).map((v) => ({
+    key: v.key,
+    bandwidth: Number(v.inf.match(/[^-]BANDWIDTH=(\d+)/)?.[1] ?? 0),
+    resolution: v.inf.match(/RESOLUTION=([^,]+)/)?.[1] ?? '',
+    url: v.url,
+  }));
 }
 
 async function doResolve(okId: string): Promise<OkStream> {

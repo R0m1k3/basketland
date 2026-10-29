@@ -141,8 +141,21 @@ npm install
 npm run dev          # http://localhost:3000
 npm run build        # build de production
 npm run typecheck    # vérification TypeScript
-npm test             # 100 tests (dont 27 sur captures réelles)
+npm test             # 137 tests (dont 32 sur captures réelles)
 ```
+
+Le build utilise `output: 'standalone'` (comme l'image Docker). Le serveur
+standalone est donc lancé par `npm start` — et **il exige `HOSTNAME=0.0.0.0`**,
+sans quoi il écoute sur le nom d'hôte de la machine au lieu de toutes les
+interfaces :
+
+```bash
+npm run build
+HOSTNAME=0.0.0.0 npm start
+```
+
+`npm run start:next` lance `next start` (non compatible avec `standalone` :
+Next.js le signale à chaque démarrage).
 
 ## Documentation
 

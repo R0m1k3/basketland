@@ -251,16 +251,44 @@ export function grabFrame(playlistUrl: string, t: number, o: FrameGrabOptions, t
   });
 }
 
-/** Applique un filtre ffmpeg à une image PNG en mémoire. */
-export function filterImage(png: Buffer, vf: string): Promise<Buffer> {
+/**
+ * Applique un filtre ffmpeg à une image PNG en mémoire.
+ *
+ * Timeout obligatoire : sans lui, un ffmpeg bloqué garderait le slot
+ * d'analyse occupé indéfiniment (`analysis.delete` n'est jamais atteint) et
+ * empêcherait toute nouvelle analyse jusqu'au redémarrage du conteneur.
+ */
+export function filterImage(png: Buffer, vf: string, timeoutMs = 20_000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const ff = spawn(process.env.FFMPEG_PATH || 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'png_pipe', '-i', 'pipe:0', '-vf', vf, '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const chunks: Buffer[] = [];
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ff.kill('SIGKILL');
+      reject(new Error(`ffmpeg filtre : timeout ${timeoutMs} ms`));
+    }, timeoutMs);
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
     ff.stdout.on('data', (b: Buffer) => chunks.push(b));
-    ff.on('error', reject);
-    ff.on('close', (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`ffmpeg filtre code ${code}`))));
+    ff.on('error', (e) => done(() => reject(e)));
+    ff.on('close', (code) =>
+      done(() =>
+        code === 0
+          ? resolve(Buffer.concat(chunks))
+          : reject(new Error(`ffmpeg filtre code ${code}`)),
+      ),
+    );
+    ff.stdin.on('error', () => {
+      /* le processus peut avoir déjà été tué : la gestion est faite par close */
+    });
     ff.stdin.end(png);
   });
 }
@@ -303,7 +331,15 @@ export interface OcrScanOptions extends FrameGrabOptions {
   onProgress?: (done: number, total: number) => void;
 }
 
-/** Balaye la vidéo et renvoie les observations OCR brutes. */
+/**
+ * Balaye la vidéo et renvoie les observations OCR brutes.
+ *
+ * L'URL signée est résolue une seule fois pour tout le balayage : mesuré sur
+ * ok.ru, la signature vit ~24 h, alors qu'un scan complet prend 30 à 60 min.
+ * Aucune re-résolution n'est donc nécessaire en cours de route. Si un jour la
+ * durée de vie de la signature diminue, il faudra re-résoudre la playlist
+ * toutes les N frames.
+ */
 export async function scanVideoClock(playlistUrl: string, o: OcrScanOptions): Promise<FrameObservation[]> {
   // Pas minimum de 10 s : `OCR_STEP_SEC=0` provoquerait une boucle infinie
   // d'extraction de frames jusqu'à saturation de la mémoire.

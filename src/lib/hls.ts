@@ -9,31 +9,8 @@
  *  - les segments exigent l'en-tête `Referer: https://ok.ru/`.
  */
 
-/**
- * Hôtes autorisés pour les segments (anti-SSRF).
- */
-const ALLOWED_MEDIA_HOST_RE = /\.(vkuser\.net|okcdn\.ru|mycdn\.me|ok\.ru|vk\.com|userapi\.com|vkuseraudio\.net|vkuservideo\.net)$/i;
-
 /** Un segment doit être un nom de fichier .ts (souvent MEDIA/MEDIUM + index). */
 const SEGMENT_NAME_RE = /^[A-Za-z0-9_-]+\.ts$/;
-
-/**
- * Vérifie qu'une URL de segment pointe vers un hôte de média autorisé.
- * Empêche un usage SSRF via le paramètre `s`.
- *
- * Le schéma est exigé à `https` : `http:` permettrait de viser un service
- * interne en clair, et surtout de contourner les contrôles du proxy
- * applicatif (HSTS, redirections).
- */
-export function isAllowedSegmentUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    if (u.protocol !== 'https:') return false;
-    return ALLOWED_MEDIA_HOST_RE.test(u.hostname);
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Une playlist HLS valide commence par #EXTM3U et contient des segments.
@@ -78,25 +55,89 @@ export function resolveSegmentUrl(segment: string, variantUrl: string): string {
  * un index positionnel : c'est ce que `pickVariant` attend côté serveur.
  * Les URL signées ne transitent jamais par le client (elles expirent).
  */
+/**
+ * Entrée de variante analysée dans une playlist maîtresse.
+ *
+ * `key` est la clé de qualité utilisée dans l'URL du proxy
+ * (`?v=<key>`) : c'est le QUALITY de la balise `#EXT-X-STREAM-INF`, ou un
+ * repli positionnel (`v0`, `v1`, …) si la balise n'en porte pas.
+ */
+export interface MasterVariant {
+  /** Ligne `#EXT-X-STREAM-INF` complète. */
+  inf: string;
+  /** Clé de qualité normalisée (utilisable dans une URL). */
+  key: string;
+  /** URI de la variante, telle qu'écrite dans la playlist. */
+  uri: string;
+  /** URL absolue de la variante. */
+  url: string;
+}
+
+/**
+ * Parse les variantes d'une playlist maîtresse HLS.
+ *
+ * Source UNIQUE de vérité pour l'extraction des variantes : elle est utilisée
+ * à la fois pour réécrire la playlist maîtresse (proxy) et pour exposer la
+ * liste des variantes (API). Avant, ces deux chemins avaient leur propre
+ * logique et ils divergeaient : seule l'API sautait les lignes de
+ * commentaire intercalées entre `#EXT-X-STREAM-INF` et l'URI, ce qui
+ * décalait les clés de repli positionnelles.
+ */
+export function parseMasterVariants(masterText: string, baseUrl: string): MasterVariant[] {
+  const lines = masterText.split(/\r?\n/);
+  const out: MasterVariant[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const inf = lines[i].trim();
+    if (!inf.startsWith('#EXT-X-STREAM-INF')) continue;
+    // L'URI peut être précédée de lignes vides ou de commentaires.
+    let j = i + 1;
+    while (j < lines.length && (lines[j].trim() === '' || lines[j].trim().startsWith('#'))) j++;
+    if (j >= lines.length) break;
+    const uri = lines[j].trim();
+    const quality = inf.match(/QUALITY=([^,]+)/)?.[1];
+    const key = (quality ?? `v${out.length}`).replace(/[^a-zA-Z0-9_-]/g, '');
+    out.push({ inf, key, uri, url: new URL(uri, baseUrl).toString() });
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * Réécrit la playlist maîtresse : chaque variante est remplacée par l'URL du
+ * proxy, qui sert la playlist média correspondante.
+ *
+ * La clé de qualité est reprise de l'attribut `QUALITY=` de la balise
+ * `#EXT-X-STREAM-INF`, et non un index positionnel : c'est ce que `pickVariant`
+ * attend côté serveur. Les URL signées ne transitent jamais par le client
+ * (elles expirent).
+ */
 export function rewriteMasterPlaylist(masterText: string, masterUrl: string, okId: string): string {
   const lines = masterText.split(/\r?\n/);
   // La source contient déjà un #EXTM3U : on ne l'ajoute que s'il est absent,
   // sinon la playlist servie par le proxy en aurait deux (invalide pour hls.js).
   const out: string[] = masterText.trimStart().startsWith('#EXTM3U') ? [] : ['#EXTM3U'];
-  let fallbackIndex = 0;
+
+  // Les variantes sont extraites par le parseur canonique : on les remplace
+  // dans le flux d'origine, en conservant les autres balises (#EXT-X-VERSION,
+  // #EXT-X-INDEPENDENT-SEGMENTS, …) à leur place.
+  const variants = parseMasterVariants(masterText, masterUrl);
+  const byInf = new Map(variants.map((v) => [v.inf, v]));
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
     if (line.startsWith('#EXT-X-STREAM-INF')) {
-      out.push(line);
-      const next = lines[i + 1];
-      if (next !== undefined && !next.trim().startsWith('#')) {
-        const quality = line.match(/QUALITY=([^,]+)/)?.[1];
-        const key = (quality ?? `v${fallbackIndex}`).replace(/[^a-zA-Z0-9_-]/g, '');
-        out.push(`/api/video/${okId}/playlist.m3u8?v=${encodeURIComponent(key)}`);
-        fallbackIndex++;
-        i++;
+      const v = byInf.get(line);
+      if (v) {
+        out.push(v.inf);
+        // On saute l'URI source (et les lignes intercalées) : elle est
+        // remplacée par l'URL du proxy.
+        let j = i + 1;
+        while (j < lines.length && (lines[j].trim() === '' || lines[j].trim().startsWith('#'))) j++;
+        out.push(`/api/video/${okId}/playlist.m3u8?v=${encodeURIComponent(v.key)}`);
+        i = j;
+      } else {
+        out.push(line);
       }
       continue;
     }
@@ -128,13 +169,40 @@ export function rewriteMediaPlaylist(
     const line = raw.trim();
     if (!line) continue;
     if (line.startsWith('#')) {
-      out.push(line);
+      // Les balises qui portent une URI (#EXT-X-KEY, #EXT-X-MAP) pointent
+      // aujourd'hui vers ok.ru en direct. On les réécrit vers le proxy pour
+      // qu'une playlist chiffrée reste lisible (sinon le navigateur tenterait
+      // de charger la clé en direct et CORS la refuserait). Les URI absentes
+      // ou déjà relatives sont laissées telles quelles.
+      out.push(rewriteUriAttribute(line, okId, variantKey));
       continue;
     }
     const name = line.split('/').pop() ?? line;
     if (!SEGMENT_NAME_RE.test(name)) continue;
-    const absolute = `${base}${name}`;
     out.push(`/api/video/${okId}/segment.ts?v=${encodeURIComponent(variantKey)}&s=${encodeURIComponent(name)}`);
   }
   return out.join('\n') + '\n';
+}
+
+/**
+ * Réécrit l'attribut `URI="..."` d'une balise HLS vers le proxy vidéo.
+ *
+ * Seules les balises MEDIA (`#EXT-X-KEY`, `#EXT-X-MAP`) portent une URI.
+ * Si l'URI est absolue, on la remplace par l'URL du proxy ; le proxy
+ * descargar/relaye la ressource avec le bon `Referer` ok.ru.
+ */
+function rewriteUriAttribute(
+  line: string,
+  okId: string,
+  variantKey: string,
+): string {
+  if (!/^#EXT-X-(KEY|MAP)/.test(line)) return line;
+  return line.replace(/URI="([^"]+)"/, (_m, uri: string) => {
+    // URI déjà relative : conservée telle quelle (elle sera résolue par le
+    // lecteur contre l'URL de la playlist, qui est notre proxy).
+    if (!/^https?:\/\//i.test(uri)) return `URI="${uri}"`;
+    const name = uri.split('/').pop() ?? '';
+    if (!SEGMENT_NAME_RE.test(name)) return `URI="${uri}"`;
+    return `URI="/api/video/${okId}/segment.ts?v=${encodeURIComponent(variantKey)}&s=${encodeURIComponent(name)}"`;
+  });
 }

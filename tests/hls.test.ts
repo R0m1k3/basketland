@@ -1,12 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   isValidPlaylist,
-  isAllowedSegmentUrl,
   resolveSegmentUrl,
   rewriteMasterPlaylist,
   rewriteMediaPlaylist,
+  parseMasterVariants as parseMasterVariantsHls,
 } from '../src/lib/hls';
-import { parseOkEmbed, isValidOkId, parseMasterVariants, signedUrlExpiry } from '../src/lib/okru';
+import {
+  parseOkEmbed,
+  isValidOkId,
+  parseMasterVariants,
+  signedUrlExpiry,
+  isAllowedMediaHost,
+} from '../src/lib/okru';
 
 /** Playlist maître ok.ru réelle (relevée sur ok.ru/16656495217324). */
 const MASTER = `#EXTM3U
@@ -128,16 +134,43 @@ describe('resolveSegmentUrl', () => {
   });
 });
 
-describe('isAllowedSegmentUrl', () => {
+describe('isAllowedMediaHost (protection SSRF réellement utilisée par le proxy)', () => {
   it('accepte les hôtes de média ok.ru', () => {
-    expect(isAllowedSegmentUrl('https://ok6-29.vkuser.net/a/MEDIUM1.ts')).toBe(true);
-    expect(isAllowedSegmentUrl('https://st.okcdn.ru/a/MEDIUM1.ts')).toBe(true);
+    expect(isAllowedMediaHost('https://ok6-29.vkuser.net/a/MEDIUM1.ts')).toBe(true);
+    expect(isAllowedMediaHost('https://st.okcdn.ru/a/MEDIUM1.ts')).toBe(true);
   });
 
   it('refuse un hôte tiers (anti-SSRF)', () => {
-    expect(isAllowedSegmentUrl('https://evil.example.com/a.ts')).toBe(false);
-    expect(isAllowedSegmentUrl('http://ok6-29.vkuser.net/a.ts')).toBe(false);
-    expect(isAllowedSegmentUrl('pas une url')).toBe(false);
+    expect(isAllowedMediaHost('https://evil.example.com/a.ts')).toBe(false);
+    expect(isAllowedMediaHost('http://ok6-29.vkuser.net/a.ts')).toBe(false);
+    expect(isAllowedMediaHost('pas une url')).toBe(false);
+  });
+
+  it('refuse un sous-domaine forgé qui imite un hôte autorisé', () => {
+    // La regex est ancrée : `ok.ru.evil.com` ne doit pas passer.
+    expect(isAllowedMediaHost('https://ok.ru.evil.com/a.ts')).toBe(false);
+    expect(isAllowedMediaHost('https://evilvkuser.net/a.ts')).toBe(false);
+  });
+});
+
+describe('parseMasterVariants (source unique de vérité)', () => {
+  it('produit les mêmes clés pour le proxy et pour l’API', () => {
+    const hls = parseMasterVariantsHls(MASTER, 'https://ok6-29.vkuser.net/video.m3u8');
+    const api = parseMasterVariants(MASTER, 'https://ok6-29.vkuser.net/video.m3u8');
+    expect(hls.map((v) => v.key)).toEqual(api.map((v) => v.key));
+    expect(hls.map((v) => v.url)).toEqual(api.map((v) => v.url));
+  });
+
+  it('saute les commentaires intercalés entre STREAM-INF et l’URI', () => {
+    const withComment = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=100,QUALITY=sd
+#EXT-X-VERSION:3
+media.m3u8
+`;
+    const vs = parseMasterVariantsHls(withComment, 'https://h.example/video.m3u8');
+    expect(vs).toHaveLength(1);
+    expect(vs[0].key).toBe('sd');
+    expect(vs[0].url).toBe('https://h.example/media.m3u8');
   });
 });
 

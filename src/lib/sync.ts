@@ -152,7 +152,13 @@ export function resolveAnchorWall(a: Pick<AnchorRow, 'period' | 'clock_sec' | 'w
 
 const METHOD_PRIORITY: Record<AnchorMethod, number> = { manual: 3, auto: 2, audio: 1 };
 
-/** Garde un ensemble d'ancres strictement monotone, en privilégiant manuel > audio > auto. */
+/**
+ * Garde un ensemble d'ancres strictement monotone.
+ *
+ * Priorité appliquée (voir `METHOD_PRIORITY`) : **manuel > auto (OCR) > audio**.
+ * L'ancrage manuel prime, puis l'OCR du chrono à l'écran, et enfin la
+ * détection de coupures audio, la moins précise des trois.
+ */
 export function consistentAnchors(anchors: ResolvedAnchor[]): ResolvedAnchor[] {
   const byPriority = [...anchors].sort((a, b) => METHOD_PRIORITY[b.method] - METHOD_PRIORITY[a.method] || a.wall - b.wall);
   const kept: ResolvedAnchor[] = [];

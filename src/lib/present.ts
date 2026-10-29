@@ -81,9 +81,3 @@ export function groupByParisDay<T extends { date_utc: string }>(items: T[]): Day
   }
   return groups;
 }
-
-export const STATUS_FR: Record<string, string> = {
-  scheduled: 'À venir',
-  live: 'En direct',
-  final: 'Terminé',
-};
