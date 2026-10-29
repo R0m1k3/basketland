@@ -187,15 +187,16 @@ export default function VideoPlayer({
         {onOffsetChange && (
           <div className="ml-auto flex items-center gap-2">
             <span>Décalage VF</span>
-            {/* Un offset négatif retarde l'apparition des sous-titres,
-                un offset positif les avance. Les libellés disent ce qui
-                se voit à l'écran. */}
+            {/* Sens vérifié sur le serveur : `applyOffsets` calcule
+                `video_ts = position + offset`. Un offset POSITIF augmente
+                video_ts, donc le sous-titre s'affiche plus TARD → il retarde
+                la VF. Un offset NÉGATIF l'avance. */}
             <button
               type="button"
               onClick={() => onOffsetChange(offset - 0.5)}
               className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500"
-              aria-label="Retarder la VF de 0,5 seconde"
-              title="Retarder la VF de 0,5 seconde"
+              aria-label="Avancer la VF de 0,5 seconde"
+              title="Avancer la VF de 0,5 seconde"
             >
               −0,5 s
             </button>
@@ -207,8 +208,8 @@ export default function VideoPlayer({
               type="button"
               onClick={() => onOffsetChange(offset + 0.5)}
               className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500"
-              aria-label="Avancer la VF de 0,5 seconde"
-              title="Avancer la VF de 0,5 seconde"
+              aria-label="Retarder la VF de 0,5 seconde"
+              title="Retarder la VF de 0,5 seconde"
             >
               +0,5 s
             </button>

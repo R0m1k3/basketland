@@ -400,7 +400,10 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
     // violeraient la contrainte UNIQUE (match_id, seq).
     let finalText = text;
     let finalKind = kind;
-    if (startBanner) {
+    // La bannière n'est appliquée que sur une ligne destined au `primary`.
+    // Une ligne d'`extras` peut être écartée plus tard (quand `primary`
+    // atteint `minLines`) : la bannière disparaissait alors complètement.
+    if (startBanner && list === primary) {
       finalText = `${startBanner} ${text}`;
       finalKind = 'banniere';
       startBanner = '';
@@ -430,24 +433,29 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
     if (consumed.has(p.seq)) continue;
     const cat = classifyPlay(p.event_type, p.text_en, !!p.scoring);
 
-    if (!firstPlayDone && p.period === 1) {
+    // Bannière de coup d'envoi : préfixe de la première ligne commentée.
+    //
+    // Elle ne doit JAMAIS voler l'action : une bannière séparée porterait le
+    // même `seq` que l'action (clé primaire `(match_id, seq)`) et la
+    // renumérotation cassait l'ancrage manuel (le `seq` sert à retrouver
+    // l'action ESPN : `getPlays().find(p => p.seq === seq)`).
+    //
+    // Procédure en deux temps :
+    //  1. `startBanner` est armé ; `push` l'applique à la première ligne qui
+    //     part dans `primary` ;
+    //  2. après le `switch`, si l'action n'a produit AUCUNE ligne `primary`
+    //     (rebond, faute, perte de balle, tir manqué : ces catégories vont
+    //     dans `extras` et peuvent être écartées plus tard), on émet la
+    //     bannière seule sur cette action. Elle est ainsi conservée, à la
+    //     bonne position, au lieu de disparaître ou de glisser sur l'action
+    //     suivante avec un horodatage faux.
+    const isFirst = !firstPlayDone && p.period === 1;
+    if (isFirst) {
       firstPlayDone = true;
-      // La bannière de coup d'envoi ne doit pas voler l'action à la VF :
-      // si l'action est déjà commentable (tir, lancer franc…), on la laisse
-      // au traitement normal et la bannière n'est qu'un préfixe.
-      const commented = !['jumpball', 'other', 'substitution', 'timeout'].includes(cat);
-      const head = cat === 'jumpball' ? `Coup d'envoi ! ${translatePlay(p)}` : 'Coup d\'envoi du match !';
-      if (!commented) {
-        // La bannière porte le `seq` de l'action : si l'action génère aussi
-        // sa propre ligne juste après, les deux porteraient le même `seq` et
-        // l'insertion violerait la contrainte UNIQUE (match_id, seq).
-        push(primary, p, head, 100, 'banniere');
-        consumed.add(p.seq);
-        continue;
-      }
-      // L'action reste commentée normalement ; on note seulement le début.
-      startBanner = head;
+      startBanner = 'Coup d\'envoi du match !';
     }
+    const primaryBefore = primary.length;
+    const extrasBefore = extras.length;
 
     switch (cat) {
       case 'game_end':
@@ -559,6 +567,31 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
       default:
         break;
     }
+
+    // 2e temps de la bannière : si l'action n'a produit aucune ligne
+    // `primary`, la bannière est encore armée. On l'émet alors seule, sur
+    // cette action : la ligne d'`extras` correspondante est retirée (même
+    // action, donc même `seq` : deux lignes porteraient le même `seq` et
+    // l'insertion violerait la contrainte UNIQUE).
+    if (isFirst && primary.length === primaryBefore && startBanner) {
+      if (extras.length > extrasBefore) {
+        const last = extras[extras.length - 1];
+        if (last.seq === p.seq) extras.pop();
+      }
+      primary.push({
+        seq: p.seq,
+        period: p.period,
+        clock_sec: p.clock_sec,
+        wallclock: p.wallclock,
+        text_fr: startBanner,
+        kind: 'banniere',
+        speaker: p.team_abbr,
+        priority: 100,
+        hold: holdFor(startBanner),
+      });
+      consumed.add(p.seq);
+      startBanner = '';
+    }
   }
 
   let lines = primary;
@@ -575,19 +608,26 @@ export function buildCommentary(plays: PlayRow[], opts: CommentaryOptions = {}):
     lines = [...lines, ...add];
   }
 
-  // `seq` est la clé primaire (match_id, seq) : on garantit des valeurs
-  // uniques et croissantes, quelle que soit la façon dont les lignes ont
-  // été produites. Sans cela, une insertion peut échouer sur une contrainte
-  // UNIQUE et laisser le match sans VF.
+  // `seq` est la clé primaire `(match_id, seq)` ET sert à retrouver l'action
+  // ESPN quand l'utilisateur pose une ancre manuelle
+  // (`getPlays().find((p) => p.seq === seq)`). On ne doit donc JAMAIS
+  // renuméroter une ligne : une ligne renumérotée pointerait vers une autre
+  // action, ou ne pointerait vers rien du tout — l'ancre serait posée au
+  // mauvais moment.
+  //
+  // La construction garantit qu'une action produit au plus une ligne, donc
+  // les doublons ne devraient pas exister. S'il y en a un (bug), on conserve
+  // la PREMIÈRE occurrence et on écarte la suivante : mieux vaut une ligne
+  // de VF manquante qu'une ancre posée sur la mauvaise action.
   const sortedLines = lines.sort((a, b) => a.seq - b.seq);
   const seen = new Set<number>();
-  let next = 0;
+  const unique: CommentaryLine[] = [];
   for (const l of sortedLines) {
-    while (seen.has(l.seq)) l.seq = ++next;
+    if (seen.has(l.seq)) continue;
     seen.add(l.seq);
-    next = Math.max(next, l.seq);
+    unique.push(l);
   }
-  return sortedLines.sort((a, b) => a.seq - b.seq);
+  return unique;
 }
 
 function lineFrom(p: PlayRow, text: string, priority: number): CommentaryLine {

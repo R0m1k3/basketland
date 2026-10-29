@@ -110,19 +110,41 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
     return () => clearInterval(timer);
   }, [analysis, matchId, loadSync, reloadSubtitles]);
 
+  /**
+   * Écriture de calibration : POST vers /sync.
+   *
+   * Vérifie `res.ok` et remonte le message d'erreur du serveur. Sans cela,
+   * un refus (403 origine, 415 Content-Type) passait silencieusement et
+   * l'interface affichait quand même une réussite.
+   */
+  const writeSync = useCallback(
+    async (body: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> => {
+      try {
+        const res = await fetch(`/api/matches/${matchId}/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+        if (!res.ok) return { ok: false, message: d.error ?? `Échec de l'écriture (${res.status}).` };
+        return { ok: true, message: d.message };
+      } catch {
+        return { ok: false, message: 'Échec de l’écriture (réseau).' };
+      }
+    },
+    [matchId],
+  );
+
   /** Persiste le décalage côté serveur puis recharge les sous-titres. */
   const changeOffset = useCallback(
     (next: number) => {
       setOffset(next);
-      void fetch(`/api/matches/${matchId}/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ global_offset: next }),
-      })
-        .then(() => reloadSubtitles())
-        .catch(() => undefined);
+      void writeSync({ global_offset: next }).then((r) => {
+        if (!r.ok && r.message) setMessage(r.message);
+        reloadSubtitles();
+      });
     },
-    [matchId, reloadSubtitles],
+    [writeSync, reloadSubtitles],
   );
 
   /** Ajuste le décalage d'un seul quart. */
@@ -130,15 +152,12 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
     (period: number, delta: number) => {
       const next = { ...quarterOffsets, [String(period)]: (quarterOffsets[String(period)] ?? 0) + delta };
       setQuarterOffsets(next);
-      void fetch(`/api/matches/${matchId}/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quarter_offsets: next }),
-      })
-        .then(() => reloadSubtitles())
-        .catch(() => undefined);
+      void writeSync({ quarter_offsets: next }).then((r) => {
+        if (!r.ok && r.message) setMessage(r.message);
+        reloadSubtitles();
+      });
     },
-    [matchId, quarterOffsets, reloadSubtitles],
+    [writeSync, quarterOffsets, reloadSubtitles],
   );
 
   /** Lance l'analyse automatique (OCR du chrono à l'écran + énergie audio). */
@@ -161,39 +180,27 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
   /** Pose une ancre : l'action sélectionnée se passe à la position courante. */
   const setAnchor = useCallback(
     async (seq: number) => {
-      try {
-        const res = await fetch(`/api/matches/${matchId}/sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'anchor', seq, video_ts: currentTime }),
-        });
-        const d = await res.json();
-        setMessage(d.message ?? 'Ancre posée.');
-        loadSync();
-        // Le serveur a recalculé les positions : on recharge la VF.
-        reloadSubtitles();
-      } catch {
-        setMessage('Impossible de poser l’ancre.');
+      const r = await writeSync({ action: 'anchor', seq, video_ts: currentTime });
+      if (!r.ok) {
+        setMessage(r.message ?? 'Impossible de poser l’ancre.');
+        return;
       }
+      setMessage(r.message ?? 'Ancre posée.');
+      loadSync();
+      // Le serveur a recalculé les positions : on recharge la VF.
+      reloadSubtitles();
     },
-    [matchId, currentTime, loadSync, reloadSubtitles],
+    [matchId, currentTime, loadSync, reloadSubtitles, writeSync],
   );
 
   const removeAnchor = useCallback(
     async (period: number, clockSec: number) => {
-      try {
-        await fetch(`/api/matches/${matchId}/sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete-anchor', period, clock_sec: clockSec }),
-        });
-        loadSync();
-        reloadSubtitles();
-      } catch {
-        /* ignoré */
-      }
+      const r = await writeSync({ action: 'delete-anchor', period, clock_sec: clockSec });
+      if (!r.ok && r.message) setMessage(r.message);
+      loadSync();
+      reloadSubtitles();
     },
-    [matchId, loadSync, reloadSubtitles],
+    [loadSync, reloadSubtitles, writeSync],
   );
 
   const periods = [1, 2, 3, 4, 5];

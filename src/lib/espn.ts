@@ -136,8 +136,18 @@ function cleanText(s: unknown): string {
  */
 export function actorFromText(text: string): string {
   const clean = cleanText(text);
+  // Les noms de joueurs comportent des particules en minuscules
+  // (« Tristan da Silva », « de Larrea ») et des diacritiques. Sans le flag
+  // `u`, `\w` ne couvre pas « é » et la particule « da » était interprétée
+  // comme la fin du nom : deux tireurs différents se retrouvaient fusionnés
+  // dans une même série de lancers francs.
+  const NAME = "[A-ZÀ-ÖØ-Þ][\\p{L}'’.-]*";
+  const PARTICLE = '(?:d[aeiu]|v[ao]n|de|del|della|di|da|dos|las|el|al)';
   const m = clean.match(
-    /^([A-Z][\w.'’-]*(?: [A-Z][\w.'’-]*){0,2})\s+(?:makes|misses|blocks|steals|grabs|commits|enters|leaves|is called for|tosses|defensive rebound|offensive rebound|turnover|traveling)/,
+    new RegExp(
+      `^(${NAME}(?: ${PARTICLE})?(?: ${NAME}){0,2})\\s+(?:makes|misses|blocks|steals|grabs|commits|enters|leaves|is called for|tosses|defensive rebound|offensive rebound|turnover|traveling)`,
+      'u',
+    ),
   );
   return m ? m[1] : '';
 }

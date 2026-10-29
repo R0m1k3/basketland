@@ -79,11 +79,21 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   // (l'UI doit pouvoir les appeler depuis le navigateur). On borne donc
   // qui peut les déclencher : `SYNC_WRITE_ORIGINS` liste les origines (ou IP)
   // autorisées ; liste vide = toute origine locale est acceptée.
-  // L'analyse automatique, elle, est bornée par un cooldown côté serveur.
-  if (body.action && body.action !== 'analyze' && body.action !== 'analyze-audio') {
-    if (!isOriginAllowed(req, allowedOrigins())) {
-      return error(403, 'origine non autorisée pour cette écriture');
-    }
+  //
+  // Le contrôle s'applique à TOUTE écriture, pas seulement à celles qui
+  // portent un `action` : `{ global_offset }`, `{ quarter_offsets }` et
+  // `{ anchors: [...] }` sont des écritures au même titre. Sans cela, un
+  // site tiers pouvait décaler la VF d'une heure par requête simple
+  // (CSRF : une requête `text/plain` n'est pas préflightée).
+  if (!isOriginAllowed(req, allowedOrigins())) {
+    return error(403, 'origine non autorisée pour cette écriture');
+  }
+  // Exiger un Content-Type JSON : sans cela, une requête « simple » cross
+  // origin (text/plain) passe le contrôle CORS du navigateur sans
+  // preflight, et `req.json()` laparse quand même.
+  const ctype = (req.headers.get('content-type') ?? '').toLowerCase();
+  if (!ctype.includes('application/json')) {
+    return error(415, 'Content-Type application/json requis');
   }
 
   const current = getSyncSettings(id);

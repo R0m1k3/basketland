@@ -341,9 +341,15 @@ export interface OcrScanOptions extends FrameGrabOptions {
  * toutes les N frames.
  */
 export async function scanVideoClock(playlistUrl: string, o: OcrScanOptions): Promise<FrameObservation[]> {
-  // Pas minimum de 10 s : `OCR_STEP_SEC=0` provoquerait une boucle infinie
-  // d'extraction de frames jusqu'à saturation de la mémoire.
-  const step = Math.max(10, Math.trunc(o.stepSec ?? 60));
+  // Pas de balayage borné ET fini :
+  //  - `OCR_STEP_SEC` non numérique (ou vide) donnerait NaN, et `t += NaN`
+  //    arrête la boucle après la 1re image : l'analyse « réussissait » sans
+  //    produire la moindre ancre ;
+  //  - une valeur trop petite transformait un scan de 120 images en 720
+  //    (donc 6 fois plus de CPU) ;
+  //  - 0 provoquerait une boucle infinie.
+  const raw = Number(o.stepSec);
+  const step = Number.isFinite(raw) && raw > 0 ? Math.max(10, Math.trunc(raw)) : 60;
   const times: number[] = [];
   for (let t = o.startSec ?? 30; t < o.duration - 5; t += step) times.push(Math.round(t));
   const worker = await createOcrWorker();

@@ -8,6 +8,7 @@ import path from 'node:path';
 import * as db from './db';
 import { fetchScoreboard, fetchSummary } from './espn';
 import { findReplay } from './bv';
+import { classifyPlay } from './vf';
 import { analyzeHlsAudio, detectCuts, ffmpegAvailable } from './audio';
 import { lightestVariant, OK_REFERER, resolveOkStream } from './okru';
 import { BROWSER_UA } from './http';
@@ -86,7 +87,14 @@ export async function ingestMatchDetails(match: MatchRow): Promise<string> {
   // On ne marque le match comme synchronisé que si les données sont
   // complètes : sinon ESPN les republiera plus tard et le match ne serait
   // jamais réanalysé (stats et VF figées à un état partiel).
-  const complete = s.players.length > 0 && s.plays.some((p) => p.event_type.toLowerCase().includes('end of game'));
+  //
+  // Le test de fin de match passe par `classifyPlay` : ESPN écrit
+  // `event_type = "End Game"` (et non "end of game"). Une recherche directe
+  // sur la chaîne rendait la condition TOUJOURS fausse, et les 15 matchs
+  // `final` les plus récents étaient alors retéléchargés à chaque tick du
+  // planificateur (des milliers d'appels ESPN par jour).
+  const complete =
+    s.players.length > 0 && s.plays.some((p) => classifyPlay(p.event_type, p.text_en, !!p.scoring) === 'game_end');
   if (fresh?.status === 'final' && complete) db.markStatsSynced(match.id);
   const subs = regenerateSubtitles(match.id, s.plays);
   return `${match.away_abbr}@${match.home_abbr}: ${s.players.length} joueurs, ${s.plays.length} actions, ${subs} sous-titres`;
@@ -248,14 +256,18 @@ export function startVideoAnalysis(matchId: number, opts: { withAudio?: boolean 
   const maxParallel = Math.max(1, Math.trunc(Number(process.env.ANALYSIS_MAX_PARALLEL) || 1));
   if (analysis.size >= maxParallel) return { started: false, reason: 'une analyse est déjà en cours' };
   // Cooldown : une analyse coûte 5 à 8 min de CPU, on borne la fréquence.
-  const minInterval = Math.max(0, Math.trunc(Number(process.env.ANALYSIS_MIN_INTERVAL_MS) || 15 * 60_000));
+  // `??` et non `||` : `ANALYSIS_MIN_INTERVAL_MS=0` doit pouvoir DÉSACTIVER
+  // le cooldown (0 est une valeur intentionnelle, pas une valeur absente).
+  const minIntervalRaw = process.env.ANALYSIS_MIN_INTERVAL_MS;
+  const minInterval = Number.isFinite(Number(minIntervalRaw))
+    ? Math.max(0, Math.trunc(Number(minIntervalRaw)))
+    : 15 * 60_000;
   const last = analysisLast.get(matchId) ?? 0;
   const since = Date.now() - last;
   if (last && since < minInterval) {
     const waitMin = Math.ceil((minInterval - since) / 60_000);
     return { started: false, reason: `analyse récente, réessayez dans ~${waitMin} min` };
   }
-  analysisLast.set(matchId, Date.now());
   const okId = match.video_ok_id;
   const state: AnalysisState = { phase: 'ocr', done: 0, total: 0, startedAt: new Date().toISOString() };
   analysis.set(matchId, state);
@@ -304,7 +316,16 @@ export function startVideoAnalysis(matchId: number, opts: { withAudio?: boolean 
     const n = regenerateSubtitles(matchId);
     report.push(`${n} sous-titres recalés`);
     return report.join(' ; ');
-  }).finally(() => analysis.delete(matchId));
+  })
+    .then(() => {
+      // Le cooldown n'est consommé qu'en cas de SUCCÈS : une analyse qui
+      // échoue en 2 s (ok.ru indisponible) ne doit pas bloquer toute
+      // nouvelle tentative pendant 15 min. Le cooldown est aussi compté
+      // depuis la FIN, pas depuis le début : une analyse de plus de 15 min
+      // ne peut ainsi pas être relancée immédiatement après sa fin.
+      analysisLast.set(matchId, Date.now());
+    })
+    .finally(() => analysis.delete(matchId));
   return { started: true };
 }
 

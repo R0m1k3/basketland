@@ -16,7 +16,15 @@ describe('allowedOrigins', () => {
 
   it('découpe et nettoie la liste', () => {
     process.env.SYNC_WRITE_ORIGINS = ' http://192.168.1.16:3000 , 192.168.1.20 ,';
-    expect(allowedOrigins()).toEqual(['http://192.168.1.16:3000', '192.168.1.20']);
+    const list = allowedOrigins();
+    expect(list).toContain('http://192.168.1.16:3000');
+    expect(list).toContain('192.168.1.20');
+    // Une URL complète est normalisée : ses formes hôte et hôte:port sont
+    // ajoutées, sinon l'exemple du README ne correspondrait jamais à
+    // l'Origin que le navigateur envoie.
+    expect(list).toContain('192.168.1.16:3000');
+    expect(list).toContain('192.168.1.16');
+    expect(list).not.toContain('');
     delete process.env.SYNC_WRITE_ORIGINS;
   });
 });
@@ -26,8 +34,10 @@ describe('requestOrigin', () => {
     expect(requestOrigin(req({ origin: 'http://192.168.1.16:3000' }))).toBe('192.168.1.16:3000');
   });
 
-  it('retombe sur X-Forwarded-For', () => {
-    expect(requestOrigin(req({ 'x-forwarded-for': '192.168.1.50, 10.0.0.1' }))).toBe('192.168.1.50');
+  it('ignore X-Forwarded-For (en-tête forgable par le client)', () => {
+    // `X-Forwarded-For` est fourni par le client : s'appuyer dessus pour
+    // autoriser une écriture reviendrait à ne contrôler rien du tout.
+    expect(requestOrigin(req({ 'x-forwarded-for': '192.168.1.50, 10.0.0.1' }))).toBeNull();
   });
 
   it('retombe sur le Referer', () => {

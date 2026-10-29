@@ -29,20 +29,51 @@ export function intParam(v: string | null, def: number, min: number, max: number
  * Liste vide = aucune restriction (comportement par défaut d'une app
  * mono-utilisateur sur le LAN).
  */
+/**
+ * Origines autorisées à écrire.
+ *
+ * Chaque entrée peut être :
+ *  - une origine complète (`http://nas.local:3000`) ;
+ *  - un simple hôte (`nas.local:3000` ou `nas.local`) ;
+ *  - une IP (`192.168.1.16`).
+ *
+ * Les deux formes sont normalisées en `hôte` et `hôte:port` pour que
+ * l'exemple du README (`http://nas.local:3000`) fonctionne réellement : la
+ * comparaison se faisait auparavant sur `host` (avec port) alors que la
+ * configuration documente une URL complète.
+ */
 export function allowedOrigins(): string[] {
   const raw = process.env.SYNC_WRITE_ORIGINS ?? '';
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const out: string[] = [];
+  for (const s of raw.split(',')) {
+    const v = s.trim();
+    if (!v) continue;
+    out.push(v);
+    // Une URL complète contribue aussi son hôte nu (sans port) et son
+    // hôte:port, pour absorber les deux formes d'écriture.
+    if (/^https?:\/\//i.test(v)) {
+      try {
+        const u = new URL(v);
+        out.push(u.host);
+        out.push(u.hostname);
+      } catch {
+        /* on garde la valeur brute */
+      }
+    }
+  }
+  return [...new Set(out)];
 }
 
 /**
  * Origine (ou adresse IP) de la requête.
  *
  * `Origin` est posé par les navigateurs pour les requêtes cross-origin et
- * pour les POST ; `Referer` sert de repli. Derrière un reverse proxy, le
- * premier `X-Forwarded-For` est l'adresse du client d'origine.
+ * pour les POST ; `Referer` sert de repli.
+ *
+ * `X-Forwarded-For` n'est PAS utilisé : cette en-tête est forgable par le
+ * client, l'utiliser pour autoriser une écriture reviendrait à ne rien
+ * contrôler du tout. Un proxy de confiance doit ajouter l'hôte d'origine
+ * dans `SYNC_WRITE_ORIGINS` (variable d'environnement).
  */
 export function requestOrigin(req: Request): string | null {
   const h = req.headers;
@@ -55,8 +86,6 @@ export function requestOrigin(req: Request): string | null {
       return origin;
     }
   }
-  const xff = h.get('x-forwarded-for');
-  if (xff) return xff.split(',')[0].trim();
   const referer = h.get('referer');
   if (referer) {
     try {
@@ -71,6 +100,10 @@ export function requestOrigin(req: Request): string | null {
 /**
  * Vérifie qu'une requête vient d'une origine autorisée.
  * `allowed` vide = tout est accepté.
+ *
+ * L'hôte de la requête elle-même est toujours autorisé : une page servie
+ * par l'application (même origine) doit pouvoir écrire, même si la
+ * configuration ne liste pas explicitement son nom d'accès.
  */
 export function isOriginAllowed(req: Request, allowed: string[]): boolean {
   if (!allowed.length) return true;
@@ -79,5 +112,13 @@ export function isOriginAllowed(req: Request, allowed: string[]): boolean {
   if (allowed.includes(o)) return true;
   // Autorise aussi l'IP seule quand l'origine est « ip:port ».
   const host = o.replace(/:\d+$/, '');
-  return allowed.includes(host);
+  if (allowed.includes(host)) return true;
+  // L'hôte demandé par le client : la même origine que l'application.
+  try {
+    const self = new URL(req.url).host;
+    if (allowed.includes(self) || allowed.includes(self.replace(/:\d+$/, ''))) return true;
+  } catch {
+    /* URL relative : rien à comparer */
+  }
+  return false;
 }
