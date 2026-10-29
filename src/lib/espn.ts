@@ -296,7 +296,24 @@ export function parseSummary(json: Json, matchId: number, league = 'nba'): Parse
 
 // ------------------------------------------------------------------ fetchers
 
+/**
+ * Formats de date acceptés par le paramètre `dates` de l'API ESPN.
+ *
+ * Une plage (`YYYYMMDD-YYYYMMDD`) n'est PAS acceptée : ESPN renvoie
+ * HTTP 400 sans explication exploitable. On refuse donc la plage à la
+ * source, avec un message qui désigne la fonction à utiliser, plutôt que
+ * de laisser remonter une erreur 400 opaque depuis le réseau.
+ */
+const ESPN_DATES_RE = /^\d{4}$|^\d{6}$|^\d{8}$/;
+
 export async function fetchScoreboard(dates: string, league = 'nba', limit = 1000): Promise<ParsedMatch[]> {
+  if (!ESPN_DATES_RE.test(dates)) {
+    throw new Error(
+      `dates invalide « ${dates} » : l'API ESPN n'accepte qu'un jour (YYYYMMDD), ` +
+        `un mois (YYYYMM) ou une année (YYYY), pas une plage. ` +
+        `Utilisez fetchScoreboardRange(from, to) pour une période.`,
+    );
+  }
   const json = await fetchJson(`${ESPN_SITE}/${league}/scoreboard?dates=${dates}&limit=${limit}`);
   return parseScoreboard(json, league);
 }

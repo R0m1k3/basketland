@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fetchScoreboardRange } from '../src/lib/espn';
+import { fetchScoreboard, fetchScoreboardRange } from '../src/lib/espn';
 import * as http from '../src/lib/http';
 
 /**
@@ -92,5 +92,32 @@ describe('fetchScoreboardRange', () => {
     const from = new Date(Date.UTC(2026, 9, 22));
     const to = new Date(Date.UTC(2026, 9, 24));
     await expect(fetchScoreboardRange(from, to)).rejects.toThrow(/HTTP 500/);
+  });
+});
+
+describe('fetchScoreboard refuse les plages de dates (garde-fou)', () => {
+  it('lève une erreur explicite au lieu de laisser ESPN renvoyer 400', async () => {
+    const spy = vi.spyOn(http, 'fetchJson');
+    // Le message désigne la fonction à utiliser : c'est l'erreur qui a
+    // fait échouer le calendrier pendant des semaines (HTTP 400 opaque
+    // dans les logs, sans indication de la cause).
+    await expect(fetchScoreboard('20261022-20261105')).rejects.toThrow(/fetchScoreboardRange/);
+    // Aucune requête n'a été émise : le refus est local et immédiat.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('accepte les trois formats valides', async () => {
+    vi.spyOn(http, 'fetchJson').mockImplementation(async () => ({ events: [] }));
+    await expect(fetchScoreboard('20261028')).resolves.toEqual([]); // YYYYMMDD
+    await expect(fetchScoreboard('202610')).resolves.toEqual([]); // YYYYMM
+    await expect(fetchScoreboard('2026')).resolves.toEqual([]); // YYYY
+  });
+
+  it('refuse un format vide ou parasite', async () => {
+    const spy = vi.spyOn(http, 'fetchJson');
+    await expect(fetchScoreboard('')).rejects.toThrow(/dates invalide/);
+    await expect(fetchScoreboard('2026-10-28')).rejects.toThrow(/dates invalide/);
+    await expect(fetchScoreboard('20261022/20261105')).rejects.toThrow(/dates invalide/);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
