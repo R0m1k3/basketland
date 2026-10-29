@@ -200,6 +200,57 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
 
+## Traduction des commentaires
+
+Les sous-titres français affichés sur le lecteur sont la **traduction de ce
+que disent les commentateurs** du replay, produite entièrement en local par
+deux services du NAS (carte NVIDIA) :
+
+```
+audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 kb/s)
+   ──speaches (Whisper)──▶ texte anglais horodaté au mot
+   ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
+   ──Ollama (LLM)──▶ français, par lots de 20 avec 4 lignes de contexte
+   ──▶ table commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
+```
+
+- **Un travail à la fois** (le GPU est partagé). Toutes les 10 min, les
+  matchs terminés depuis ≤ 10 jours avec replay (HLS ou MP4 « mobile » :
+  l'audio suffit) sont mis en file ; ouvrir la fiche d'un match le met en
+  tête de file.
+- **Reprise** : tronçons audio, transcriptions et traductions déjà faites
+  sont gardés dans `/data/commentary/<okId>/` jusqu'au succès ; un serveur
+  éteint ou un flux coupé ne fait pas tout recommencer.
+- **Échecs** : flux vidéo ou service local injoignable → nouvel essai
+  automatique rapide (15 min → 6 h) ; autre échec → 1 h, 4 h, 16 h, 24 h puis
+  abandon tant que la vidéo ne change pas (`POST /api/matches/[id]/commentary`
+  avec `{"action":"retry"}` relance à la main). Une ligne que le LLM ne
+  sait pas traduire reste en anglais (marquée `untranslated` en base) sans
+  bloquer le match.
+- **Nouvelle vidéo** (autre identifiant ok.ru) : la piste est refaite.
+- Le play-by-play ESPN reste utilisé pour les statistiques, l'onglet
+  « Actions » et le calage des actions dans la vidéo ; il ne produit plus les
+  sous-titres affichés.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `TRANSCRIBE_URL` | — | Base de l'API compatible OpenAI de speaches, ex. `http://192.168.1.16:8000/v1` (appel : `POST …/audio/transcriptions`). **Sans elle, la fonctionnalité est inactive.** |
+| `TRANSCRIBE_MODEL` | `Systran/faster-distil-whisper-large-v3` | Modèle Whisper demandé à speaches. |
+| `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
+| `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
+| `TRANSLATE_URL` | — | Base de l'API compatible OpenAI d'Ollama, ex. `http://192.168.1.16:11434/v1` (appel : `POST …/chat/completions`). **Sans elle, la fonctionnalité est inactive.** |
+| `TRANSLATE_MODEL` | `mistral-nemo:12b` | Modèle Ollama de traduction (à installer avec `ollama pull`). |
+| `TRANSLATE_BATCH` | `20` | Sous-titres par requête de traduction (1 à 60). |
+| `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
+| `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
+| `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
+| `COMMENTARY_CHUNK_SEC` | `600` | Durée d'un tronçon audio. |
+| `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
+| `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
+
+Un lot de 20 lignes tient dans ~2 000 jetons : le contexte par défaut
+d'Ollama suffit. Pour Qwen3, `/no_think` est ajouté automatiquement.
+
 ## Développement local
 
 ```bash
