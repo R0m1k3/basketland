@@ -9,7 +9,7 @@ import {
   saveSyncSettings,
   upsertAnchor,
 } from '@/lib/db';
-import { error, json, parseId, type RouteCtx } from '@/lib/api';
+import { allowedOrigins, error, isOriginAllowed, json, parseId, type RouteCtx } from '@/lib/api';
 import { analysisStatus, regenerateSubtitles, startVideoAnalysis } from '@/lib/ingest';
 
 export const dynamic = 'force-dynamic';
@@ -73,6 +73,17 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
     body = (await req.json()) as SyncBody;
   } catch {
     return error(400, 'JSON invalide');
+  }
+
+  // Les écritures de calibration modifient l'état persistant sans jeton
+  // (l'UI doit pouvoir les appeler depuis le navigateur). On borne donc
+  // qui peut les déclencher : `SYNC_WRITE_ORIGINS` liste les origines (ou IP)
+  // autorisées ; liste vide = toute origine locale est acceptée.
+  // L'analyse automatique, elle, est bornée par un cooldown côté serveur.
+  if (body.action && body.action !== 'analyze' && body.action !== 'analyze-audio') {
+    if (!isOriginAllowed(req, allowedOrigins())) {
+      return error(403, 'origine non autorisée pour cette écriture');
+    }
   }
 
   const current = getSyncSettings(id);

@@ -122,8 +122,17 @@ manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
 > L'analyse automatique nécessite `ffmpeg`, présent dans l'image Docker. Sans
 > lui, l'application reste fonctionnelle : les sous-titres sont générés et
 > positionnés à partir d'une estimation, et le réglage manuel prend le relais.
-> Variables utiles : `OCR_DISABLED=1` (désactive l'OCR), `OCR_STEP_SEC` (pas de
-> balayage, 60 s par défaut), `FFMPEG_PATH` (chemin du binaire).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `INGEST_TOKEN` | généré dans `/data/ingest_token` | Jeton d'accès à `POST /api/ingest` et aux jobs de synchronisation. |
+| `SYNC_WRITE_ORIGINS` | vide (toute origine acceptée) | Origines ou IP autorisées à modifier la calibration depuis le navigateur, séparées par des virgules (ex. `192.168.1.16,http://nas.local:3000`). Vide = non restreint, adapté à un usage sur le LAN. |
+| `ANALYSIS_MIN_INTERVAL_MS` | `900000` (15 min) | Délai minimum entre deux analyses automatiques d'un même match. Une analyse coûte 5 à 8 min de CPU : ce garde-fou évite de saturer le NAS. |
+| `ANALYSIS_MAX_PARALLEL` | `1` | Nombre d'analyses simultanées. |
+| `OCR_DISABLED` | — | `1` désactive la phase OCR. |
+| `OCR_STEP_SEC` | `60` | Pas de balayage du chrono à l'écran (plus petit = plus précis, plus lent). |
+| `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
+| `DISABLE_CRON` | — | `1` désactive les jobs internes. |
 
 ## Développement local
 

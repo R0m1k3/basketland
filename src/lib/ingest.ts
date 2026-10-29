@@ -197,6 +197,18 @@ interface AnalysisState {
 const g = globalThis as unknown as { __analysis?: Map<number, AnalysisState> };
 const analysis = (g.__analysis ??= new Map());
 
+/**
+ * Date du dernier lancement d'analyse, par match.
+ *
+ * Un scan OCR complet extrait ~130 images et lance ~130 passes tesseract :
+ * environ 5 à 8 minutes de CPU. Sans garde, un appel non authentifié
+ * (`POST /api/matches/[id]/sync` est accessible depuis l'UI, donc sans
+ * jeton) permettrait de saturer le NAS en boucle. Le cooldown borne la
+ * fréquence, `ANALYSIS_MIN_INTERVAL_MS` la rend configurable.
+ */
+const gLast = globalThis as unknown as { __analysisLast?: Map<number, number> };
+const analysisLast = (gLast.__analysisLast ??= new Map());
+
 export function analysisStatus(matchId: number): {
   status: 'none' | 'running' | 'done' | 'unavailable';
   progress?: AnalysisState;
@@ -228,6 +240,15 @@ export function startVideoAnalysis(matchId: number, opts: { withAudio?: boolean 
   if (!ffmpegAvailable()) return { started: false, reason: 'ffmpeg absent' };
   if (analysis.has(matchId)) return { started: false, reason: 'déjà en cours' };
   if (analysis.size >= Number(process.env.ANALYSIS_MAX_PARALLEL ?? 1)) return { started: false, reason: 'une analyse est déjà en cours' };
+  // Cooldown : une analyse coûte 5 à 8 min de CPU, on borne la fréquence.
+  const minInterval = Number(process.env.ANALYSIS_MIN_INTERVAL_MS ?? 15 * 60_000);
+  const last = analysisLast.get(matchId) ?? 0;
+  const since = Date.now() - last;
+  if (last && since < minInterval) {
+    const waitMin = Math.ceil((minInterval - since) / 60_000);
+    return { started: false, reason: `analyse récente, réessayez dans ~${waitMin} min` };
+  }
+  analysisLast.set(matchId, Date.now());
   const okId = match.video_ok_id;
   const state: AnalysisState = { phase: 'ocr', done: 0, total: 0, startedAt: new Date().toISOString() };
   analysis.set(matchId, state);
