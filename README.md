@@ -101,6 +101,30 @@ curl -X POST http://localhost:3000/api/ingest \
 Le jeton d'ingestion est soit défini par la variable d'environnement
 `INGEST_TOKEN`, soit généré automatiquement dans `/data/ingest_token`.
 
+### Calibration automatique de la VF
+
+Le replay coupe une trentaine de minutes de contenu : le décalage entre le
+temps réel du match et la position dans la vidéo n'est donc pas uniforme.
+L'application le calcule en trois temps :
+
+1. **Ancres** — le chrono de jeu affiché à l'écran est lu par OCR
+   (`tesseract.js`, sans dépendance système) et recoupé avec le play-by-play
+   ESPN. C'est ce qui donne les points de calage `(période, chrono) → position
+   vidéo`.
+2. **Interpolation** — entre deux ancres, le temps de jeu avance à vitesse
+   réelle, les temps morts sont comprimés.
+3. **Réglage manuel** — décalage global et décalage par quart, persistés.
+
+Dans la fiche d'un match, le bouton **« Calibrer la synchronisation »** permet
+de lancer l'analyse, de recaler un quart précis et de poser une ancre
+manuellement (en cliquant sur la ligne de VF qui passe à l'instant).
+
+> L'analyse automatique nécessite `ffmpeg`, présent dans l'image Docker. Sans
+> lui, l'application reste fonctionnelle : les sous-titres sont générés et
+> positionnés à partir d'une estimation, et le réglage manuel prend le relais.
+> Variables utiles : `OCR_DISABLED=1` (désactive l'OCR), `OCR_STEP_SEC` (pas de
+> balayage, 60 s par défaut), `FFMPEG_PATH` (chemin du binaire).
+
 ## Développement local
 
 ```bash
