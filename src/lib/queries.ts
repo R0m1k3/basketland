@@ -7,7 +7,7 @@
  * un match à 01:30 le 30/10 appartient à la nuit du 29 au 30.
  */
 import type { SQLInputValue } from 'node:sqlite';
-import { getDb, kvGet, listMatches } from './db';
+import { commentaryReadyIds, getDb, kvGet, listMatches } from './db';
 import type { StandingRow } from './espn';
 import { toDto, type MatchDto } from './present';
 import { addDays, parisDateKey, parisDayStartUtc } from './time';
@@ -66,7 +66,7 @@ export interface GameView extends MatchDto {
   hasStats: boolean;
   /** Replay vidéo disponible. */
   hasReplay: boolean;
-  /** Sous-titres VF possibles (replay + match terminé : la VF est générée depuis le play-by-play). */
+  /** Commentaires traduits en français disponibles (piste prête pour la vidéo actuelle). */
   hasVf: boolean;
 }
 
@@ -81,14 +81,16 @@ function idsWithStats(ids: number[]): Set<number> {
 }
 
 export function toViews(rows: MatchRow[]): GameView[] {
-  const stats = idsWithStats(rows.filter((r) => r.status === 'final').map((r) => r.id));
+  const finals = rows.filter((r) => r.status === 'final').map((r) => r.id);
+  const stats = idsWithStats(finals);
+  const vf = commentaryReadyIds(finals);
   return rows.map((r) => {
     const dto = toDto(r);
     return {
       ...dto,
       hasStats: stats.has(r.id),
       hasReplay: dto.video.available,
-      hasVf: dto.video.available && r.status === 'final',
+      hasVf: dto.video.available && vf.has(r.id),
     };
   });
 }
