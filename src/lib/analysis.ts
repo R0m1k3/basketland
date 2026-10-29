@@ -105,6 +105,21 @@ export function pickAnalysisSource(stream: Pick<OkStream, 'variants'>): Analysis
   return strip([...mp4].sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0]);
 }
 
+/**
+ * Toutes les sources exploitables pour l'OCR, de la meilleure à la moins
+ * bonne : HLS (≈ 720p d'abord), puis MP4. Si la première ne livre aucune image
+ * (403, segment indisponible), l'analyse essaie les suivantes.
+ */
+export function analysisSources(stream: Pick<OkStream, 'variants'>): AnalysisSource[] {
+  const { hls, mp4 } = sourceCandidates(stream);
+  const out: AnalysisSource[] = [];
+  const first = pickAnalysisSource(stream);
+  if (first) out.push(first);
+  const rest = [...hls.filter((c) => (c.height ?? 0) <= 1080).sort((a, b) => Math.abs((a.height ?? 720) - 720) - Math.abs((b.height ?? 720) - 720)), ...mp4.filter((c) => (c.height ?? 0) <= 1080 && (c.height ?? 0) >= 360).sort((a, b) => Math.abs((a.height ?? 720) - 720) - Math.abs((b.height ?? 720) - 720))];
+  for (const c of rest) if (!out.some((o) => o.url === c.url)) out.push(strip(c) as AnalysisSource);
+  return out;
+}
+
 /** Source la plus légère pour l'analyse audio (l'image ne sert à rien). */
 export function pickAudioSource(stream: Pick<OkStream, 'variants'>): AnalysisSource | null {
   const { hls, mp4 } = sourceCandidates(stream);
@@ -122,6 +137,22 @@ export interface AnalysisRecord {
   reason: string;
   anchors: number;
   okId: string | null;
+  /**
+   * Nature du dernier échec : 'reseau' (flux vidéo inaccessible, aucune image
+   * extraite) — réessayé vite, sans compter dans l'abandon ; 'contenu'
+   * (chrono illisible) ou 'erreur' — backoff long.
+   */
+  kind?: AnalysisFailureKind;
+  /** Échecs réseau consécutifs. */
+  netFailures?: number;
+}
+
+export type AnalysisFailureKind = 'reseau' | 'contenu' | 'erreur';
+
+/** Backoff court d'un échec réseau : 15 min, 30 min, 1 h… jusqu'à 6 h. */
+export function networkBackoffMs(netFailures: number): number {
+  if (netFailures <= 0) return 0;
+  return Math.min(6 * 3600_000, 15 * 60_000 * 2 ** (netFailures - 1));
 }
 
 const recordKey = (matchId: number) => `analysis:${matchId}`;
@@ -153,6 +184,8 @@ export function autoRetryAllowed(rec: AnalysisRecord | undefined, okId: string |
   if (!rec) return true;
   if (rec.ok) return false; // déjà réussie : seule une demande explicite relance
   if (okId && rec.okId && okId !== rec.okId) return true; // nouvelle vidéo : on repart de zéro
+  // Flux inaccessible : problème réseau passager, pas de contenu — on réessaie vite.
+  if (rec.kind === 'reseau') return now - Date.parse(rec.at) >= networkBackoffMs(rec.netFailures ?? 1);
   if (rec.failures >= MAX_AUTO_FAILURES) return false;
   return now - Date.parse(rec.at) >= backoffMs(rec.failures);
 }
@@ -187,7 +220,14 @@ interface RunState extends AnalysisProgress {
 }
 
 /** Exécuteur d'une analyse (remplaçable dans les tests). */
-export type AnalysisRunner = (job: Job, progress: (p: AnalysisProgress) => void) => Promise<{ ok: boolean; anchors: number; reason: string }>;
+export interface AnalysisOutcome {
+  ok: boolean;
+  anchors: number;
+  reason: string;
+  kind?: AnalysisFailureKind;
+}
+
+export type AnalysisRunner = (job: Job, progress: (p: AnalysisProgress) => void) => Promise<AnalysisOutcome>;
 
 interface QueueState {
   queue: Job[];
@@ -319,15 +359,27 @@ function start(job: Job): void {
   void Promise.race([runner(job, (p) => Object.assign(state, p)), timeout])
     .then(
       (res) => res,
-      (e: unknown) => ({ ok: false, anchors: 0, reason: `Analyse impossible : ${(e as Error)?.message || String(e)}` }),
+      (e: unknown): AnalysisOutcome => ({ ok: false, anchors: 0, kind: 'erreur', reason: `Analyse impossible : ${(e as Error)?.message || String(e)}` }),
     )
     .finally(() => clearTimeout(watchdog))
     .then((res) => {
       const prev = getAnalysisRecord(job.matchId);
       const sameVideo = !prev?.okId || prev.okId === okId;
-      const failures = res.ok ? 0 : (sameVideo ? (prev?.failures ?? 0) : 0) + 1;
+      const kind: AnalysisFailureKind | undefined = res.ok ? undefined : (res.kind ?? 'contenu');
+      // Un échec réseau ne compte pas dans l'abandon (le contenu n'est pas en cause).
+      const failures = res.ok ? 0 : (sameVideo ? (prev?.failures ?? 0) : 0) + (kind === 'reseau' ? 0 : 1);
+      const netFailures = kind === 'reseau' ? (sameVideo && prev?.kind === 'reseau' ? (prev.netFailures ?? 0) : 0) + 1 : 0;
       try {
-        saveRecord(job.matchId, { at: new Date().toISOString(), ok: res.ok, failures, reason: res.reason, anchors: res.anchors, okId });
+        saveRecord(job.matchId, {
+          at: new Date().toISOString(),
+          ok: res.ok,
+          failures,
+          reason: res.reason,
+          anchors: res.anchors,
+          okId,
+          ...(kind ? { kind } : {}),
+          ...(netFailures ? { netFailures } : {}),
+        });
         db.logIngestEnd(logId, res.ok, res.reason);
       } catch (e) {
         console.error('[analyse] journalisation impossible :', (e as Error).message);
@@ -424,7 +476,18 @@ const PHASE_LABEL: Record<ScanPhase, string> = { localisation: 'localisation du 
  * Phase A — OCR du chrono (localisation du bandeau, balayage grossier, affinage) ;
  * Phase B — énergie audio si l'OCR n'a pas donné assez d'ancres (ou sur demande).
  */
-async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): Promise<{ ok: boolean; anchors: number; reason: string }> {
+/** Message d'un flux vidéo inaccessible (aucune image extraite par ffmpeg). */
+function networkOutcome(detail: string, netFailures: number): AnalysisOutcome {
+  const wait = Math.round(networkBackoffMs(netFailures + 1) / 60_000);
+  return {
+    ok: false,
+    anchors: 0,
+    kind: 'reseau',
+    reason: `Flux vidéo inaccessible : aucune image n'a pu être extraite (${detail}). Problème réseau, pas de contenu : nouvel essai automatique dans ~${wait} min.`,
+  };
+}
+
+async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): Promise<AnalysisOutcome> {
   const matchId = job.matchId;
   const match = db.getMatch(matchId);
   if (!match?.video_ok_id) throw new Error('pas de replay');
@@ -445,8 +508,25 @@ async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): P
 
   let ocrAnchors = 0;
   if (process.env.OCR_DISABLED !== '1') {
-    const src = pickAnalysisSource(stream);
-    if (!src) throw new Error('aucune source vidéo exploitable (ni HLS ni MP4)');
+    const sources = analysisSources(stream);
+    if (!sources.length) throw new Error('aucune source vidéo exploitable (ni HLS ni MP4)');
+    // Sonde : une image au milieu de la vidéo, source après source. Aucune
+    // image = flux inaccessible (403 réseau…), à distinguer d'un chrono illisible.
+    progress({ phase: 'accès au flux vidéo', done: 0, total: Math.min(4, sources.length) });
+    let src: (typeof sources)[number] | null = null;
+    let lastErr = '';
+    for (const [i, s] of sources.slice(0, 4).entries()) {
+      try {
+        await grabFrame(s.url, Math.round(duration / 2), headers, 45_000);
+        src = s;
+        break;
+      } catch (e) {
+        lastErr = ((e as Error).message || String(e)).replace(/\s+/g, ' ').slice(0, 160);
+      }
+      progress({ phase: 'accès au flux vidéo', done: i + 1, total: Math.min(4, sources.length) });
+    }
+    if (!src) return networkOutcome(lastErr || 'ffmpeg', getAnalysisRecord(matchId)?.netFailures ?? 0);
+    const source = src;
     let cached: ScoreboardLocation | null = null;
     try {
       cached = db.kvGet<ScoreboardLocation>(locationKey(okId), 30 * 24 * 3600_000) ?? null;
@@ -458,17 +538,18 @@ async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): P
       tp,
       breaks,
       scores: scoreTimeline(plays),
-      grab: (t) => grabFrame(src.url, t, headers),
+      grab: (t) => grabFrame(source.url, t, headers),
       location: cached,
       stepSec: Number(process.env.OCR_STEP_SEC ?? 105),
       onProgress: (phase, done, total) => progress({ phase: PHASE_LABEL[phase], done, total }),
     });
+    if (!scan.framesRead) return networkOutcome('flux coupé pendant le balayage', getAnalysisRecord(matchId)?.netFailures ?? 0);
     if (scan.location) db.kvSet(locationKey(okId), scan.location);
     db.replaceAnchorsByMethod(matchId, 'auto', scan.anchors.map((a) => anchorRow(matchId, a)));
     ocrAnchors = scan.anchors.length;
     const quarters = Object.keys(scan.perPeriod).length;
     report.push(
-      `OCR (${src.kind} ${src.label}) : bandeau ${scan.location ? (scan.cachedLocation ? 'connu' : 'localisé') : 'non localisé'}, ` +
+      `OCR (${source.kind} ${source.label}) : bandeau ${scan.location ? (scan.cachedLocation ? 'connu' : 'localisé') : 'non localisé'}, ` +
         `${scan.framesRead} images, ${scan.observations.length} lectures, ${ocrAnchors} ancres sur ${quarters} période(s), ` +
         `${Math.round(scan.elapsedMs / 1000)} s`,
     );
@@ -490,7 +571,7 @@ async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): P
   // OCR désactivé volontairement : l'analyse audio seule est le résultat attendu.
   if (process.env.OCR_DISABLED === '1') return { ok: true, anchors: 0, reason: report.join(' ; ') };
   if (ocrAnchors < 2) {
-    return { ok: false, anchors: ocrAnchors, reason: `Chrono du bandeau illisible : synchro approximative (${report.join(' ; ')})` };
+    return { ok: false, anchors: ocrAnchors, kind: 'contenu', reason: `Chrono du bandeau illisible : synchro approximative (${report.join(' ; ')})` };
   }
   return { ok: true, anchors: ocrAnchors, reason: report.join(' ; ') };
 }

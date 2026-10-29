@@ -11,6 +11,8 @@ import {
   analysisStatus,
   autoRetryAllowed,
   backoffMs,
+  networkBackoffMs,
+  analysisSources,
   enqueueAnalysis,
   enqueueRecentAnalyses,
   getAnalysisRecord,
@@ -67,6 +69,13 @@ describe('pickAnalysisSource', () => {
     });
   });
 
+  it('liste les sources de repli : HLS d’abord (même si le MP4 existe), puis MP4', () => {
+    const list = analysisSources({ variants: [v('sd', '852x480', 1_000_000), v('hd', '1280x720', 2_500_000)], mp4: mp4('mobile', 'hd', 'full') } as never);
+    expect(list.map((s) => `${s.kind}:${s.label}`)).toEqual(['hls:hd', 'hls:sd', 'mp4:hd', 'mp4:full']);
+    // Master HLS illisible (resolveOkStream se rabat sur le MP4) : MP4 seulement.
+    expect(analysisSources({ variants: [], mp4: mp4('sd', 'hd') } as never).map((s) => s.label)).toEqual(['hd', 'sd']);
+  });
+
   it("l'audio prend la source la plus légère", () => {
     expect(pickAudioSource({ variants: [v('hd', '1280x720', 2_500_000), v('low', '640x360', 600_000)] })?.label).toBe('low');
     expect(pickAudioSource({ variants: [], mp4: mp4('hd', 'mobile', 'sd') } as never)?.label).toBe('mobile');
@@ -95,6 +104,17 @@ describe('backoff', () => {
     expect(autoRetryAllowed(rec(1, 30), 'A')).toBe(false);
     expect(autoRetryAllowed(rec(1, 61), 'A')).toBe(true);
     expect(autoRetryAllowed(rec(2, 61), 'A')).toBe(false);
+  });
+
+  it('flux inaccessible (réseau) : backoff court, sans abandon', () => {
+    expect(networkBackoffMs(1)).toBe(15 * 60_000);
+    expect(networkBackoffMs(2)).toBe(30 * 60_000);
+    expect(networkBackoffMs(10)).toBe(6 * 3600_000);
+    const net = (n: number, minutesAgo: number): AnalysisRecord => ({ ...rec(MAX_AUTO_FAILURES, minutesAgo), kind: 'reseau', netFailures: n });
+    expect(autoRetryAllowed(net(1, 10), 'A')).toBe(false);
+    expect(autoRetryAllowed(net(1, 16), 'A')).toBe(true);
+    // Même avec le compteur d'échecs « contenu » au maximum : le réseau n'en dit rien.
+    expect(autoRetryAllowed(net(3, 61), 'A')).toBe(true);
   });
 
   it(`abandonne après ${MAX_AUTO_FAILURES} échecs, sauf si la vidéo change`, () => {
@@ -230,6 +250,16 @@ describe("file d'attente des analyses", () => {
     await finish(1, { ok: false, anchors: 0, reason: 'Chrono du bandeau illisible' });
     expect(analysisStatus(1)).toMatchObject({ status: 'failed', reason: 'Chrono du bandeau illisible' });
     expect(enqueueRecentAnalyses()).toBe(0); // backoff de 1 h
+  });
+
+  it('un flux inaccessible est distingué d’un chrono illisible', async () => {
+    enqueueAnalysis(1);
+    await finish(1, { ok: false, anchors: 0, reason: 'Flux vidéo inaccessible : aucune image…', kind: 'reseau' } as never);
+    expect(getAnalysisRecord(1)).toMatchObject({ ok: false, kind: 'reseau', failures: 0, netFailures: 1 });
+    expect(analysisStatus(1)).toMatchObject({ status: 'failed', reason: expect.stringContaining('Flux vidéo inaccessible') });
+    enqueueAnalysis(1, { manual: true });
+    await finish(1, { ok: false, anchors: 0, reason: 'Chrono du bandeau illisible', kind: 'contenu' } as never);
+    expect(getAnalysisRecord(1)).toMatchObject({ kind: 'contenu', failures: 1 });
   });
 
   it("statut « done » avec le nombre d'ancres OCR", () => {

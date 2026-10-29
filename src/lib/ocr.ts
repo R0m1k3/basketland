@@ -128,7 +128,7 @@ export function parseClockCandidates(t: string): number[] {
     if (mm <= 12 && ss < 60 && !(mm === 12 && ss > 0)) candidates.push(mm * 60 + ss);
   }
   if (!candidates.length) {
-    for (const m of t.matchAll(/(?<![\d:.])(\d{1,2})\.(\d)(?![\d.])/g)) {
+    for (const m of t.matchAll(/(?<![\d.])(?<!\d:)(\d{1,2})\.(\d)(?![\d.])/g)) {
       const s = Number(m[1]);
       if (s < 60) candidates.push(Math.round(s + Number(m[2]) / 10));
     }
@@ -411,6 +411,45 @@ export function filterImage(png: Buffer, vf: string, timeoutMs = 20_000): Promis
   });
 }
 
+/**
+ * Image PNG → niveaux de gris bruts (1 octet par pixel) à la taille w×h.
+ * Sert à l'analyse « structurelle » des images (zones fixes d'une image à l'autre).
+ */
+export function rawGray(png: Buffer, w: number, h: number, timeoutMs = 20_000, pre = ''): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const ff = spawn(
+      process.env.FFMPEG_PATH || 'ffmpeg',
+      ['-hide_banner', '-loglevel', 'error', '-f', 'png_pipe', '-i', 'pipe:0', '-vf', `${pre ? `${pre},` : ''}scale=${w}:${h}:flags=area,format=gray`, '-f', 'rawvideo', 'pipe:1'],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      ff.kill('SIGKILL');
+      done(() => reject(new Error(`ffmpeg gris : timeout ${timeoutMs} ms`)));
+    }, timeoutMs);
+    ff.stdout.on('data', (b: Buffer) => chunks.push(b));
+    ff.on('error', (e) => done(() => reject(e)));
+    ff.on('close', (code) =>
+      done(() => {
+        const buf = Buffer.concat(chunks);
+        if (code === 0 && buf.length === w * h) resolve(buf);
+        else reject(new Error(`ffmpeg gris code ${code} (${buf.length} octets)`));
+      }),
+    );
+    ff.stdin.on('error', () => {
+      /* géré par close */
+    });
+    ff.stdin.end(png);
+  });
+}
+
 /** Mot reconnu par tesseract, avec sa boîte en pixels de l'image analysée. */
 export interface OcrWord {
   text: string;
@@ -435,6 +474,7 @@ interface TessPage {
 export interface OcrWorker {
   recognize(img: Buffer, options?: object, output?: { text?: boolean; blocks?: boolean }): Promise<{ data: TessPage }>;
   terminate(): Promise<unknown>;
+  setParameters?(params: Record<string, string>): Promise<unknown>;
 }
 
 /**
@@ -453,11 +493,34 @@ function runtimeRequire(): NodeJS.Require {
 }
 
 /**
- * Caractères reconnus : chiffres, ponctuation du chrono et lettres des
- * périodes (1ST, 2ND, 3RD, 4TH, OT, Q1…). Restreindre l'alphabet évite que
- * tesseract « invente » des mots dans les noms d'équipes et les publicités.
+ * Alphabet des petites zones « période » (1ST, 2ND, 3RD, 4TH, OT, Q1…).
+ *
+ * Il n'est PAS appliqué à la lecture d'un bandeau entier : mesuré sur de
+ * vraies images (chaîne locale MEM-GSW), l'alphabet restreint fait coller tous
+ * les éléments en un seul mot (« MEM 42 2ND 8:00 12 » → « 42208:0012 »),
+ * alors que sans restriction tesseract les sépare (« 42 », « 8:00 », « 12 »).
  */
 export const OCR_WHITELIST = '0123456789:.STNDRHOQ';
+
+export interface OcrParams {
+  /** Mode de segmentation tesseract : '11' texte épars (défaut), '7' une ligne, '8' un mot. */
+  psm?: string;
+  /** Alphabet autorisé ('' = aucun filtre, défaut). */
+  whitelist?: string;
+}
+
+/** Derniers paramètres appliqués, par worker (évite un aller-retour à chaque image). */
+const appliedParams = new WeakMap<object, string>();
+
+async function applyParams(worker: OcrWorker, p: OcrParams): Promise<void> {
+  // debug_file : sans lui, une image vide fait écrire à tesseract des histogrammes
+  // de débogage (« Total count=0 … ») sur la sortie standard du serveur.
+  const params = { tessedit_pageseg_mode: p.psm ?? '11', tessedit_char_whitelist: p.whitelist ?? '', debug_file: '/dev/null' };
+  const key = JSON.stringify(params);
+  if (appliedParams.get(worker) === key || !worker.setParameters) return;
+  await worker.setParameters(params);
+  appliedParams.set(worker, key);
+}
 
 /**
  * Démarre un worker tesseract.js.
@@ -500,18 +563,17 @@ export async function createOcrWorker(timeoutMs = 90_000): Promise<OcrWorker> {
       }),
       timeout,
     ]);
-    await worker.setParameters({
-      tessedit_pageseg_mode: '11' as never,
-      tessedit_char_whitelist: OCR_WHITELIST,
-    });
-    return worker as unknown as OcrWorker;
+    const w = worker as unknown as OcrWorker;
+    await applyParams(w, {});
+    return w;
   } finally {
     clearTimeout(timer);
   }
 }
 
 /** Texte et mots (avec boîtes) d'une image. */
-export async function recognizeWords(worker: OcrWorker, img: Buffer): Promise<{ text: string; words: OcrWord[] }> {
+export async function recognizeWords(worker: OcrWorker, img: Buffer, params: OcrParams = {}): Promise<{ text: string; words: OcrWord[] }> {
+  await applyParams(worker, params);
   const { data } = await worker.recognize(img, {}, { text: true, blocks: true });
   const words: OcrWord[] = [];
   for (const b of data.blocks ?? [])
