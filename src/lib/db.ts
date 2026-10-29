@@ -439,9 +439,18 @@ export function finalMatchesNeedingVideo(
  * Matchs terminés depuis `sinceIso`, avec replay, sans ancre OCR ('auto') :
  * candidats à l'analyse automatique (les plus récents d'abord).
  */
+/**
+ * Matchs à analyser automatiquement.
+ *
+ * Un replay encore en MP4 seul (`video_kind = 'mp4'`) est exclu : ok.ru n'a
+ * alors que la qualité « mobile », trop petite pour lire le chrono. Chaque
+ * tentative échouerait et consommerait le backoff ; le match revient ici dès
+ * que `syncVideos` le fait passer en HLS.
+ */
 export function finalMatchesNeedingAnalysis(sinceIso: string, limit = 30): MatchRow[] {
   return all<MatchRow>(
     `SELECT * FROM matches m WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL
+       AND COALESCE(m.video_kind, 'hls') = 'hls'
        AND m.date_utc >= $since
        AND NOT EXISTS (SELECT 1 FROM sync_anchors a WHERE a.match_id = m.id AND a.method = 'auto')
      ORDER BY m.date_utc DESC LIMIT $limit`,
