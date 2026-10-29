@@ -9,14 +9,51 @@ interface Props {
   initialOffset: number;
 }
 
+interface Anchor {
+  period: number;
+  clock_sec: number;
+  video_ts: number;
+  method: string;
+}
+
+interface SyncState {
+  settings?: { global_offset?: number; quarter_offsets?: Record<string, number> };
+  anchors?: Anchor[];
+  analysis?: { status?: string; reason?: string };
+}
+
+const fmt = (s: number) => {
+  const m = Math.floor(Math.max(0, s) / 60);
+  const sec = Math.floor(Math.max(0, s) % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+};
+
 /**
  * Conteneur client du lecteur : charge les sous-titres, gère le décalage
- * persistant (offset global) et affiche le bouton « Statistiques ».
+ * persistant, la calibration (analyse automatique, ancres manuelles) et le
+ * bouton « Statistiques ».
  */
 export default function MatchClient({ matchId, masterUrl, initialOffset }: Props) {
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [offset, setOffset] = useState(initialOffset);
+  const [quarterOffsets, setQuarterOffsets] = useState<Record<string, number>>({});
+  const [anchors, setAnchors] = useState<Anchor[]>([]);
+  const [analysis, setAnalysis] = useState<string>('');
   const [showStats, setShowStats] = useState(false);
+  const [showCalibration, setShowCalibration] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [message, setMessage] = useState('');
+
+  const loadSync = useCallback(() => {
+    fetch(`/api/matches/${matchId}/sync`)
+      .then((r) => r.json())
+      .then((d: SyncState) => {
+        setAnchors(d.anchors ?? []);
+        if (d.settings?.quarter_offsets) setQuarterOffsets(d.settings.quarter_offsets);
+        if (d.analysis?.status) setAnalysis(d.analysis.status);
+      })
+      .catch(() => undefined);
+  }, [matchId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -28,12 +65,13 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
         if (typeof d.settings?.global_offset === 'number') setOffset(d.settings.global_offset);
       })
       .catch(() => undefined);
+    loadSync();
     return () => {
       cancelled = true;
     };
-  }, [matchId]);
+  }, [matchId, loadSync]);
 
-  // Persiste le décalage côté serveur (recharge la VF sans tout recalculer).
+  /** Persiste le décalage côté serveur (recharge la VF sans tout recalculer). */
   const changeOffset = useCallback(
     (next: number) => {
       setOffset(next);
@@ -46,6 +84,74 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
     [matchId],
   );
 
+  /** Ajuste le décalage d'un seul quart. */
+  const changeQuarterOffset = useCallback(
+    (period: number, delta: number) => {
+      const next = { ...quarterOffsets, [String(period)]: (quarterOffsets[String(period)] ?? 0) + delta };
+      setQuarterOffsets(next);
+      void fetch(`/api/matches/${matchId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quarter_offsets: next }),
+      }).catch(() => undefined);
+    },
+    [matchId, quarterOffsets],
+  );
+
+  /** Lance l'analyse automatique (OCR du chrono à l'écran + énergie audio). */
+  const runAnalysis = useCallback(async () => {
+    setMessage('Analyse en cours…');
+    try {
+      const res = await fetch(`/api/matches/${matchId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'analyze' }),
+      });
+      const d = await res.json();
+      setMessage(d.message ?? (d.started ? 'Analyse lancée.' : 'Analyse impossible.'));
+      loadSync();
+    } catch {
+      setMessage('Analyse impossible.');
+    }
+  }, [matchId, loadSync]);
+
+  /** Pose une ancre : l'action sélectionnée se passe à la position courante. */
+  const setAnchor = useCallback(
+    async (seq: number) => {
+      try {
+        const res = await fetch(`/api/matches/${matchId}/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'anchor', seq, video_ts: currentTime }),
+        });
+        const d = await res.json();
+        setMessage(d.message ?? 'Ancre posée.');
+        loadSync();
+      } catch {
+        setMessage('Impossible de poser l’ancre.');
+      }
+    },
+    [matchId, currentTime, loadSync],
+  );
+
+  const removeAnchor = useCallback(
+    async (period: number, clockSec: number) => {
+      try {
+        await fetch(`/api/matches/${matchId}/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete-anchor', period, clock_sec: clockSec }),
+        });
+        loadSync();
+      } catch {
+        /* ignoré */
+      }
+    },
+    [matchId, loadSync],
+  );
+
+  const periods = [1, 2, 3, 4, 5];
+
   return (
     <>
       <VideoPlayer
@@ -53,14 +159,17 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
         subtitles={subtitles}
         offset={offset}
         onOffsetChange={changeOffset}
+        onTimeChange={setCurrentTime}
       />
+
       {subtitles.length > 0 && (
         <p className="mt-2 text-xs text-slate-500">
           Sous-titres français générés à partir du play-by-play, calés sur le commentaire original
           de la diffusion. Ajustez le décalage si nécessaire — la valeur est conservée.
         </p>
       )}
-      <div className="mt-4">
+
+      <div className="mt-4 flex flex-wrap gap-3">
         <button
           type="button"
           onClick={() => setShowStats((v) => !v)}
@@ -68,7 +177,124 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
         >
           {showStats ? 'Masquer les statistiques' : 'Statistiques du match'}
         </button>
+        {masterUrl && (
+          <button
+            type="button"
+            onClick={() => setShowCalibration((v) => !v)}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:border-slate-500"
+          >
+            {showCalibration ? 'Masquer la calibration' : 'Calibrer la synchronisation'}
+          </button>
+        )}
       </div>
+
+      {showCalibration && (
+        <section className="mt-4 space-y-4 rounded-xl border border-slate-800 bg-[#111621] p-4">
+          <h3 className="text-sm font-semibold text-white">Calibration de la VF</h3>
+
+          <p className="text-xs text-slate-400">
+            Le replay coupe une trentaine de minutes de contenu : le décalage n’est donc pas
+            uniforme. Deux leviers — l’analyse automatique et l’ancrage manuel — permettent de
+            recaler la VF précisément.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={runAnalysis}
+              className="rounded-lg bg-court-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-court-600"
+            >
+              Calibrer automatiquement
+            </button>
+            {analysis && (
+              <span className="text-xs text-slate-400">
+                Analyse : {analysis}
+                {message ? ` — ${message}` : ''}
+              </span>
+            )}
+          </div>
+
+          <div>
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Décalage par quart
+            </h4>
+            <div className="flex flex-wrap gap-3">
+              {periods.map((p) => (
+                <div key={p} className="flex items-center gap-1.5 text-xs">
+                  <span className="text-slate-500">Q{p}</span>
+                  <button
+                    type="button"
+                    onClick={() => changeQuarterOffset(p, -0.5)}
+                    className="rounded border border-slate-700 px-1.5 py-0.5 hover:border-slate-500"
+                  >
+                    −
+                  </button>
+                  <span className="w-14 text-center tabular-nums text-slate-200">
+                    {(quarterOffsets[String(p)] ?? 0).toFixed(1)} s
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => changeQuarterOffset(p, 0.5)}
+                    className="rounded border border-slate-700 px-1.5 py-0.5 hover:border-slate-500"
+                  >
+                    +
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {anchors.length > 0 && (
+            <div>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Ancres ({anchors.length})
+              </h4>
+              <ul className="space-y-1 text-xs">
+                {anchors.map((a) => (
+                  <li key={`${a.period}-${a.clock_sec}`} className="flex items-center gap-2">
+                    <span className="text-slate-300">
+                      Q{a.period} {fmt(a.clock_sec)}
+                    </span>
+                    <span className="tabular-nums text-slate-500">→ {fmt(a.video_ts)} vidéo</span>
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+                      {a.method}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeAnchor(a.period, a.clock_sec)}
+                      className="text-slate-500 hover:text-red-400"
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {subtitles.length > 0 && (
+            <div>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Ancrer manuellement — cliquez sur la ligne qui passe maintenant (
+                {fmt(currentTime)})
+              </h4>
+              <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border border-slate-800 p-2">
+                {subtitles.map((s) => (
+                  <button
+                    key={s.seq}
+                    type="button"
+                    onClick={() => setAnchor(s.seq)}
+                    className="block w-full rounded px-2 py-1 text-left text-xs text-slate-300 hover:bg-slate-800"
+                  >
+                    <span className="mr-2 tabular-nums text-slate-500">{fmt(s.video_ts)}</span>
+                    {s.text}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
     </>
   );
 }

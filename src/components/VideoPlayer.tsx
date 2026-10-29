@@ -17,6 +17,8 @@ interface Props {
   /** Ajustement manuel du décalage, en secondes. */
   offset: number;
   onOffsetChange?: (offset: number) => void;
+  /** Notifie la position de lecture courante (pour poser une ancre). */
+  onTimeChange?: (seconds: number) => void;
 }
 
 /**
@@ -26,7 +28,13 @@ interface Props {
  * sous-titre dont l'intervalle contient `currentTime + offset`. Le décalage
  * permet de recaler la VF quand la détection automatique s'est trompée.
  */
-export default function VideoPlayer({ masterUrl, subtitles, offset, onOffsetChange }: Props) {
+export default function VideoPlayer({
+  masterUrl,
+  subtitles,
+  offset,
+  onOffsetChange,
+  onTimeChange,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<{ destroy: () => void } | null>(null);
   const [current, setCurrent] = useState(0);
@@ -80,8 +88,10 @@ export default function VideoPlayer({ masterUrl, subtitles, offset, onOffsetChan
 
   const onTimeUpdate = useCallback(() => {
     const v = videoRef.current;
-    if (v) setCurrent(v.currentTime);
-  }, []);
+    if (!v) return;
+    setCurrent(v.currentTime);
+    onTimeChange?.(v.currentTime);
+  }, [onTimeChange]);
 
   const toggle = useCallback(() => {
     const v = videoRef.current;
