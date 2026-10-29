@@ -29,8 +29,15 @@ ENV HOSTNAME=0.0.0.0
 # ffmpeg sert uniquement à l'analyse audio (détection des coupures) pour
 # calibrer la synchronisation des sous-titres. Il est optionnel : l'appli
 # fonctionne sans, et l'utilisateur peut recaler la VF à la main.
+#
+# `util-linux` fournit `setpriv`, utilisé par l'entrypoint pour lâcher les
+# privilèges root après avoir rendu /data à l'utilisateur `node`.
+# ATTENTION : `setpriv` n'est PAS présent dans node:22-bookworm-slim (ni
+# `su`, ni `runuser`) — vérifié en inspectant la couche système de l'image
+# officielle. Sans ce paquet, l'entrypoint échoue au démarrage et le
+# conteneur ne démarre pas du tout.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder --chown=node:node /app/.next/standalone ./
