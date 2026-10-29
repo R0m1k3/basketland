@@ -114,6 +114,27 @@ services:
       - /mnt/user/appdata/basketland:/data
 ```
 
+### Mettre à jour le conteneur
+
+L'image est reconstruite et republiée automatiquement par la CI à chaque
+push sur `main`. Pour reprendre la nouvelle version sur le NAS :
+
+```bash
+docker pull ghcr.io/r0m1k3/basketland:latest && \
+docker stop basketland && docker rm basketland && \
+docker run -d --name basketland --restart unless-stopped \
+  -p 3000:3000 -e TZ=Europe/Paris \
+  -v /mnt/user/appdata/basketland:/data \
+  ghcr.io/r0m1k3/basketland:latest
+```
+
+Le volume `/data` (base SQLite, jeton, cache) est conservé : `docker rm`
+sans `-v` ne touche pas au dossier hôte.
+
+> Si tu as installé le conteneur via l'interface Unraid, un **Update** dans
+> l'onglet Docker fait la même chose (téléchargement de la nouvelle image
+> puis redémarrage), sans ligne de commande.
+
 ## Synchronisation des données
 
 Les matchs, statistiques et replays sont récupérés par jobs. Le premier
