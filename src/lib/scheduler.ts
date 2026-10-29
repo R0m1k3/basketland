@@ -1,6 +1,7 @@
 /**
  * Cron interne (setInterval) démarré par `instrumentation.ts` côté serveur Node.
- * Fréquences (spec) : calendrier 15 min, stats après match (5 min), vidéos 2 h,
+ * Fréquences (spec) : calendrier 15 min, stats après match (5 min), vidéos 20 min
+ * (revérification selon l'âge du match, voir replayCadence.ts),
  * VF après stats, analyse vidéo (synchro auto) 10 min, traduction des commentaires
  * 10 min. Désactivable avec DISABLE_CRON=1.
  */
@@ -9,6 +10,7 @@ import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
 import { enqueueRecentAnalyses } from './analysis';
 import { enqueueRecentCommentaries } from './commentary';
+import { VIDEO_JOB_INTERVAL_MS } from './replayCadence';
 
 const g = globalThis as unknown as { __basketlandCron?: boolean };
 
@@ -37,7 +39,7 @@ export function startScheduler(): void {
 
   every(15 * MIN, () => syncSchedule(), 5_000);
   every(5 * MIN, () => syncStats(), 60_000);
-  every(120 * MIN, () => syncVideos(), 3 * MIN);
+  every(VIDEO_JOB_INTERVAL_MS, () => syncVideos(), 3 * MIN);
   every(60 * MIN, () => syncSubtitles(), 10 * MIN);
   // Synchro automatique : met en file (une analyse à la fois) les matchs
   // terminés récents qui ont un replay mais pas encore d'ancres OCR. Les

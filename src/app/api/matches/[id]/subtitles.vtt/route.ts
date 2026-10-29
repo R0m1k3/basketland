@@ -1,18 +1,18 @@
-import { getCommentaryCues, getMatch } from '@/lib/db';
+import { getMatch } from '@/lib/db';
 import { error, parseId, type RouteCtx } from '@/lib/api';
-import { commentaryReady } from '@/lib/commentary';
+import { servedCommentaryCues } from '@/lib/commentary';
 import { wrapTwoLines } from '@/lib/commentaryCues';
 import { toWebVtt } from '@/lib/vtt';
 
 export const dynamic = 'force-dynamic';
 
-/** Export WebVTT de la traduction des commentaires (vide tant qu'elle n'est pas prête). */
+/** Export WebVTT de la traduction des commentaires (les sous-titres déjà publiés, comme GET /subtitles). */
 export async function GET(_req: Request, ctx: RouteCtx<{ id: string }>) {
   const id = parseId((await ctx.params).id);
   if (!id) return error(400, 'id invalide');
   const m = getMatch(id);
   if (!m) return error(404, 'match introuvable');
-  const cues = commentaryReady(id) ? getCommentaryCues(id) : [];
+  const cues = servedCommentaryCues(id);
   const body = toWebVtt(
     cues.map((c) => ({ seq: c.seq, video_ts: c.start_ts, end_ts: c.end_ts, text_fr: wrapTwoLines(c.text_fr), speaker: '' })),
     `BasketLand VF — ${m.away_name} @ ${m.home_name}`,

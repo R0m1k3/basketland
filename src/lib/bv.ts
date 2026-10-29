@@ -152,10 +152,33 @@ export function matchListingEntry(entries: ListingEntry[], match: MatchLike): Li
  * les matchs plus anciens sortaient ensuite « replay non listé » pendant
  * toute la durée de vie du cache.
  */
-const listingCache = new Map<number, { at: number; entries: ListingEntry[]; oldestCovered: string }>();
+const listingCache = new Map<number, { at: number; entries: ListingEntry[]; oldestCovered: string; firstPageAt: number }>();
 
-/** Durée de vie d'une entrée de cache (le contenu du site bouge lentement). */
-const LISTING_TTL_MS = 30 * 60_000;
+/**
+ * Durée de vie d'une entrée de cache. Courte : un replay publié doit être
+ * vu au plus 10 min plus tard (le job vidéo passe toutes les 20 min).
+ */
+export const LISTING_TTL_MS = 10 * 60_000;
+
+/**
+ * Relecture forcée de la 1re page (recherche à la demande) : pas plus d'une
+ * fois par minute et par saison, quel que soit le nombre de matchs demandés.
+ */
+export const FIRST_PAGE_REFRESH_MS = 60_000;
+
+export interface ListingOptions {
+  /**
+   * Relit la 1re page de liste (la plus récente, celle où apparaît un replay
+   * tout juste publié) même si le cache est frais, sans reparcourir toute la
+   * saison : ses entrées sont fusionnées dans le cache existant.
+   */
+  refreshFirstPage?: boolean;
+}
+
+function seasonPageUrl(season: number, page: number): string {
+  const base = `${BV_BASE}/${seasonLabel(season)}`;
+  return page === 1 ? base : `${base}?page${page}`;
+}
 
 /**
  * Parcourt les pages de la saison jusqu'à dépasser `oldestUsDate` (ou maxPages).
@@ -164,18 +187,34 @@ const LISTING_TTL_MS = 30 * 60_000;
  * couverte : un appel ultérieur dont la date est plus ancienne que cette
  * couverture refait le parcours (au lieu de lire un cache tronqué).
  */
-export async function fetchSeasonListing(season: number, oldestUsDate: string, maxPages = 15): Promise<ListingEntry[]> {
+export async function fetchSeasonListing(
+  season: number,
+  oldestUsDate: string,
+  maxPages = 15,
+  opts: ListingOptions = {},
+): Promise<ListingEntry[]> {
   const c = listingCache.get(season);
   // Le cache est valide s'il est frais ET s'il couvre la date demandée
   // (comparaison de dates ISO : l'ordre lexical est l'ordre chronologique).
-  if (c && Date.now() - c.at < LISTING_TTL_MS && c.oldestCovered <= oldestUsDate) return c.entries;
+  if (c && Date.now() - c.at < LISTING_TTL_MS && c.oldestCovered <= oldestUsDate) {
+    if (!opts.refreshFirstPage || Date.now() - c.firstPageAt < FIRST_PAGE_REFRESH_MS) return c.entries;
+    // 1re page seule : les nouveautés s'y trouvent ; les entrées déjà
+    // connues (repoussées en page 2 par les nouvelles) restent en cache.
+    // L'heure du parcours complet (`at`) n'est pas rafraîchie : le TTL
+    // continue de régir la relecture de toute la saison.
+    const fresh = parseListing(await bvFetch(seasonPageUrl(season, 1))).entries;
+    const merged = new Map<string, ListingEntry>(fresh.map((e) => [e.slug, e]));
+    for (const e of c.entries) if (!merged.has(e.slug)) merged.set(e.slug, e);
+    const entries = [...merged.values()];
+    listingCache.set(season, { ...c, entries, firstPageAt: Date.now() });
+    return entries;
+  }
 
-  const base = `${BV_BASE}/${seasonLabel(season)}`;
   const all = new Map<string, ListingEntry>();
   let maxPage = 1;
   let oldestCovered = '';
   for (let page = 1; page <= Math.min(maxPage, maxPages); page++) {
-    const html = await bvFetch(page === 1 ? base : `${base}?page${page}`);
+    const html = await bvFetch(seasonPageUrl(season, page));
     const parsed = parseListing(html);
     maxPage = Math.max(maxPage, parsed.maxPage);
     for (const e of parsed.entries) all.set(e.slug, e);
@@ -193,7 +232,8 @@ export async function fetchSeasonListing(season: number, oldestUsDate: string, m
     const oldestKey = [...listingCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
     if (oldestKey !== undefined) listingCache.delete(oldestKey);
   }
-  listingCache.set(season, { at: Date.now(), entries, oldestCovered: oldestCovered || oldestUsDate });
+  const at = Date.now();
+  listingCache.set(season, { at, entries, oldestCovered: oldestCovered || oldestUsDate, firstPageAt: at });
   return entries;
 }
 
@@ -274,10 +314,14 @@ export async function* replayCandidates(entryUrl: string): AsyncGenerator<string
   }
 }
 
-export async function findReplay(match: MatchLike & { season: number }): Promise<ReplayLookup> {
+/**
+ * Cherche le replay d'un match. `fresh` (recherche à la demande) : relit la
+ * 1re page de liste même si le cache est frais (voir `ListingOptions`).
+ */
+export async function findReplay(match: MatchLike & { season: number }, opts: { fresh?: boolean } = {}): Promise<ReplayLookup> {
   const usDate = usDateKey(match.date_utc);
   const oldest = new Date(Date.parse(`${usDate}T00:00:00Z`) - 2 * 86400_000).toISOString().slice(0, 10);
-  const entries = await fetchSeasonListing(match.season, oldest);
+  const entries = await fetchSeasonListing(match.season, oldest, undefined, { refreshFirstPage: !!opts.fresh });
   const entry = matchListingEntry(entries, match);
   if (!entry) return { slug: null, okId: null, duration: null, available: false, kind: null, reason: 'replay non listé' };
   // Premier candidat rencontré : rapporté (okId, durée, raison) si aucun n'est lisible.

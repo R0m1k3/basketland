@@ -21,6 +21,7 @@ import GameRow from '@/components/schedule/GameRow';
 import TeamGameRow from '@/components/schedule/TeamGameRow';
 import TeamPicker from '@/components/schedule/TeamPicker';
 import { longDate, monthYear, relativeDay, shortDate, weekdayLong } from '@/components/schedule/dates';
+import AutoRefresh from '@/components/ui/AutoRefresh';
 import SpoilerToggle from '@/components/ui/SpoilerToggle';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { IconArrowRight, IconChevronLeft, IconChevronRight, IconClose } from '@/components/ui/Icons';
@@ -48,6 +49,8 @@ export default async function CalendarPage({ searchParams }: { searchParams: SP 
 
   return (
     <div data-spoilers={spoilers} className="space-y-6">
+      {/* Nouveaux replays, scores et badges sans recharger (toutes les 5 min, onglet visible). */}
+      <AutoRefresh />
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="kicker">Calendrier NBA · heures de Paris</p>

@@ -79,4 +79,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Image de plusieurs Go : on ne met en cache que les couches finales
+          # (mode=min) et un échec d'export du cache (réseau du service de
+          # cache GitHub) ne doit jamais faire échouer la publication.
+          cache-to: type=gha,mode=min,ignore-error=true

@@ -176,7 +176,7 @@ curl -X POST http://localhost:3012/api/ingest \
 | `sync-schedule` | Calendrier : matchs à venir et récents (7 jours avant / après). |
 | `sync-season` | Saison complète, mois par mois. |
 | `sync-stats` | Boxscores, joueurs, leaders et play-by-play des matchs terminés. |
-| `sync-videos` | Découvre les replays sur basketball-video.com. |
+| `sync-videos` | Découvre les replays sur basketball-video.com (toutes les 20 min ; un match fini depuis moins de 12 h est revérifié à chaque passage, les autres toutes les 2 h). La fiche d’un match terminé lance aussi une recherche à l’ouverture et se met à jour seule dès que le replay est trouvé. |
 | `sync-subtitles` | Régénère la VF française et recalcule la synchronisation. |
 
 Le jeton d'ingestion est soit défini par la variable d'environnement
@@ -230,19 +230,42 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 Les sous-titres français affichés sur le lecteur sont la **traduction de ce
 que disent les commentateurs** du replay, produite entièrement en local, **dans
 le conteneur**, sur la carte NVIDIA : faster-whisper (transcription) et
-Ollama (traduction) sont embarqués dans l'image et démarrés à la demande par
-l'application — l'un après l'autre, pour que chacun ait toute la mémoire de
-la carte — puis arrêtés. Modèles téléchargés au premier usage dans
-`/data/models`. Pour utiliser plutôt des serveurs externes (speaches,
-Ollama), définir `TRANSCRIBE_URL` / `TRANSLATE_URL`.
+Ollama (traduction) sont embarqués dans l'image, démarrés à la demande par
+l'application au premier besoin d'un travail, puis arrêtés à la fin. Modèles
+téléchargés au premier usage dans `/data/models`. Pour utiliser plutôt des
+serveurs externes (speaches, Ollama), définir `TRANSCRIBE_URL` /
+`TRANSLATE_URL`.
 
 ```
-audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 kb/s)
-   ──speaches (Whisper)──▶ texte anglais horodaté au mot
+pour chaque tronçon de 10 min du replay :
+   ──ffmpeg──▶ audio du tronçon (Opus mono 16 kHz, 24 kb/s)
+   ──Whisper──▶ texte anglais horodaté au mot
    ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
    ──Ollama (MiLMMT-46, modèle de traduction)──▶ français, phrase par phrase
-   ──▶ table commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
+   ──▶ publiés dans commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
+à la fin : piste marquée complète (badge « VF », statut « ready »)
 ```
+
+**Sous-titres progressifs** : les sous-titres arrivent par tranches de
+10 minutes de match, dès que chaque tranche est traduite — on peut commencer
+à regarder presque tout de suite. Pendant le travail, `GET /subtitles` sert
+ce qui est déjà publié (`commentary.status: "running"`, avec
+`commentary.available_until` = secondes de vidéo couvertes) et la fiche
+affiche « Sous-titres disponibles jusqu'à 34:10 — la suite arrive » ; le
+lecteur ajoute les nouvelles tranches en cours de lecture (interrogation
+toutes les 12 s). Un sous-titre publié n'est plus jamais modifié ni
+renuméroté : seuls ceux qui se terminent avant la zone de recouvrement avec
+le tronçon suivant (2 s de marge) sont publiés, le reste attend le tronçon
+suivant. Si le travail échoue en route, ce qui est publié reste affiché et la
+reprise continue là où elle s'était arrêtée.
+
+**Mémoire GPU** : par défaut Whisper (distil-large-v3, fp16 ≈ 1,5-2 Go) et
+le modèle de traduction (MiLMMT-46-4B Q8 ≈ 4,5 Go) restent chargés
+**ensemble** pendant tout le travail : ils tiennent dans une carte de
+10-12 Go. Avec un modèle de traduction plus gros, `COMMENTARY_GPU_SEQUENTIAL=1`
+revient à l'ancien enchaînement : tout transcrire, arrêter Whisper, puis
+traduire (les sous-titres sont alors publiés par tranches pendant la
+traduction seulement).
 
 - **Un travail à la fois** (le GPU est partagé). Toutes les 10 min, les
   matchs terminés depuis ≤ 10 jours avec replay (HLS ou MP4 « mobile » :
@@ -250,7 +273,9 @@ audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 
   tête de file.
 - **Reprise** : tronçons audio, transcriptions et traductions déjà faites
   sont gardés dans `/data/commentary/<okId>/` jusqu'au succès ; un serveur
-  éteint ou un flux coupé ne fait pas tout recommencer.
+  éteint ou un flux coupé ne fait pas tout recommencer. Une piste partielle
+  (travail interrompu) reste servie mais n'a pas le badge « VF » : le match
+  est remis en file pour être terminé.
 - **Échecs** : flux vidéo ou service local injoignable → nouvel essai
   automatique rapide (15 min → 6 h) ; autre échec → 1 h, 4 h, 16 h, 24 h puis
   abandon tant que la vidéo ne change pas (`POST /api/matches/[id]/commentary`
@@ -278,7 +303,8 @@ audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
 | `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
-| `COMMENTARY_CHUNK_SEC` | `600` | Durée d'un tronçon audio. |
+| `COMMENTARY_CHUNK_SEC` | `600` | Durée d'un tronçon audio (et donc d'une tranche de sous-titres publiée). |
+| `COMMENTARY_GPU_SEQUENTIAL` | — | `1` : un seul modèle à la fois en mémoire GPU (tout transcrire, arrêter Whisper, puis traduire), pour un gros modèle de traduction. Par défaut, Whisper et le traducteur restent chargés ensemble et le match est traité tronçon par tronçon. |
 | `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
 | `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
 

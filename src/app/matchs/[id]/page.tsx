@@ -5,6 +5,8 @@ import MatchClient, { type PlayLite, type PlayPosition } from '@/components/Matc
 import StatsPanel from '@/components/StatsPanel';
 import MatchHeader from '@/components/match/MatchHeader';
 import Countdown from '@/components/match/Countdown';
+import ReplayWatcher from '@/components/match/ReplayWatcher';
+import StatusWatcher from '@/components/match/StatusWatcher';
 import TeamLogo from '@/components/ui/TeamLogo';
 import type { PlayItem } from '@/components/match/PlayByPlay';
 import { FICHE_ROOT_ID } from '@/components/match/format';
@@ -114,6 +116,9 @@ export default async function MatchPage({ params }: Params) {
 
         <MatchHeader match={match} linescore={linescore} spoilers={spoilers} />
 
+        {/* Coup d'envoi puis fin du match : la page passe d'elle-même à l'écran suivant. */}
+        {!isFinal && <StatusWatcher matchId={match.id} status={match.status} dateUtc={match.date_utc} />}
+
         {hasVideo && (
           <MatchClient
             matchId={match.id}
@@ -131,8 +136,10 @@ export default async function MatchPage({ params }: Params) {
             home={match.home.abbr}
             kicker="Replay"
             title="Replay pas encore trouvé"
-            text="Les replays apparaissent en général quelques heures après la fin du match. Nouvelle recherche automatique toutes les 2 h : revenez un peu plus tard. Les commentaires sont ensuite traduits en français automatiquement."
-          />
+            text="Les replays apparaissent en général quelques heures après la fin du match. Cette page se met à jour toute seule dès qu’il est en ligne ; les commentaires sont ensuite traduits en français automatiquement."
+          >
+            <ReplayWatcher matchId={match.id} dateUtc={match.date_utc} checkedAt={match.video.checked_at} />
+          </Notice>
         )}
 
         {isLive && (
@@ -199,6 +206,7 @@ function Notice({
   title,
   text,
   live,
+  children,
 }: {
   away: string;
   home: string;
@@ -206,6 +214,8 @@ function Notice({
   title: string;
   text: string;
   live?: boolean;
+  /** Contenu vivant sous le texte (ex. statut de la recherche du replay). */
+  children?: React.ReactNode;
 }) {
   return (
     <section className="panel relative overflow-hidden" aria-label={title}>
@@ -231,6 +241,7 @@ function Notice({
           </p>
           <h2 className="title-lg mt-2">{title}</h2>
           <p className="mx-auto mt-2 max-w-xl text-sm text-paper-mute sm:mx-0">{text}</p>
+          {children}
         </div>
       </div>
     </section>

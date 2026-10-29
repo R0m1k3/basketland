@@ -193,23 +193,37 @@ describe('runCommentary', () => {
       [607, 'Play number 2 is good.', 'Action 2 réussie.'],
       [1207, 'Play number 3 is good.', 'Action 3 réussie.'],
     ]);
-    expect(phases).toContain('extraction 3/3');
-    expect(phases).toContain('transcription 3/3');
-    expect(phases).toContain('traduction 1/1');
+    // Tronçon par tronçon : chaque tronçon est extrait, transcrit, traduit et publié avant le suivant.
+    expect(phases.filter((p) => !p.startsWith('preparation'))).toEqual([
+      'extraction 0/3',
+      'transcription 0/3',
+      'traduction 0/3',
+      'traduction 1/3',
+      'extraction 1/3',
+      'transcription 1/3',
+      'traduction 1/3',
+      'traduction 2/3',
+      'extraction 2/3',
+      'transcription 2/3',
+      'traduction 2/3',
+      'traduction 3/3',
+    ]);
     expect(fs.existsSync(workDir(db.getMatch(A)!.video_ok_id!))).toBe(false);
     expect(commentaryStatus(A)).toEqual({ status: 'ready', models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL } });
     expect(db.commentaryReadyIds([A, B, 12345])).toEqual(new Set([A]));
   });
 
-  it('reprise : après une panne de traduction, ni extraction ni transcription ne sont refaites', async () => {
+  it('reprise : après une panne de traduction, ni extraction ni transcription déjà faites ne sont refaites', async () => {
     const first = fakeDeps({ failTranslate: true });
     await expect(runCommentary({ matchId: A, force: false }, () => {}, ctrl(), first.deps)).rejects.toBeInstanceOf(ServiceError);
-    expect(first.calls.transcribe).toHaveLength(3);
+    // Le tronçon 1 a été transcrit, sa traduction a échoué : rien n'est publié.
+    expect(first.calls.transcribe).toEqual(['chunk-000.ogg']);
+    expect(db.getCommentaryCues(A)).toHaveLength(0);
     const second = fakeDeps();
     const res = await runCommentary({ matchId: A, force: false }, () => {}, ctrl(), second.deps);
     expect(res.ok).toBe(true);
-    expect(second.calls.extract).toEqual([]);
-    expect(second.calls.transcribe).toEqual([]);
+    expect(second.calls.extract).toEqual([597, 1197]);
+    expect(second.calls.transcribe).toEqual(['chunk-001.ogg', 'chunk-002.ogg']);
     expect(db.getCommentaryCues(A)).toHaveLength(3);
   });
 
