@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import VideoPlayer, { type Subtitle } from '@/components/VideoPlayer';
 
 interface Props {
@@ -61,12 +61,22 @@ export default function MatchClient({ matchId, masterUrl, initialOffset }: Props
    * le lecteur garde les anciennes positions et le calibrage paraît sans
    * effet jusqu'au rechargement de la page.
    */
+  // Ref de l'offset courant : permet à `reloadSubtitles` de comparer sans
+  // être reconstruite à chaque changement d'offset (sinon le polling se
+  // redémarre à chaque clic sur les boutons ±).
+  const offsetRef = useRef(offset);
+  offsetRef.current = offset;
+
   const reloadSubtitles = useCallback(() => {
     fetch(`/api/matches/${matchId}/subtitles`)
       .then((r) => r.json())
       .then((d: { subtitles?: Subtitle[]; settings?: { global_offset?: number } }) => {
         setSubtitles(d.subtitles ?? []);
-        if (typeof d.settings?.global_offset === 'number') setOffset(d.settings.global_offset);
+        // On n'écrase l'offset que s'il est encore celui du serveur : sinon
+        // deux réponses dans le désordre (deux clics rapides sur ±) faisaient
+        // revenir l'affichage à une valeur déjà abandonnée, et le clic
+        // suivant repartait de cette valeur périmée.
+        setOffset((cur) => (cur === offsetRef.current ? (d.settings?.global_offset ?? cur) : cur));
       })
       .catch(() => undefined);
   }, [matchId]);

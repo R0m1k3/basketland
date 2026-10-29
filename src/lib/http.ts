@@ -18,6 +18,14 @@ export interface FetchOpts {
   headers?: Record<string, string>;
   timeoutMs?: number;
   retries?: number;
+  /**
+   * 'follow' (défaut) : les redirections sont suivies automatiquement.
+   * 'manual' : la réponse 3xx est RENDUE à l'appelant, qui peut alors
+   * vérifier la destination avant de la suivre. Indispensable pour une
+   * defense anti-SSRF : en 'follow', le trafic atteint déjà l'hôte
+   * redirectionné avant qu'on puisse le refuser.
+   */
+  redirect?: 'follow' | 'manual';
 }
 
 export async function fetchWithRetry(url: string, opts: FetchOpts = {}): Promise<Response> {
@@ -28,7 +36,7 @@ export async function fetchWithRetry(url: string, opts: FetchOpts = {}): Promise
       const res = await fetch(url, {
         headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'en-US,en;q=0.9', ...opts.headers },
         signal: AbortSignal.timeout(opts.timeoutMs ?? 20_000),
-        redirect: 'follow',
+        redirect: opts.redirect ?? 'follow',
         cache: 'no-store',
       });
       if (res.status >= 500 && attempt < retries) {

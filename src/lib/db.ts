@@ -268,14 +268,32 @@ export interface MatchFilters {
   video?: boolean;
   /** Restreint aux matchs portant cet identifiant de flux ok.ru. */
   videoOkId?: string;
+  /**
+   * Ne filtre pas sur la ligue.
+   *
+   * Utilisé par le proxy vidéo, qui doit servir n'importe quel replay
+   * connu en base : un filtre `league = 'nba'` refuserait par exemple un
+   * replay WNBA alors que l'identifiant est valide.
+   */
+  leagueAny?: boolean;
   limit?: number;
   offset?: number;
   order?: 'asc' | 'desc';
 }
 
 function whereFor(f: MatchFilters): { sql: string; params: Params } {
-  const clauses: string[] = ['league = $league'];
-  const params: Params = { league: f.league ?? 'nba' };
+  const clauses: string[] = [];
+  const params: Params = {};
+  // La clause sur la ligue n'est imposée que si le filtre en demande une
+  // (ou si `leagueAny` n'est pas positionné) : une recherche par
+  // identifiant de flux doit pouvoir porter sur n'importe quelle ligue,
+  // sinon un replay hors NBA serait refusé par le proxy.
+  if (f.leagueAny) {
+    // pas de filtre de ligue
+  } else {
+    clauses.push('league = $league');
+    params.league = f.league ?? 'nba';
+  }
   if (f.status) {
     clauses.push('status = $status');
     params.status = f.status;

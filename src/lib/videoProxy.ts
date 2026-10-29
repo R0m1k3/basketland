@@ -27,7 +27,10 @@ export class ProxyError extends Error {
  * pour des vidéos sans rapport avec le site.
  */
 function assertKnownOkId(okId: string): void {
-  const rows = db.listMatches({ videoOkId: okId, video: true, limit: 1 });
+  // `leagueAny` : le proxy doit servir tout replay connu en base, quelle que
+  // soit la ligue. Sans ce drapeau, `listMatches` imposerait `league = 'nba'`
+  // et refuserait un replay WNBA parfaitement valide.
+  const rows = db.listMatches({ videoOkId: okId, video: true, leagueAny: true, limit: 1 });
   if (!rows.length) throw new ProxyError(404, 'replay inconnu');
 }
 
@@ -67,14 +70,30 @@ export async function proxiedMedia(okId: string, key: string | null): Promise<st
   assertKnownOkId(okId);
   for (let attempt = 0; attempt < 2; attempt++) {
     const { variant } = await variantFor(okId, key, attempt > 0);
-    const r = await fetchWithRetry(variant.url, { headers: OK_HEADERS });
+    // `redirect: 'manual'` : la redirection est examinée AVANT d'être
+    // suivie. En 'follow', le trafic atteint déjà l'hôte de destination
+    // avant qu'on puisse le refuser — la revalidation arrive trop tard.
+    const r = await fetchWithRetry(variant.url, { headers: OK_HEADERS, redirect: 'manual' });
+    const finalUrl = r.url || variant.url;
+    if (!isAllowedMediaHost(finalUrl)) throw new ProxyError(502, 'redirection refusée');
     if (r.ok) {
-      // Après redirection, l'hôte doit toujours être autorisé et le schéma https.
-      const finalUrl = r.url || variant.url;
-      if (!isAllowedMediaHost(finalUrl)) throw new ProxyError(502, 'redirection refusée');
       const text = await r.text();
       if (!isValidPlaylist(text)) throw new ProxyError(502, 'playlist média invalide');
       return rewriteMediaPlaylist(text, finalUrl, okId, variant.key);
+    }
+    // 3xx : on ne suit la redirection que si sa destination est autorisée.
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc) throw new ProxyError(502, 'redirection sans cible');
+      const next = new URL(loc, variant.url).toString();
+      if (!isAllowedMediaHost(next)) throw new ProxyError(502, 'redirection refusée');
+      const r2 = await fetchWithRetry(next, { headers: OK_HEADERS, redirect: 'manual' });
+      const final2 = r2.url || next;
+      if (!isAllowedMediaHost(final2)) throw new ProxyError(502, 'redirection refusée');
+      if (!r2.ok) throw new ProxyError(502, `amont HTTP ${r2.status}`);
+      const text2 = await r2.text();
+      if (!isValidPlaylist(text2)) throw new ProxyError(502, 'playlist média invalide');
+      return rewriteMediaPlaylist(text2, final2, okId, variant.key);
     }
     if (![400, 403, 404, 410].includes(r.status) || attempt > 0) throw new ProxyError(502, `amont HTTP ${r.status}`);
   }
@@ -100,11 +119,23 @@ export async function proxiedSegment(okId: string, key: string | null, s: string
     if (!isAllowedMediaHost(url)) throw new ProxyError(400, 'hôte non autorisé');
     const headers: Record<string, string> = { ...OK_HEADERS };
     if (range) headers.Range = range;
-    const r = await fetchWithRetry(url, { headers, timeoutMs: 60_000, retries: 1 });
-    if (r.ok || r.status === 206) {
+    // Redirection manuelle : on examine la destination AVANT de la suivre,
+    // sinon le segment (1,4 Mo) est déjà téléchargé depuis l'hôte non
+    // autorisé au moment où on décide de le refuser.
+    const r = await fetchWithRetry(url, { headers, timeoutMs: 60_000, retries: 1, redirect: 'manual' });
+    let resp = r;
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc) throw new ProxyError(502, 'redirection sans cible');
+      const next = new URL(loc, url).toString();
+      if (!isAllowedMediaHost(next)) throw new ProxyError(502, 'redirection refusée');
+      resp = await fetchWithRetry(next, { headers, timeoutMs: 60_000, retries: 0, redirect: 'manual' });
+      if (resp.status >= 300 && resp.status < 400) throw new ProxyError(502, 'redirection refusée');
+    }
+    if (resp.ok || resp.status === 206) {
       // La réponse peut avoir été redirigée : on revalide la destination
       // effective avant de la relayer au client (anti-SSRF).
-      const finalUrl = r.url || url;
+      const finalUrl = resp.url || url;
       if (!isAllowedMediaHost(finalUrl)) throw new ProxyError(502, 'redirection refusée');
       const out = new Headers({
         'Content-Type': 'video/mp2t',
@@ -113,10 +144,10 @@ export async function proxiedSegment(okId: string, key: string | null, s: string
         'Access-Control-Allow-Origin': '*',
       });
       for (const h of ['content-length', 'content-range']) {
-        const v = r.headers.get(h);
+        const v = resp.headers.get(h);
         if (v) out.set(h, v);
       }
-      return new Response(r.body, { status: r.status, headers: out });
+      return new Response(resp.body, { status: resp.status, headers: out });
     }
     if (r.status === 416) return new Response(null, { status: 416, headers: { 'Content-Range': r.headers.get('content-range') ?? '' } });
     if (![400, 403, 404, 410].includes(r.status) || attempt > 0) throw new ProxyError(502, `amont HTTP ${r.status}`);
