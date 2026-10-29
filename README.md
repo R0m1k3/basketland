@@ -31,21 +31,39 @@ Next.js 15 (App Router) · TypeScript · Tailwind · SQLite
 
 ## Déploiement sur Unraid
 
-L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement démarrer/arrêter/redémarrer un conteneur existant). L'installation se fait donc dans l'interface web d'Unraid.
+L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement démarrer/arrêter/redémarrer un conteneur existant) : aucune mutation `createContainer` n'existe. Deux chemins possibles.
 
-### 1. Image
+### Option A — une commande (le plus rapide)
 
-L'image est construite automatiquement par GitHub Actions à chaque push sur `main` :
+Dans **Unraid → Terminal**, collez :
 
+```bash
+mkdir -p /mnt/user/appdata/basketland && \
+docker run -d \
+  --name basketland \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -e TZ=Europe/Paris \
+  -v /mnt/user/appdata/basketland:/data \
+  ghcr.io/r0m1k3/basketland:latest
 ```
-ghcr.io/r0m1k3/basketland:latest
+
+L'image est **publique** : aucun jeton n'est nécessaire. Le premier
+tirage télécharge l'image (une à deux minutes), puis le conteneur démarre.
+
+Vérification :
+
+```bash
+docker logs -f basketland          # doit afficher « Ready »
+curl -s http://localhost:3000/api/health
 ```
 
-L'image est **publique** : aucun jeton n'est nécessaire sur le NAS, Unraid la
-tire directement. (Le dépôt GitHub et le paquet GHCR sont publics, comme les
-autres dépôts et paquets du compte.)
+Puis l'application est accessible sur `http://<IP-DU-NAS>:3000`.
 
-### 2. Ajouter le conteneur
+> Si le port 3000 est déjà pris sur le NAS, remplacez `-p 3000:3000` par
+> `-p 3010:3000` et accédez à `http://<IP-DU-NAS>:3010`.
+
+### Option B — l'interface web
 
 Dans Unraid : **Docker → Add Container**
 
@@ -59,9 +77,21 @@ Dans Unraid : **Docker → Add Container**
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
-Puis **Apply**. L'application est accessible sur `http://<IP-DU-NAS>:3000`.
+Puis **Apply**.
 
-### 3. Alternative docker-compose
+### Image
+
+L'image est construite automatiquement par GitHub Actions à chaque push sur `main` :
+
+```
+ghcr.io/r0m1k3/basketland:latest
+```
+
+L'image est **publique** : aucun jeton n'est nécessaire sur le NAS, Unraid la
+tire directement. (Le dépôt GitHub et le paquet GHCR sont publics, comme les
+autres dépôts et paquets du compte.)
+
+### Alternative docker-compose
 
 ```yaml
 services:
