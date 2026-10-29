@@ -1,0 +1,39 @@
+/**
+ * Cron interne (setInterval) démarré par `instrumentation.ts` côté serveur Node.
+ * Fréquences (spec) : calendrier 15 min, stats après match (5 min), vidéos 2 h,
+ * VF après stats. Désactivable avec DISABLE_CRON=1.
+ */
+import { countMatches } from './db';
+import { currentSeason } from './time';
+import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
+
+const g = globalThis as unknown as { __basketlandCron?: boolean };
+
+function every(ms: number, fn: () => Promise<unknown>, initialDelayMs: number) {
+  const tick = () => fn().catch((e) => console.error('[cron]', e));
+  setTimeout(() => {
+    void tick();
+    setInterval(tick, ms).unref?.();
+  }, initialDelayMs).unref?.();
+}
+
+export function startScheduler(): void {
+  if (g.__basketlandCron || process.env.DISABLE_CRON === '1') return;
+  g.__basketlandCron = true;
+  const MIN = 60_000;
+  console.log('[cron] démarrage des jobs internes');
+
+  // Premier démarrage : base vide → on charge l'année civile en cours (saison complète).
+  setTimeout(async () => {
+    try {
+      if (countMatches({}) < 50) await syncSeason(currentSeason());
+    } catch (e) {
+      console.error('[cron] init', e);
+    }
+  }, 2_000).unref?.();
+
+  every(15 * MIN, () => syncSchedule(), 5_000);
+  every(5 * MIN, () => syncStats(), 60_000);
+  every(120 * MIN, () => syncVideos(), 3 * MIN);
+  every(60 * MIN, () => syncSubtitles(), 10 * MIN);
+}
