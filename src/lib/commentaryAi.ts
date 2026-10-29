@@ -22,6 +22,7 @@
  */
 import fs from 'node:fs';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
+import { embeddedOllamaAvailable, embeddedOllamaUrl, embeddedWhisperAvailable } from './localAi';
 
 // ------------------------------------------------------------------ configuration
 
@@ -43,7 +44,12 @@ export const DEFAULT_TRANSLATE_MODEL = 'hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGU
  */
 export type TranslateEngine = 'mt' | 'chat';
 
+/** 'embedded' : service embarqué dans le conteneur (localAi.ts) ; 'remote' : serveur externe. */
+export type ServiceMode = 'embedded' | 'remote';
+
 export interface CommentaryConfig {
+  transcribeMode: ServiceMode;
+  translateMode: ServiceMode;
   transcribeUrl: string;
   transcribeModel: string;
   translateUrl: string;
@@ -72,17 +78,24 @@ export function engineFor(model: string, forced?: string): TranslateEngine {
 
 export function commentaryConfig(): CommentaryConfig {
   const translateModel = process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL;
-  const transcribeUrl = trimUrl(process.env.TRANSCRIBE_URL);
-  const translateUrl = trimUrl(process.env.TRANSLATE_URL);
+  // Sans URL externe, les services embarqués dans l'image Docker sont utilisés.
+  const remoteAsr = trimUrl(process.env.TRANSCRIBE_URL);
+  const remoteMt = trimUrl(process.env.TRANSLATE_URL);
+  const transcribeMode: ServiceMode = remoteAsr ? 'remote' : 'embedded';
+  const translateMode: ServiceMode = remoteMt ? 'remote' : 'embedded';
+  const asrOk = !!remoteAsr || embeddedWhisperAvailable();
+  const mtOk = !!remoteMt || embeddedOllamaAvailable();
   let disabledReason: string | null = null;
   if (process.env.COMMENTARY_DISABLED === '1') disabledReason = 'traduction des commentaires désactivée (COMMENTARY_DISABLED=1)';
-  else if (!transcribeUrl && !translateUrl) disabledReason = 'serveurs de transcription et de traduction non configurés (TRANSCRIBE_URL, TRANSLATE_URL)';
-  else if (!transcribeUrl) disabledReason = 'serveur de transcription non configuré (TRANSCRIBE_URL)';
-  else if (!translateUrl) disabledReason = 'serveur de traduction non configuré (TRANSLATE_URL)';
+  else if (!asrOk && !mtOk) disabledReason = 'serveurs de transcription et de traduction non configurés (TRANSCRIBE_URL, TRANSLATE_URL)';
+  else if (!asrOk) disabledReason = 'serveur de transcription non configuré (TRANSCRIBE_URL)';
+  else if (!mtOk) disabledReason = 'serveur de traduction non configuré (TRANSLATE_URL)';
   return {
-    transcribeUrl,
+    transcribeMode,
+    translateMode,
+    transcribeUrl: remoteAsr,
     transcribeModel: process.env.TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIBE_MODEL,
-    translateUrl,
+    translateUrl: remoteMt || `${embeddedOllamaUrl()}/v1`,
     translateModel,
     translateEngine: engineFor(translateModel, process.env.TRANSLATE_ENGINE),
     batch: intEnv('TRANSLATE_BATCH', 20, 1, 60),

@@ -47,11 +47,12 @@ import { buildCues, filterTranscript, mergeTranscripts, shiftTranscript, wordsFr
 import { BROWSER_UA } from './http';
 import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
 import { addDays } from './time';
+import { OllamaSession, WhisperSession } from './localAi';
 
 // ------------------------------------------------------------------ contrat de l'API
 
 export type CommentaryStatusName = 'disabled' | 'none' | 'queued' | 'running' | 'ready' | 'failed';
-export type CommentaryPhase = 'extraction' | 'transcription' | 'traduction';
+export type CommentaryPhase = 'extraction' | 'preparation' | 'transcription' | 'traduction';
 
 export interface CommentaryStatus {
   status: CommentaryStatusName;
@@ -555,6 +556,19 @@ export interface CommentaryDeps {
   extract: (sourceUrl: string, start: number, length: number, outFile: string, o: ExtractOptions) => Promise<void>;
   transcribe: (file: string, cfg: CommentaryConfig, o: { prompt?: string; signal?: AbortSignal }) => Promise<Transcript>;
   translate: (lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext) => Promise<TranslatedLine[]>;
+  /**
+   * Services embarqués (localAi.ts) : démarrés juste avant leur phase,
+   * arrêtés juste après — Whisper et le modèle de traduction ne sont jamais
+   * en mémoire GPU en même temps. Absents (tests, serveurs externes) : on
+   * appelle `transcribe` / `translate` directement.
+   */
+  openTranscriber?: (cfg: CommentaryConfig, signal: AbortSignal) => Promise<Transcriber>;
+  openTranslator?: (cfg: CommentaryConfig, signal: AbortSignal, onProgress: (done: number, total: number) => void) => Promise<{ close(): Promise<void> }>;
+}
+
+export interface Transcriber {
+  transcribe(file: string, prompt: string | undefined, signal: AbortSignal): Promise<Transcript>;
+  close(): Promise<void>;
 }
 
 const defaultDeps: CommentaryDeps = {
@@ -562,7 +576,27 @@ const defaultDeps: CommentaryDeps = {
   extract: extractAudioChunk,
   transcribe: transcribeAudio,
   translate: translateBatch,
+  openTranscriber: async (cfg) => {
+    if (cfg.transcribeMode !== 'embedded') return remoteTranscriber(cfg, transcribeAudio);
+    const s = await WhisperSession.open(cfg.transcribeModel);
+    return { transcribe: (file, prompt, signal) => s.transcribe(file, prompt, signal), close: () => s.close() };
+  },
+  openTranslator: async (cfg, signal, onProgress) => {
+    if (cfg.translateMode !== 'embedded') return { close: async () => {} };
+    const s = await OllamaSession.open();
+    try {
+      await s.ensureModel(cfg.translateModel, onProgress, signal);
+    } catch (e) {
+      await s.close();
+      throw e;
+    }
+    return s;
+  },
 };
+
+function remoteTranscriber(cfg: CommentaryConfig, transcribe: CommentaryDeps['transcribe']): Transcriber {
+  return { transcribe: (file, prompt, signal) => transcribe(file, cfg, { prompt, signal }), close: async () => {} };
+}
 
 /** Message d'un flux vidéo inaccessible (aucun son extrait). */
 function networkOutcome(detail: string, matchId: number): CommentaryOutcome {
@@ -659,22 +693,40 @@ export async function runCommentary(
   }
 
   // --- transcription
-  const roster = [...new Set(db.getPlayerStats(job.matchId).map((p) => p.player_name).filter(Boolean))];
+  const roster = [
+    ...new Set(
+      db
+        .getPlayerStats(job.matchId)
+        .map((p) => p.player_name)
+        .filter(Boolean),
+    ),
+  ];
   const prompt = whisperPrompt(match.home_name, match.away_name, roster);
   const chunks: { plan: ChunkPlan; transcript: Transcript }[] = [];
-  progress({ phase: 'transcription', done: 0, total: plans.length });
-  for (const plan of plans) {
-    checkAborted(signal);
-    const cacheFile = chunkJson(dir, plan.index);
-    const cached = readJson<ChunkCache>(cacheFile);
-    let transcript: Transcript;
-    if (cached && cached.model === cfg.transcribeModel && cached.transcript) transcript = cached.transcript;
-    else {
-      transcript = await deps.transcribe(chunkAudio(dir, plan.index), cfg, { prompt, signal });
-      writeJson(cacheFile, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
+  // Le transcripteur n'est ouvert qu'au premier tronçon à transcrire : une
+  // reprise dont tout est déjà en cache ne charge pas le modèle.
+  let asr: Transcriber | null = null;
+  try {
+    for (const plan of plans) {
+      checkAborted(signal);
+      const cacheFile = chunkJson(dir, plan.index);
+      const cached = readJson<ChunkCache>(cacheFile);
+      let transcript: Transcript;
+      if (cached && cached.model === cfg.transcribeModel && cached.transcript) transcript = cached.transcript;
+      else {
+        if (!asr) {
+          progress({ phase: 'preparation', done: 0, total: 0 });
+          asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
+          progress({ phase: 'transcription', done: chunks.length, total: plans.length });
+        }
+        transcript = await asr.transcribe(chunkAudio(dir, plan.index), prompt, signal);
+        writeJson(cacheFile, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
+      }
+      chunks.push({ plan, transcript });
+      progress({ phase: 'transcription', done: chunks.length, total: plans.length });
     }
-    chunks.push({ plan, transcript });
-    progress({ phase: 'transcription', done: chunks.length, total: plans.length });
+  } finally {
+    await asr?.close();
   }
   const cues = cuesFromChunks(chunks, prompt);
   if (!cues.length) {
@@ -688,26 +740,35 @@ export async function runCommentary(
   const names = [match.away_name, match.home_name, ...roster].join(', ');
   const batches: Cue[][] = [];
   for (let i = 0; i < cues.length; i += cfg.batch) batches.push(cues.slice(i, i + cfg.batch));
-  progress({ phase: 'traduction', done: 0, total: batches.length });
-  for (const [b, batch] of batches.entries()) {
-    checkAborted(signal);
-    const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
-    if (todo.length) {
-      const first = cues.indexOf(batch[0]);
-      const context = cues.slice(Math.max(0, first - 4), first).map((c) => c.text);
-      const res = await deps.translate(
-        todo.map((c) => ({ i: c.seq, en: c.text })),
-        context,
-        cfg,
-        { names, signal },
-      );
-      for (const r of res) {
-        const c = todo.find((x) => x.seq === r.i);
-        if (c) cache.lines[c.seq] = { en: c.text, fr: r.fr, untranslated: r.untranslated };
-      }
-      writeJson(cacheFile, cache);
+  let mt: { close(): Promise<void> } | null = null;
+  try {
+    if (batches.some((batch) => batch.some((c) => cache.lines[c.seq]?.en !== c.text))) {
+      progress({ phase: 'preparation', done: 0, total: 0 });
+      mt = deps.openTranslator ? await deps.openTranslator(cfg, signal, (done, total) => progress({ phase: 'preparation', done, total })) : null;
     }
-    progress({ phase: 'traduction', done: b + 1, total: batches.length });
+    progress({ phase: 'traduction', done: 0, total: batches.length });
+    for (const [b, batch] of batches.entries()) {
+      checkAborted(signal);
+      const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
+      if (todo.length) {
+        const first = cues.indexOf(batch[0]);
+        const context = cues.slice(Math.max(0, first - 4), first).map((c) => c.text);
+        const res = await deps.translate(
+          todo.map((c) => ({ i: c.seq, en: c.text })),
+          context,
+          cfg,
+          { names, signal },
+        );
+        for (const r of res) {
+          const c = todo.find((x) => x.seq === r.i);
+          if (c) cache.lines[c.seq] = { en: c.text, fr: r.fr, untranslated: r.untranslated };
+        }
+        writeJson(cacheFile, cache);
+      }
+      progress({ phase: 'traduction', done: b + 1, total: batches.length });
+    }
+  } finally {
+    await mt?.close();
   }
 
   const rows = cues.map((c) => {

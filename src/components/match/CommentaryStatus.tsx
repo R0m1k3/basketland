@@ -3,7 +3,7 @@
 /** État de la traduction des commentateurs, tel que renvoyé par GET /subtitles. */
 export interface CommentaryState {
   status: 'disabled' | 'none' | 'queued' | 'running' | 'ready' | 'failed';
-  phase?: 'extraction' | 'transcription' | 'traduction';
+  phase?: 'extraction' | 'preparation' | 'transcription' | 'traduction';
   progress?: { done: number; total: number };
   position?: number;
   reason?: string;
@@ -11,12 +11,15 @@ export interface CommentaryState {
 
 const PHASE_LABEL: Record<NonNullable<CommentaryState['phase']>, string> = {
   extraction: 'Extraction de l’audio',
+  preparation: 'Chargement des modèles (le premier lancement les télécharge)',
   transcription: 'Transcription des commentateurs',
   traduction: 'Traduction en français',
 };
 
-function pct(p?: { done: number; total: number }): string {
+function pct(p?: { done: number; total: number }, phase?: CommentaryState['phase']): string {
   if (!p || !p.total) return '';
+  // Téléchargement d'un modèle : progression en Mo.
+  if (phase === 'preparation') return ` · ${p.done} / ${p.total} Mo`;
   return ` · ${Math.min(100, Math.round((p.done / p.total) * 100))} %`;
 }
 
@@ -50,7 +53,7 @@ export default function CommentaryStatus({
   } else if (status === 'running') {
     tone = 'text-flame-hot';
     spinning = true;
-    title = `${state.phase ? PHASE_LABEL[state.phase] : 'Traduction des commentaires'}${pct(state.progress)}`;
+    title = `${state.phase ? PHASE_LABEL[state.phase] : 'Traduction des commentaires'}${pct(state.progress, state.phase)}`;
     detail = 'Le replay se regarde déjà ; les sous-titres apparaîtront à la fin.';
   } else if (status === 'queued') {
     tone = 'text-flame-hot';

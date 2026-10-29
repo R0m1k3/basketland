@@ -33,6 +33,18 @@ Next.js 15 (App Router) · TypeScript · Tailwind · SQLite
 
 L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement démarrer/arrêter/redémarrer un conteneur existant) : aucune mutation `createContainer` n'existe. Deux chemins possibles.
 
+### Prérequis : la carte NVIDIA
+
+La traduction des commentateurs (Whisper + MiLMMT) tourne **dans le
+conteneur**, sur la carte graphique. Une seule fois sur le NAS :
+
+1. **Apps** → installer le plugin **Nvidia Driver** (ich777), choisir la
+   dernière version du pilote, redémarrer le NAS.
+2. Vérifier dans **Terminal** : `nvidia-smi` doit afficher la carte.
+
+Sans carte NVIDIA, tout fonctionne aussi, mais la traduction tourne sur le
+processeur (bien plus lente : plusieurs heures par match).
+
 ### Option A — une commande (le plus rapide)
 
 Dans **Unraid → Terminal**, collez :
@@ -42,11 +54,19 @@ mkdir -p /mnt/user/appdata/basketland && \
 docker run -d \
   --name basketland \
   --restart unless-stopped \
+  --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 \
   -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
+
+> `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
+> conteneur. Whisper et Ollama sont **dans l'image** : rien d'autre à
+> installer. Au premier match traduit, les modèles sont téléchargés dans
+> `/mnt/user/appdata/basketland/models` (~1,5 Go pour Whisper, ~4 Go pour
+> MiLMMT) puis réutilisés.
 
 > Les droits du volume sont gérés automatiquement : au démarrage, le
 > conteneur rend `/data` à l'utilisateur `node` (uid 1000) puis lâche les
@@ -80,6 +100,8 @@ Dans Unraid : **Docker → Add Container**
 | Network Type | `bridge` |
 | Port (HTTP) | `3012` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
+| Variable d'environnement | `NVIDIA_VISIBLE_DEVICES` = `all` |
+| Extra Parameters (vue avancée) | `--runtime=nvidia` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
 Puis **Apply**.
@@ -104,10 +126,12 @@ services:
     image: ghcr.io/r0m1k3/basketland:latest
     container_name: basketland
     restart: unless-stopped
+    runtime: nvidia
     ports:
       - '3012:3012'
     environment:
       TZ: Europe/Paris
+      NVIDIA_VISIBLE_DEVICES: all
     volumes:
       - /mnt/user/appdata/basketland:/data
 ```
@@ -121,12 +145,13 @@ push sur `main`. Pour reprendre la nouvelle version sur le NAS :
 docker pull ghcr.io/r0m1k3/basketland:latest && \
 docker stop basketland && docker rm basketland && \
 docker run -d --name basketland --restart unless-stopped \
+  --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
 
-Le volume `/data` (base SQLite, jeton, cache) est conservé : `docker rm`
+Le volume `/data` (base SQLite, jeton, cache, modèles de traduction) est conservé : `docker rm`
 sans `-v` ne touche pas au dossier hôte.
 
 > Si tu as installé le conteneur via l'interface Unraid, un **Update** dans
@@ -203,8 +228,13 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 ## Traduction des commentaires
 
 Les sous-titres français affichés sur le lecteur sont la **traduction de ce
-que disent les commentateurs** du replay, produite entièrement en local par
-deux services du NAS (carte NVIDIA) :
+que disent les commentateurs** du replay, produite entièrement en local, **dans
+le conteneur**, sur la carte NVIDIA : faster-whisper (transcription) et
+Ollama (traduction) sont embarqués dans l'image et démarrés à la demande par
+l'application — l'un après l'autre, pour que chacun ait toute la mémoire de
+la carte — puis arrêtés. Modèles téléchargés au premier usage dans
+`/data/models`. Pour utiliser plutôt des serveurs externes (speaches,
+Ollama), définir `TRANSCRIBE_URL` / `TRANSLATE_URL`.
 
 ```
 audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 kb/s)
@@ -234,11 +264,13 @@ audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `TRANSCRIBE_URL` | — | Base de l'API compatible OpenAI de speaches, ex. `http://192.168.1.16:8000/v1` (appel : `POST …/audio/transcriptions`). **Sans elle, la fonctionnalité est inactive.** |
+| `TRANSCRIBE_URL` | — (Whisper embarqué) | Serveur de transcription EXTERNE compatible OpenAI (speaches), ex. `http://192.168.1.16:8000/v1`. Vide : Whisper embarqué dans le conteneur. |
 | `TRANSCRIBE_MODEL` | `Systran/faster-distil-whisper-large-v3` | Modèle Whisper demandé à speaches. |
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
-| `TRANSLATE_URL` | — | Adresse d'Ollama, ex. `http://192.168.1.16:11434/v1` (MiLMMT : `POST /api/generate` en complétion brute ; LLM généraliste : `POST …/chat/completions`). **Sans elle, la fonctionnalité est inactive.** |
+| `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
+| `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
+| `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama. |
 | `TRANSLATE_MODEL` | `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` | Modèle Ollama de traduction (à installer avec `ollama pull`). Par défaut **MiLMMT-46-4B v1.0** (Xiaomi), modèle spécialisé en traduction. |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
 | `TRANSLATE_PARALLEL` | `2` | Requêtes de traduction simultanées en mode `mt` (Ollama : régler `OLLAMA_NUM_PARALLEL` en conséquence). |
