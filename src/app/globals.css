@@ -127,3 +127,53 @@ body {
     transition: none !important;
   }
 }
+
+/* ==================================================================
+   Pages (accueil, calendrier, équipes, classement)
+   ================================================================== */
+
+/* --- Mode « scores masqués » ------------------------------------------
+   La page porte data-spoilers="show|hide" ; chaque match data-scope={id}
+   (data-revealed quand l'utilisateur révèle ce match précis). */
+.tone-loss {
+  @apply text-paper-faint;
+}
+[data-spoilers='hide'] [data-scope]:not([data-revealed]) .spoil-show {
+  display: none !important;
+}
+[data-spoilers='show'] .spoil-only,
+[data-scope][data-revealed] .spoil-only {
+  display: none !important;
+}
+/* Sans score, plus de vainqueur ni de vaincu : tons neutres. */
+[data-spoilers='hide'] [data-scope]:not([data-revealed]) .tone-loss {
+  color: inherit;
+}
+.score-mask {
+  @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-ink-500 bg-ink-900/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper-mute transition hover:border-flame/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+}
+
+/* --- Titres de section ------------------------------------------------ */
+.section-title {
+  @apply font-display text-[26px] font-extrabold uppercase leading-none tracking-tight sm:text-[32px];
+}
+.link-more {
+  @apply inline-flex items-center gap-1.5 rounded-full text-sm font-medium text-paper-mute transition hover:text-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+}
+
+/* --- Filigrane de logo (bannières, tuiles) ---------------------------- */
+.watermark {
+  @apply pointer-events-none absolute select-none opacity-[0.13] mix-blend-luminosity;
+  filter: grayscale(0.2) contrast(1.1);
+}
+
+/* Grain léger sur les grandes surfaces colorées */
+.grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.6) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
