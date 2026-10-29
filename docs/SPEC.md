@@ -11,7 +11,7 @@ Application web conteneurisée sur Unraid : replays NBA, calendrier complet, sta
 | Base de données | SQLite local (volume `/data`) | Mono-conteneur, pas de service externe à maintenir |
 | Langue de l'UI | Français | Utilisateur francophone |
 | Fuseau horaire | `Europe/Paris` pour tous les horaires affichés | Exigence utilisateur |
-| Stack | Next.js 15 (App Router) + TypeScript + Tailwind + better-sqlite3 | Standard, build Docker simple avec `output: 'standalone'` |
+| Stack | Next.js 15 (App Router) + TypeScript + Tailwind + `node:sqlite` | Standard, build Docker simple avec `output: 'standalone'` |
 
 ## Sources de données (validées par tests réels)
 
@@ -285,9 +285,20 @@ Le scraping vidéo ne doit pas bloquer le refresh du calendrier : tasks séparé
 
 ### Dockerfile
 - Stage 1 : build Next.js (`npm ci && npm run build`), `output: 'standalone'`.
-- Stage 2 : image runtime slim (node:22-alpine), `better-sqlite3` nécessite des outils de build — utiliser `node:22-bookworm-slim` + `python3 make g++` au build, ou `prebuild-install`/`node-gyp` avec les briques natives. **Alternative plus simple** : `node:22-slim` et installer `better-sqlite3` depuis un binaire précompilé, ou utiliser `libsql`/`sql.js`. **Décision à trancher pendant l'implémentation** — preference pour `better-sqlite3` avec `node:22-bookworm-slim` + toolchain de compilation retiré du runtime.
-- Volume : `/data` → SQLite + cache.
-- Ports : `3000` (web), `8080` (health).
+- Stage 2 : image runtime `node:22-bookworm-slim` (avec `ffmpeg` installé — le slim
+  officiel ne le contient pas).
+- **Base de données : `node:sqlite`** (module intégré à Node depuis 22.13), **pas
+  `better-sqlite3`**. Décision arrêtée pendant l'implémentation : aucune dépendance
+  native, donc aucune toolchain de compilation (`python3`, `make`, `g++`) dans le
+  runtime, et le `node:sqlite` émet un simple avertissement d'API expérimentale.
+- Utilisateur : `node` (uid 1000) de l'image officielle. Ne pas créer d'utilisateur
+  custom — sur Debian, `chown nodejs:nodejs` échoue si `nodejs` n'existe que comme
+  groupe.
+- Volume : `/data` → SQLite + cache + jeton d'ingestion.
+- Port : `3000` (web). Le healthcheck interroge `/api/health` sur le même port
+  (`node -e "fetch(...)"`, pas de `curl` dans l'image slim).
+- Le serveur standalone **exige `HOSTNAME=0.0.0.0`** : sans lui il écoute sur le nom
+  d'hôte de la machine au lieu de toutes les interfaces.
 - `HEALTHCHECK` sur `/api/health`.
 - User non-root.
 - `.dockerignore` : `node_modules`, `.next`, `.git`, `data`.
