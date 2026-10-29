@@ -33,6 +33,18 @@ Next.js 15 (App Router) · TypeScript · Tailwind · SQLite
 
 L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement démarrer/arrêter/redémarrer un conteneur existant) : aucune mutation `createContainer` n'existe. Deux chemins possibles.
 
+### Prérequis : la carte NVIDIA
+
+La traduction des commentateurs (Whisper + MiLMMT) tourne **dans le
+conteneur**, sur la carte graphique. Une seule fois sur le NAS :
+
+1. **Apps** → installer le plugin **Nvidia Driver** (ich777), choisir la
+   dernière version du pilote, redémarrer le NAS.
+2. Vérifier dans **Terminal** : `nvidia-smi` doit afficher la carte.
+
+Sans carte NVIDIA, tout fonctionne aussi, mais la traduction tourne sur le
+processeur (bien plus lente : plusieurs heures par match).
+
 ### Option A — une commande (le plus rapide)
 
 Dans **Unraid → Terminal**, collez :
@@ -42,11 +54,19 @@ mkdir -p /mnt/user/appdata/basketland && \
 docker run -d \
   --name basketland \
   --restart unless-stopped \
+  --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 \
   -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
+
+> `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
+> conteneur. Whisper et Ollama sont **dans l'image** : rien d'autre à
+> installer. Au premier match traduit, les modèles sont téléchargés dans
+> `/mnt/user/appdata/basketland/models` (~1,5 Go pour Whisper, ~4 Go pour
+> MiLMMT) puis réutilisés.
 
 > Les droits du volume sont gérés automatiquement : au démarrage, le
 > conteneur rend `/data` à l'utilisateur `node` (uid 1000) puis lâche les
@@ -80,6 +100,8 @@ Dans Unraid : **Docker → Add Container**
 | Network Type | `bridge` |
 | Port (HTTP) | `3012` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
+| Variable d'environnement | `NVIDIA_VISIBLE_DEVICES` = `all` |
+| Extra Parameters (vue avancée) | `--runtime=nvidia` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
 Puis **Apply**.
@@ -104,10 +126,12 @@ services:
     image: ghcr.io/r0m1k3/basketland:latest
     container_name: basketland
     restart: unless-stopped
+    runtime: nvidia
     ports:
       - '3012:3012'
     environment:
       TZ: Europe/Paris
+      NVIDIA_VISIBLE_DEVICES: all
     volumes:
       - /mnt/user/appdata/basketland:/data
 ```
@@ -121,12 +145,13 @@ push sur `main`. Pour reprendre la nouvelle version sur le NAS :
 docker pull ghcr.io/r0m1k3/basketland:latest && \
 docker stop basketland && docker rm basketland && \
 docker run -d --name basketland --restart unless-stopped \
+  --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
 
-Le volume `/data` (base SQLite, jeton, cache) est conservé : `docker rm`
+Le volume `/data` (base SQLite, jeton, cache, modèles de traduction) est conservé : `docker rm`
 sans `-v` ne touche pas au dossier hôte.
 
 > Si tu as installé le conteneur via l'interface Unraid, un **Update** dans
@@ -199,6 +224,75 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `SEGMENT_CACHE_MB` | `192` | Cache mémoire des segments vidéo préchargés (0 le désactive). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
+
+## Traduction des commentaires
+
+Les sous-titres français affichés sur le lecteur sont la **traduction de ce
+que disent les commentateurs** du replay, produite entièrement en local, **dans
+le conteneur**, sur la carte NVIDIA : faster-whisper (transcription) et
+Ollama (traduction) sont embarqués dans l'image et démarrés à la demande par
+l'application — l'un après l'autre, pour que chacun ait toute la mémoire de
+la carte — puis arrêtés. Modèles téléchargés au premier usage dans
+`/data/models`. Pour utiliser plutôt des serveurs externes (speaches,
+Ollama), définir `TRANSCRIBE_URL` / `TRANSLATE_URL`.
+
+```
+audio du replay ──ffmpeg──▶ tronçons de 10 min (Opus mono 16 kHz, 24 kb/s)
+   ──speaches (Whisper)──▶ texte anglais horodaté au mot
+   ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
+   ──Ollama (MiLMMT-46, modèle de traduction)──▶ français, phrase par phrase
+   ──▶ table commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
+```
+
+- **Un travail à la fois** (le GPU est partagé). Toutes les 10 min, les
+  matchs terminés depuis ≤ 10 jours avec replay (HLS ou MP4 « mobile » :
+  l'audio suffit) sont mis en file ; ouvrir la fiche d'un match le met en
+  tête de file.
+- **Reprise** : tronçons audio, transcriptions et traductions déjà faites
+  sont gardés dans `/data/commentary/<okId>/` jusqu'au succès ; un serveur
+  éteint ou un flux coupé ne fait pas tout recommencer.
+- **Échecs** : flux vidéo ou service local injoignable → nouvel essai
+  automatique rapide (15 min → 6 h) ; autre échec → 1 h, 4 h, 16 h, 24 h puis
+  abandon tant que la vidéo ne change pas (`POST /api/matches/[id]/commentary`
+  avec `{"action":"retry"}` relance à la main). Une ligne que le LLM ne
+  sait pas traduire reste en anglais (marquée `untranslated` en base) sans
+  bloquer le match.
+- **Nouvelle vidéo** (autre identifiant ok.ru) : la piste est refaite.
+- Le play-by-play ESPN reste utilisé pour les statistiques, l'onglet
+  « Actions » et le calage des actions dans la vidéo ; il ne produit plus les
+  sous-titres affichés.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `TRANSCRIBE_URL` | — (Whisper embarqué) | Serveur de transcription EXTERNE compatible OpenAI (speaches), ex. `http://192.168.1.16:8000/v1`. Vide : Whisper embarqué dans le conteneur. |
+| `TRANSCRIBE_MODEL` | `Systran/faster-distil-whisper-large-v3` | Modèle Whisper demandé à speaches. |
+| `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
+| `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
+| `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
+| `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
+| `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama. |
+| `TRANSLATE_MODEL` | `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` | Modèle Ollama de traduction (à installer avec `ollama pull`). Par défaut **MiLMMT-46-4B v1.0** (Xiaomi), modèle spécialisé en traduction. |
+| `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
+| `TRANSLATE_PARALLEL` | `2` | Requêtes de traduction simultanées en mode `mt` (Ollama : régler `OLLAMA_NUM_PARALLEL` en conséquence). |
+| `TRANSLATE_BATCH` | `20` | Sous-titres par lot (1 à 60). |
+| `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
+| `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
+| `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
+| `COMMENTARY_CHUNK_SEC` | `600` | Durée d'un tronçon audio. |
+| `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
+| `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
+
+**Mode `mt` (MiLMMT, par défaut)** : le modèle traduit une phrase à la fois,
+avec son gabarit officiel (`Translate this from English to French: …`) et un
+décodage glouton. Les sous-titres d'une même phrase sont d'abord regroupés
+(jusqu'à la ponctuation finale, 4 lignes max) pour ne pas traduire des bouts
+de phrase hors contexte, puis le français est réparti sur ces sous-titres au
+prorata de l'anglais, en coupant entre deux mots. Le prompt système ne
+s'applique pas à ce mode.
+
+**Mode `chat` (LLM généraliste)** : un lot de 20 lignes tient dans ~2 000
+jetons, le contexte par défaut d'Ollama suffit. Pour Qwen3, `/no_think` est
+ajouté automatiquement.
 
 ## Développement local
 

@@ -158,6 +158,30 @@ CREATE TABLE IF NOT EXISTS user_clips (
   created_at TEXT NOT NULL
 );
 
+-- Traduction des commentaires : sous-titres (anglais transcrit + français)
+-- et piste produite (vidéo source, modèles). Une piste n'est valable que pour
+-- l'ok_id qui l'a produite : si le replay change, elle est refaite.
+CREATE TABLE IF NOT EXISTS commentary_cues (
+  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  start_ts REAL NOT NULL,
+  end_ts REAL NOT NULL,
+  text_en TEXT NOT NULL,
+  text_fr TEXT NOT NULL,
+  untranslated INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (match_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS commentary_tracks (
+  match_id INTEGER PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
+  ok_id TEXT NOT NULL,
+  transcribe_model TEXT NOT NULL,
+  translate_model TEXT NOT NULL,
+  cues INTEGER NOT NULL DEFAULT 0,
+  untranslated INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kv_cache (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -692,6 +716,97 @@ export function saveAudioProfile(p: Omit<AudioProfile, 'analyzed_at'>): void {
   run(
     `INSERT OR REPLACE INTO audio_profiles (match_id, ok_id, window_sec, rms_db_json, cuts_json, analyzed_at) VALUES ($m, $ok, $w, $rms, $cuts, $now)`,
     { m: p.match_id, ok: p.ok_id, w: p.window_sec, rms: JSON.stringify(p.rms_db), cuts: JSON.stringify(p.cuts), now: nowIso() },
+  );
+}
+
+// ---------------------------------------------------------------- traduction des commentaires
+
+export interface CommentaryCueRow {
+  match_id: number;
+  seq: number;
+  start_ts: number;
+  end_ts: number;
+  text_en: string;
+  text_fr: string;
+  untranslated: number;
+}
+
+export interface CommentaryTrackRow {
+  match_id: number;
+  ok_id: string;
+  transcribe_model: string;
+  translate_model: string;
+  cues: number;
+  untranslated: number;
+  created_at: string;
+}
+
+/** Remplace d'un bloc la piste traduite d'un match (sous-titres + métadonnées). */
+export function replaceCommentary(
+  matchId: number,
+  track: { ok_id: string; transcribe_model: string; translate_model: string },
+  cues: Omit<CommentaryCueRow, 'match_id'>[],
+): void {
+  tx(() => {
+    run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
+    const st = getDb().prepare(
+      `INSERT INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated)
+       VALUES ($m, $seq, $start, $end, $en, $fr, $u)`,
+    );
+    for (const c of cues)
+      st.run({ m: matchId, seq: c.seq, start: c.start_ts, end: c.end_ts, en: c.text_en, fr: c.text_fr, u: c.untranslated ? 1 : 0 });
+    run(
+      `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at)
+       VALUES ($m, $ok, $tm, $lm, $n, $u, $now)`,
+      {
+        m: matchId,
+        ok: track.ok_id,
+        tm: track.transcribe_model,
+        lm: track.translate_model,
+        n: cues.length,
+        u: cues.filter((c) => c.untranslated).length,
+        now: nowIso(),
+      },
+    );
+  });
+}
+
+export function getCommentaryTrack(matchId: number): CommentaryTrackRow | undefined {
+  return one<CommentaryTrackRow>('SELECT * FROM commentary_tracks WHERE match_id = $id', { id: matchId });
+}
+
+export function getCommentaryCues(matchId: number): CommentaryCueRow[] {
+  return all<CommentaryCueRow>('SELECT * FROM commentary_cues WHERE match_id = $id ORDER BY start_ts, seq', { id: matchId });
+}
+
+/**
+ * Matchs (parmi `ids`) dont la traduction des commentaires est prête pour le
+ * replay ACTUEL (badge « VF » des listes). Une piste produite pour un autre
+ * ok_id ne compte pas.
+ */
+export function commentaryReadyIds(ids: number[]): Set<number> {
+  const list = [...new Set(ids.filter((n) => Number.isInteger(n)))];
+  if (!list.length) return new Set();
+  return new Set(
+    all<{ match_id: number }>(
+      `SELECT t.match_id FROM commentary_tracks t JOIN matches m ON m.id = t.match_id
+       WHERE t.ok_id = m.video_ok_id AND t.cues > 0 AND t.match_id IN (SELECT value FROM json_each($ids))`,
+      { ids: JSON.stringify(list) },
+    ).map((r) => r.match_id),
+  );
+}
+
+/**
+ * Matchs terminés depuis `sinceIso`, avec replay (HLS ou MP4 : l'audio du
+ * MP4 « mobile » suffit), sans piste traduite pour la vidéo actuelle.
+ */
+export function finalMatchesNeedingCommentary(sinceIso: string, limit = 30): MatchRow[] {
+  return all<MatchRow>(
+    `SELECT * FROM matches m WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL
+       AND m.date_utc >= $since
+       AND NOT EXISTS (SELECT 1 FROM commentary_tracks t WHERE t.match_id = m.id AND t.ok_id = m.video_ok_id)
+     ORDER BY m.date_utc DESC LIMIT $limit`,
+    { since: sinceIso, limit },
   );
 }
 

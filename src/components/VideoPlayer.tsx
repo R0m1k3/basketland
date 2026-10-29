@@ -1056,7 +1056,7 @@ function Poster({
         {duration ? <span className="num text-sm">{fmtTime(duration)}</span> : null}
         {cues > 0 && (
           <span className="inline-flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-flame" /> VF synchronisée · {cues} commentaires
+            <span className="h-1.5 w-1.5 rounded-full bg-flame" /> Commentaires traduits en français · {cues} sous-titres
           </span>
         )}
         {lowQuality && <span className="text-warn">Qualité réduite — la HD arrive</span>}
@@ -1078,7 +1078,6 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
         <button type="button" onClick={onRetry} className="btn-primary mt-4">
           <Icon name="replay" size={16} /> Réessayer
         </button>
-        <p className="mt-3 text-xs text-paper-faint">La VF reste consultable dans le panneau « VF en direct ».</p>
       </div>
     </div>
   );

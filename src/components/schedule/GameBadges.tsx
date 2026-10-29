@@ -19,7 +19,7 @@ export default function GameBadges({ game, size = 'md' }: { game: GameView; size
       {game.hasVf && (
         <span
           className={`inline-flex items-center gap-1 rounded-full border border-flame/40 font-bold uppercase tracking-wider text-flame-hot ${pad}`}
-          title="Sous-titres français synchronisés"
+          title="Commentaires traduits en français"
         >
           <IconSubtitles size={12} />
           VF

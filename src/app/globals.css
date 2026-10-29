@@ -283,15 +283,6 @@ body {
   @apply font-display uppercase tracking-wide;
 }
 
-/* Transcript « VF en direct » */
-.transcript-row[data-state='active'] > button {
-  box-shadow: inset 3px 0 0 #ff5a1f;
-}
-.transcript-row {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 48px;
-}
-
 /* Play-by-play */
 .pbp-row {
   content-visibility: auto;

@@ -3,10 +3,14 @@ services:
     image: ghcr.io/r0m1k3/basketland:latest
     container_name: basketland
     restart: unless-stopped
+    # Carte NVIDIA pour la traduction des commentaires (Whisper + Ollama
+    # embarqués) : plugin « Nvidia Driver » installé sur Unraid.
+    runtime: nvidia
     ports:
       - '3012:3012'
     environment:
       TZ: Europe/Paris
+      NVIDIA_VISIBLE_DEVICES: all
       # Jeton d'accès à /api/ingest (les jobs de synchronisation).
       # À définir dans l'UI Unraid ; sinon un jeton est généré dans /data.
       INGEST_TOKEN: ${INGEST_TOKEN:-}
