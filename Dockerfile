@@ -39,6 +39,32 @@ RUN python3 -m venv /opt/whisper \
       faster-whisper==1.2.1 ctranslate2==4.8.2 av==17.1.0 \
       nvidia-cublas-cu12==12.9.2.10 nvidia-cudnn-cu12==9.26.1.1
 
+# ---------------------------------------------------------------- Voix
+# Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices)
+# et SpeechBrain ECAPA (empreintes vocales des commentateurs), dans un
+# environnement Python séparé de Whisper (torch et transformers aux versions
+# imposées par qwen-tts). Liste complète et figée dans
+# scripts/voice-requirements.txt, installée sans résolution (--no-deps).
+#
+# cuBLAS et cuDNN ne sont pas installés une seconde fois : ceux de Whisper
+# (/opt/whisper, mêmes versions majeures que celles attendues par torch 2.8)
+# sont reliés par lien symbolique, que torch trouve par son RPATH
+# ($ORIGIN/../../nvidia/<bibliothèque>/lib) : ~1,3 Go de moins.
+# Le contrôle final charge torch avec ces bibliothèques (sans GPU, pas besoin
+# du pilote) : un lien cassé ou un cuDNN incompatible fait échouer le build,
+# pas le premier doublage.
+FROM whisper AS tts
+COPY scripts/voice-requirements.txt /tmp/voice-requirements.txt
+RUN python3 -m venv /opt/tts \
+ && /opt/tts/bin/pip install --no-cache-dir --no-deps -r /tmp/voice-requirements.txt \
+ && SP="$(/opt/tts/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && WSP="$(/opt/whisper/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && ln -s "$WSP/nvidia/cublas" "$SP/nvidia/cublas" \
+ && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
+ && /opt/tts/bin/python -c "import re, torch, torch.backends.cudnn as cudnn; v = cudnn.version(); libs = sorted(set(re.findall(r'\S+/lib(?:cublas|cudnn)\.so\.\d+', open('/proc/self/maps').read()))); print('torch', torch.__version__, 'CUDA', torch.version.cuda, 'cuDNN', v, libs); assert v and len(libs) == 2 and all(l.startswith('/opt/whisper/') for l in libs), libs" \
+ && /opt/tts/bin/python -c "import torchaudio, soundfile, librosa, speechbrain.inference.speaker, qwen_tts" \
+ && rm /tmp/voice-requirements.txt
+
 # ---------------------------------------------------------------- runtime
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
@@ -69,17 +95,23 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 \
  && rm -rf /var/lib/apt/lists/*
 
-# Services embarqués de traduction des commentaires (voir src/lib/localAi.ts) :
-# démarrés à la demande par l'application, jamais exposés hors du conteneur.
-# Modèles téléchargés au premier usage dans /data/models (volume persistant).
+# Services embarqués de traduction des commentaires (voir src/lib/localAi.ts)
+# et voix du doublage (src/lib/voiceAi.ts) : démarrés à la demande par
+# l'application, jamais exposés hors du conteneur. Modèles téléchargés au
+# premier usage dans /data/models (volume persistant), jamais dans l'image.
+# /opt/tts dépend de /opt/whisper (liens symboliques vers cuBLAS et cuDNN).
 COPY --from=ollama /ollama/bin/ollama /usr/bin/ollama
 COPY --from=ollama /ollama/lib /usr/lib/ollama
 COPY --from=whisper /opt/whisper /opt/whisper
+COPY --from=tts /opt/tts /opt/tts
 
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --chown=node:node scripts/whisper_worker.py ./scripts/whisper_worker.py
+COPY --chown=node:node scripts/voice_worker.py ./scripts/voice_worker.py
+# Voix figées du doublage (WAV de référence + transcription + voice.json).
+COPY --chown=node:node assets/voices ./assets/voices
 # Récupération d'accès : docker exec -it basketland node scripts/reset-password.mjs <identifiant> <mot-de-passe>
 COPY --chown=node:node scripts/reset-password.mjs ./scripts/reset-password.mjs
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
