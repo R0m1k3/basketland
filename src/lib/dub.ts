@@ -10,10 +10,11 @@
  * vidéo, autres modèles, autre découpage), le doublage est effacé et refait.
  *
  * PAR TRONÇON : audio du tronçon réextrait (ffmpeg) → empreinte vocale de
- * chaque réplique (ECAPA, hauteur de voix) → regroupement en locuteurs (par
- * match, en ligne) → voix attribuée à chaque locuteur, stable pour tout le
- * match → synthèse de chaque réplique → calage sur la durée de la réplique
- * (accélération limitée, `atempo`) → montage du tronçon (silence + répliques
+ * chaque réplique (ECAPA, hauteur de voix, probabilité « voix de femme ») →
+ * regroupement en locuteurs (par match, en ligne) → voix attribuée à chaque
+ * locuteur (F pour une femme), stable pour tout le match → synthèse de
+ * chaque réplique → calage sur la durée de la réplique (accélération
+ * limitée, `atempo`) → montage du tronçon (silence + répliques
  * à leur place) en AAC mono 24 kHz → `${dataDir()}/dub/<match>/chunk-<idx>.m4a`
  * (écrit en .part puis renommé) → publication en base (`dub_chunks`).
  *
@@ -91,8 +92,15 @@ export interface VoiceSessionLike {
   readonly voices: string[];
   /** Synthèse d'une réplique dans un WAV mono. */
   synth(text: string, voice: string, outFile: string, signal?: AbortSignal): Promise<{ duration: number; sampleRate: number }>;
-  /** Empreintes ECAPA (192-d, normées) et hauteur médiane (Hz) de chaque segment [début, fin] (s, dans le fichier). */
-  embed(file: string, segments: [number, number][], signal?: AbortSignal): Promise<{ embeddings: (number[] | null)[]; f0: (number | null)[] }>;
+  /**
+   * Empreintes ECAPA (192-d, normées), hauteur médiane (Hz) et probabilité
+   * « voix de femme » (facultative) de chaque segment [début, fin] (s, dans le fichier).
+   */
+  embed(
+    file: string,
+    segments: [number, number][],
+    signal?: AbortSignal,
+  ): Promise<{ embeddings: (number[] | null)[]; f0: (number | null)[]; female?: (number | null)[] }>;
   close(): Promise<void>;
 }
 
@@ -178,10 +186,34 @@ function envNum(name: string, def: number): number {
 /** Similarité cosinus minimale pour rattacher une réplique à un locuteur connu. */
 export const speakerSimThreshold = () => envNum('DUB_SPEAKER_SIM', 0.6);
 /**
- * Hauteur de voix médiane (Hz) à partir de laquelle un locuteur prend la voix
- * féminine. DÉSACTIVÉ par défaut : sur le son diffusé, un commentateur qui
- * s'emballe parle à 230-250 Hz, autant qu'une voix de femme (mesuré) — il
- * prendrait la voix féminine. À régler (`DUB_FEMALE_F0`) seulement si besoin.
+ * Probabilité « voix de femme » moyenne (classifieur du moteur de voix,
+ * scripts/voice_gender.py, pondérée par la durée des répliques) à partir de
+ * laquelle un locuteur prend la voix féminine F. Une valeur > 1 désactive la
+ * détection. Mesuré (voir le README) : commentateurs NBA, même emballés,
+ * ≤ 0,1 en moyenne sur toute fenêtre de 6 s, reporter réelle 0,996 ; sur des
+ * livres audio, le pire lecteur (noyé dans un bruit de salle à 5 dB) atteint
+ * 0,83 sur 10 s, une lectrice à la voix grave descend à 0,65 sur 30 s.
+ */
+export const femaleProbMin = () => envNum('DUB_FEMALE_PROB', 0.85);
+/**
+ * Parole classée homme/femme (s) nécessaire avant de donner F à un locuteur.
+ * 6 s ne suffisent pas : un lecteur qui imite une femme (fausset) atteint
+ * 0,97 sur 6 s (0,72 sur 10 s).
+ */
+export const FEMALE_MIN_SEC = 10;
+/**
+ * Seules les répliques des 30 premières secondes de parole d'un locuteur
+ * comptent pour son genre : la décision, et donc l'éventuelle bascule vers F,
+ * ne peut venir qu'au début (voir `assignRoles`).
+ */
+export const FEMALE_WINDOW_SEC = 30;
+/**
+ * Hauteur de voix médiane (Hz) à partir de laquelle un NOUVEAU locuteur prend
+ * la voix féminine quand le classifieur ne l'a pas assez entendu (moteur sans
+ * classifieur, répliques trop courtes). DÉSACTIVÉ par défaut : sur le son
+ * diffusé, un commentateur qui s'emballe parle à 230-250 Hz, autant qu'une
+ * voix de femme (mesuré) — il prendrait la voix féminine. À régler
+ * (`DUB_FEMALE_F0`) seulement si besoin.
  */
 export const femaleF0Hz = () => envNum('DUB_FEMALE_F0', Number.POSITIVE_INFINITY);
 /** Une réplique plus courte (s) ne crée jamais de nouveau locuteur (empreinte trop peu fiable). */
@@ -207,8 +239,14 @@ export interface Speaker {
   talk: number;
   /** Hauteurs de voix des dernières répliques (Hz). */
   f0: number[];
-  /** Voix attribuée, définitive pour tout le match. */
+  /** Parole classée homme/femme (s) pendant les `FEMALE_WINDOW_SEC` premières secondes du locuteur. */
+  femaleSec?: number;
+  /** Probabilité « voix de femme » moyenne de cette parole (pondérée par la durée des répliques). */
+  femaleP?: number;
+  /** Voix attribuée, stable pour tout le match (sauf bascule unique vers F, voir `assignRoles`). */
   role?: VoiceRole;
+  /** Voix portée avant la bascule vers F (premières répliques du locuteur). */
+  roleBefore?: VoiceRole;
 }
 
 export interface SpeakerState {
@@ -244,14 +282,19 @@ export function median(xs: readonly number[]): number | null {
  * la similarité cosinus atteint `threshold` (moyenne mise à jour), sinon crée
  * un nouveau locuteur — sauf réplique trop courte, rattachée au plus proche.
  * Une réplique sans empreinte prend le locuteur de la précédente (à défaut,
- * de la suivante). Rend l'id du locuteur de chaque réplique (null : aucun
- * locuteur connu, la voix principale sera utilisée).
+ * de la suivante). Chaque locuteur cumule son temps de parole, ses hauteurs
+ * de voix et, sur ses `FEMALE_WINDOW_SEC` premières secondes de parole, la
+ * probabilité « voix de femme » de ses répliques rattachées par empreinte
+ * (`female`, peut être vide).
+ * Rend l'id du locuteur de chaque réplique (null : aucun locuteur connu, la
+ * voix principale sera utilisée).
  */
 export function assignSpeakers(
   state: SpeakerState,
   durations: readonly number[],
   embeddings: readonly (readonly number[] | null)[],
   f0: readonly (number | null)[],
+  female: readonly (number | null)[] = [],
   o: { threshold?: number; minNewSec?: number } = {},
 ): (number | null)[] {
   const threshold = o.threshold ?? speakerSimThreshold();
@@ -299,7 +342,15 @@ export function assignSpeakers(
   for (let i = 0; i < ids.length; i++) {
     const s = state.speakers.find((x) => x.id === ids[i]);
     if (!s) continue;
-    s.talk += Math.max(0, durations[i]);
+    const d = Math.max(0, durations[i]);
+    // Preuve du genre : seulement une réplique rattachée par son empreinte (pas par voisinage).
+    const p = embeddings[i]?.length ? female[i] : null;
+    if (typeof p === 'number' && p >= 0 && p <= 1 && d > 0 && s.talk < FEMALE_WINDOW_SEC) {
+      const sec = s.femaleSec ?? 0;
+      s.femaleP = ((s.femaleP ?? 0) * sec + p * d) / (sec + d);
+      s.femaleSec = sec + d;
+    }
+    s.talk += d;
     const hz = f0[i];
     if (typeof hz === 'number' && Number.isFinite(hz) && hz > 0) {
       s.f0.push(Math.round(hz * 10) / 10);
@@ -310,22 +361,55 @@ export function assignSpeakers(
 }
 
 /**
- * Voix des locuteurs qui n'en ont pas encore (modifie `state`). Par temps de
- * parole décroissant : le 1er prend A (commentateur), le 2e B4 (consultant),
- * les suivants B1 ; un locuteur à la voix aiguë (hauteur médiane ≥
- * `femaleHz`) prend F si cette voix existe, sinon B1. Une voix attribuée ne
- * change plus ; un nouveau locuteur prend la prochaine voix libre.
+ * Le classifieur du moteur entend-il une femme ? Au moins `FEMALE_MIN_SEC`
+ * de parole classée et une probabilité moyenne ≥ `minProb`.
  */
-export function assignRoles(state: SpeakerState, voices: readonly string[], femaleHz = femaleF0Hz()): void {
+export function heardFemale(s: Pick<Speaker, 'femaleSec' | 'femaleP'>, minProb = femaleProbMin()): boolean {
+  return (s.femaleSec ?? 0) >= FEMALE_MIN_SEC && (s.femaleP ?? 0) >= minProb;
+}
+
+/**
+ * Voix des locuteurs (modifie `state`) ; rend les locuteurs qui viennent de
+ * basculer vers F.
+ *
+ * Nouveaux locuteurs, par temps de parole décroissant : une femme
+ * (`heardFemale` ; ou, si ce réglage est actif et que le classifieur n'a pas
+ * assez entendu le locuteur, hauteur médiane ≥ `femaleHz`) prend F si le
+ * moteur a cette voix, sinon B1 ; les autres prennent A
+ * (commentateur), puis B4 (consultant), puis B1. Une voix attribuée ne
+ * change plus, à UNE exception : un locuteur vu d'abord trop brièvement pour
+ * être classé reçoit une voix d'homme provisoire ; si les preuves arrivent
+ * ensuite (ses répliques des `FEMALE_WINDOW_SEC` premières secondes de
+ * parole, les seules qui comptent), il bascule une fois vers F et n'en
+ * change plus. Après ces 30 s, son genre est figé : jamais de bascule tardive
+ * en plein match. La hauteur de voix ne décide jamais d'une bascule.
+ */
+export function assignRoles(
+  state: SpeakerState,
+  voices: readonly string[],
+  femaleHz = femaleF0Hz(),
+  minProb = femaleProbMin(),
+): Speaker[] {
+  const hasF = voices.includes('F');
+  const switched: Speaker[] = [];
+  for (const s of state.speakers) {
+    if (s.role && s.role !== 'F' && hasF && heardFemale(s, minProb)) {
+      s.roleBefore = s.role;
+      s.role = 'F';
+      switched.push(s);
+    }
+  }
   const used = new Set<VoiceRole>(state.speakers.flatMap((s) => (s.role ? [s.role] : [])));
   const fresh = state.speakers.filter((s) => !s.role).sort((a, b) => b.talk - a.talk || a.id - b.id);
   for (const s of fresh) {
-    const hz = median(s.f0);
-    const role: VoiceRole =
-      hz !== null && hz >= femaleHz ? (voices.includes('F') ? 'F' : 'B1') : ((['A', 'B4'] as const).find((r) => !used.has(r)) ?? 'B1');
+    // Hauteur de voix : seulement faute de parole classée (classifieur absent), jamais contre lui.
+    const hz = (s.femaleSec ?? 0) < FEMALE_MIN_SEC ? median(s.f0) : null;
+    const female = heardFemale(s, minProb) || (hz !== null && hz >= femaleHz);
+    const role: VoiceRole = female ? (hasF ? 'F' : 'B1') : ((['A', 'B4'] as const).find((r) => !used.has(r)) ?? 'B1');
     s.role = role;
     used.add(role);
   }
+  return switched;
 }
 
 /** Voix réellement disponible pour un rôle (repli si le moteur ne l'a pas). */
@@ -334,9 +418,9 @@ export function voiceFor(role: VoiceRole, voices: readonly string[]): string {
   return chain[role].find((v) => voices.includes(v)) ?? voices[0] ?? role;
 }
 
-/** Rôles utilisés, dans l'ordre canonique. */
+/** Rôles utilisés (voix d'avant une bascule vers F comprises), dans l'ordre canonique. */
 export function rolesUsed(state: SpeakerState): VoiceRole[] {
-  const set = new Set(state.speakers.map((s) => s.role));
+  const set = new Set(state.speakers.flatMap((s) => [s.role, s.roleBefore]));
   return ROLE_ORDER.filter((r) => set.has(r));
 }
 
@@ -357,7 +441,13 @@ function parseSpeakers(raw: string | null | undefined): SpeakerState {
 const r5 = (x: number) => Math.round(x * 1e5) / 1e5;
 const serializeSpeakers = (s: SpeakerState): SpeakerState => ({
   nextId: s.nextId,
-  speakers: s.speakers.map((x) => ({ ...x, centroid: x.centroid.map(r5), talk: Math.round(x.talk * 100) / 100 })),
+  speakers: s.speakers.map((x) => ({
+    ...x,
+    centroid: x.centroid.map(r5),
+    talk: Math.round(x.talk * 100) / 100,
+    ...(x.femaleSec === undefined ? {} : { femaleSec: Math.round(x.femaleSec * 100) / 100 }),
+    ...(x.femaleP === undefined ? {} : { femaleP: Math.round(x.femaleP * 1e4) / 1e4 }),
+  })),
 });
 
 // ------------------------------------------------------------------ texte et calage (fonctions pures)
@@ -786,6 +876,7 @@ export async function runDub(
         // 2. Empreinte de chaque réplique ; en échec, voix de la précédente.
         let embeddings: (number[] | null)[] = cues.map(() => null);
         let f0: (number | null)[] = cues.map(() => null);
+        let female: (number | null)[] = [];
         try {
           const r = await voice.embed(
             audio,
@@ -794,6 +885,7 @@ export async function runDub(
           );
           embeddings = cues.map((_, i) => r.embeddings[i] ?? null);
           f0 = cues.map((_, i) => r.f0[i] ?? null);
+          female = r.female ? cues.map((_, i) => r.female?.[i] ?? null) : [];
         } catch (e) {
           checkAborted(signal);
           console.error(`[doublage] match ${job.matchId} : empreintes vocales impossibles (tronçon ${ch.idx}) : ${short(e)}`);
@@ -805,8 +897,14 @@ export async function runDub(
           cues.map((c) => c.end_ts - c.start_ts),
           embeddings,
           f0,
+          female,
         );
-        assignRoles(state, voice.voices);
+        for (const s of assignRoles(state, voice.voices)) {
+          console.log(
+            `[doublage] match ${job.matchId} : locuteur #${s.id} reconnu comme une femme ` +
+              `(P(femme) ${(s.femaleP ?? 0).toFixed(2).replace('.', ',')} sur ${Math.round(s.femaleSec ?? 0)} s) : voix ${s.roleBefore} → F`,
+          );
+        }
         // 4-5. Synthèse et calage de chaque réplique traduite.
         for (let i = 0; i < cues.length; i++) {
           const c = cues[i];

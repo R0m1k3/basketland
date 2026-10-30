@@ -25,12 +25,16 @@ import {
   emptySpeakers,
   enqueueDub,
   enqueueRecentDubs,
+  FEMALE_MIN_SEC,
+  FEMALE_WINDOW_SEC,
   fitCue,
   getDubRecord,
+  heardFemale,
   nextDubChunk,
   placeClips,
   prioritizeDubOnView,
   releaseGpuForTranslation,
+  rolesUsed,
   runDub,
   speechRanges,
   voiceFor,
@@ -61,6 +65,9 @@ const basis = (k: number) => {
 };
 const VEC: Record<Who, number[]> = { X: basis(0), Y: basis(1), W: basis(2) };
 const F0: Record<Who, number> = { X: 112, Y: 128, W: 214 };
+const ALL_VOICES = ['A', 'B4', 'B1', 'F'];
+/** Probabilité « voix de femme » du classifieur : X et Y hommes, W femme (reporter au bord du terrain). */
+const FEMALE: Record<Who, number> = { X: 0.02, Y: 0.06, W: 0.96 };
 
 /** [début, fin, texte FR, locuteur, emphase?, non traduit?] */
 type Line = [number, number, string, Who, number?, boolean?];
@@ -77,15 +84,15 @@ const CHUNK0: Line[] = [
 const CHUNK1: Line[] = [
   [125, 128, 'Retour au jeu.', 'Y'],
   [130, 133, 'Panier à trois points.', 'X', 2],
-  [135, 137.5, 'Je suis au bord du terrain.', 'W'],
-  [140, 143, 'Le coach semble inquiet.', 'W'],
+  [135, 139, 'Je suis au bord du terrain.', 'W'],
+  [140, 146, 'Le coach semble inquiet.', 'W'],
 ];
 const CHUNK2: Line[] = [
   [250, 253, 'Dernière possession.', 'X'],
   [255, 258, 'C’est terminé.', 'Y'],
 ];
 const SCRIPT = [...CHUNK0, ...CHUNK1, ...CHUNK2];
-const whoAt = (t: number): Who | null => SCRIPT.find(([a, b]) => t >= a && t <= b)?.[3] ?? null;
+const whoAt = (t: number, script: Line[] = SCRIPT): Who | null => script.find(([a, b]) => t >= a && t <= b)?.[3] ?? null;
 
 let TRACK: db.CommentaryTrackMeta;
 
@@ -112,6 +119,10 @@ interface FakeOpts {
   failSynth?: (text: string) => boolean;
   onSynth?: (n: number, text: string) => void;
   duration?: (text: string) => number;
+  /** Répliques connues du faux moteur (qui parle quand), SCRIPT par défaut. */
+  script?: Line[];
+  /** Moteur sans classifieur homme/femme (pas de champ `female`). */
+  noGender?: boolean;
 }
 
 function fake(o: FakeOpts = {}) {
@@ -136,8 +147,9 @@ function fake(o: FakeOpts = {}) {
     embed: async (file, segments) => {
       calls.embed++;
       const s0 = extractStart.get(file) ?? 0;
-      const who = segments.map(([a, b]) => whoAt(s0 + (a + b) / 2));
-      return { embeddings: who.map((w) => (w ? VEC[w] : null)), f0: who.map((w) => (w ? F0[w] : null)) };
+      const who = segments.map(([a, b]) => whoAt(s0 + (a + b) / 2, o.script));
+      const r = { embeddings: who.map((w) => (w ? VEC[w] : null)), f0: who.map((w) => (w ? F0[w] : null)) };
+      return o.noGender ? r : { ...r, female: who.map((w) => (w ? FEMALE[w] : null)) };
     },
     close: async () => void calls.closed++,
   };
@@ -185,6 +197,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.DUB_FEMALE_F0;
+  delete process.env.DUB_FEMALE_PROB;
   __setDubRunnerForTests(null);
   __setCommentaryRunnerForTests(null);
   __setDubEngineForTests(null);
@@ -251,7 +264,7 @@ describe('locuteurs et voix', () => {
 
   it('regroupement : même voix → même locuteur ; voix inconnue → nouveau ; sans empreinte → celui d’avant', () => {
     const st = emptySpeakers();
-    const ids = assignSpeakers(st, durations(6), [VEC.X, VEC.X, VEC.Y, null, VEC.X, VEC.Y], [110, 115, 130, null, 112, 126], { threshold: 0.6, minNewSec: 1 });
+    const ids = assignSpeakers(st, durations(6), [VEC.X, VEC.X, VEC.Y, null, VEC.X, VEC.Y], [110, 115, 130, null, 112, 126], [], { threshold: 0.6, minNewSec: 1 });
     expect(ids).toEqual([0, 0, 1, 1, 0, 1]);
     expect(st.speakers).toHaveLength(2);
     expect(st.speakers[0].talk).toBe(9);
@@ -260,48 +273,148 @@ describe('locuteurs et voix', () => {
 
   it('réplique trop courte et inconnue : rattachée au locuteur le plus proche ; tête sans empreinte : celui d’après', () => {
     const st = emptySpeakers();
-    const ids = assignSpeakers(st, [3, 3, 0.6], [null, VEC.X, VEC.Y], [null, 110, 130], { threshold: 0.6, minNewSec: 1 });
+    const ids = assignSpeakers(st, [3, 3, 0.6], [null, VEC.X, VEC.Y], [null, 110, 130], [], { threshold: 0.6, minNewSec: 1 });
     expect(ids).toEqual([0, 0, 0]);
     expect(st.speakers).toHaveLength(1);
   });
 
   it('rôles : 1er temps de parole → A, 2e → B4, suivants → B1 ; stables ; nouveau locuteur → prochaine voix libre', () => {
     const st = emptySpeakers();
-    assignSpeakers(st, [2, 5, 1, 4, 1], [VEC.X, VEC.Y, basis(5), VEC.Y, basis(5)], [110, 120, 100, 122, 101], { threshold: 0.6, minNewSec: 0.5 });
+    assignSpeakers(st, [2, 5, 1, 4, 1], [VEC.X, VEC.Y, basis(5), VEC.Y, basis(5)], [110, 120, 100, 122, 101], [], { threshold: 0.6, minNewSec: 0.5 });
     assignRoles(st, ['A', 'B4', 'B1'], 165);
     expect(st.speakers.map((s) => s.role)).toEqual(['B4', 'A', 'B1']); // Y parle le plus
     // Plus tard, X parle beaucoup : sa voix ne change pas.
-    assignSpeakers(st, [30], [VEC.X], [110], { threshold: 0.6 });
+    assignSpeakers(st, [30], [VEC.X], [110], [], { threshold: 0.6 });
     assignRoles(st, ['A', 'B4', 'B1'], 165);
     expect(st.speakers[0].role).toBe('B4');
     // Un nouveau locuteur prend la prochaine voix libre (A et B4 prises → B1).
-    assignSpeakers(st, [3], [basis(9)], [100], { threshold: 0.6 });
+    assignSpeakers(st, [3], [basis(9)], [100], [], { threshold: 0.6 });
     assignRoles(st, ['A', 'B4', 'B1'], 165);
     expect(st.speakers[3].role).toBe('B1');
   });
 
   it('par défaut, la hauteur de voix ne décide pas : un commentateur aigu (s’emballe) garde A', () => {
     const a = emptySpeakers();
-    assignSpeakers(a, [3, 3], [VEC.W, VEC.X], [240, 110], { threshold: 0.6 });
+    assignSpeakers(a, [3, 3], [VEC.W, VEC.X], [240, 110], [], { threshold: 0.6 });
     assignRoles(a, ['A', 'B4', 'B1', 'F']); // seuil par défaut : désactivé
     expect(a.speakers.map((s) => s.role)).toEqual(['A', 'B4']);
   });
 
-  it('voix aiguë : F si le moteur l’a, sinon B1 ; un premier locuteur seul prend A, le suivant B4', () => {
+  it('voix aiguë (DUB_FEMALE_F0 réglé, moteur sans classifieur) : F si le moteur l’a, sinon B1 ; un premier locuteur seul prend A, le suivant B4', () => {
     const a = emptySpeakers();
-    assignSpeakers(a, [3, 3], [VEC.W, VEC.X], [214, 110], { threshold: 0.6 });
+    assignSpeakers(a, [3, 3], [VEC.W, VEC.X], [214, 110], [], { threshold: 0.6 });
     assignRoles(a, ['A', 'B4', 'B1', 'F'], 165);
     expect(a.speakers.map((s) => s.role)).toEqual(['F', 'A']);
     const b = emptySpeakers();
-    assignSpeakers(b, [3], [VEC.W], [214], { threshold: 0.6 });
+    assignSpeakers(b, [3], [VEC.W], [214], [], { threshold: 0.6 });
     assignRoles(b, ['A', 'B4', 'B1'], 165);
     expect(b.speakers[0].role).toBe('B1');
     const c = emptySpeakers();
-    assignSpeakers(c, [3], [VEC.X], [110], { threshold: 0.6 });
+    assignSpeakers(c, [3], [VEC.X], [110], [], { threshold: 0.6 });
     assignRoles(c, ['A', 'B4', 'B1'], 165);
-    assignSpeakers(c, [3], [VEC.Y], [125], { threshold: 0.6 });
+    assignSpeakers(c, [3], [VEC.Y], [125], [], { threshold: 0.6 });
     assignRoles(c, ['A', 'B4', 'B1'], 165);
     expect(c.speakers.map((s) => s.role)).toEqual(['A', 'B4']);
+  });
+
+
+  it('classifieur : une femme (≥ 10 s classées, P(femme) moyenne ≥ 0,85) prend F, même si elle parle le plus ; sans voix F → B1', () => {
+    const a = emptySpeakers();
+    // W : 6 + 5 s à 0,95 et 0,85 → moyenne pondérée 0,905 ; X : 3 s.
+    assignSpeakers(a, [6, 3, 5], [VEC.W, VEC.X, VEC.W], [200, 110, 205], [0.95, 0.03, 0.85], { threshold: 0.6 });
+    expect(a.speakers[0]).toMatchObject({ femaleSec: 11 });
+    expect(a.speakers[0].femaleP).toBeCloseTo((6 * 0.95 + 5 * 0.85) / 11, 6);
+    expect(assignRoles(a, ALL_VOICES)).toEqual([]); // nouveaux locuteurs : pas une bascule
+    expect(a.speakers.map((s) => s.role)).toEqual(['F', 'A']);
+    const b = emptySpeakers();
+    assignSpeakers(b, [11], [VEC.W], [200], [0.95], { threshold: 0.6 });
+    assignRoles(b, ['A', 'B4', 'B1']);
+    expect(b.speakers[0].role).toBe('B1');
+    // Seuil réglable ; au-dessus de 1 : détection désactivée.
+    process.env.DUB_FEMALE_PROB = '1.01';
+    const c = emptySpeakers();
+    assignSpeakers(c, [11], [VEC.W], [200], [0.99], { threshold: 0.6 });
+    assignRoles(c, ALL_VOICES);
+    expect(c.speakers[0].role).toBe('A');
+  });
+
+  it('homme à la voix aiguë (commentateur emballé) mais P(femme) basse : jamais F, même avec DUB_FEMALE_F0 réglé', () => {
+    const a = emptySpeakers();
+    // W : 11 s classées (0,19 en moyenne) à 238-250 Hz, plus que X.
+    assignSpeakers(a, [3, 4, 5, 4], [VEC.W, VEC.W, VEC.X, VEC.W], [245, 238, 110, 250], [0.12, 0.3, 0.02, 0.2], { threshold: 0.6 });
+    assignRoles(a, ALL_VOICES, 165);
+    expect(a.speakers.map((s) => s.role)).toEqual(['A', 'B4']);
+    // Et plus tard : toujours pas (une voix attribuée ne change que vers F, sur preuve du classifieur).
+    assignSpeakers(a, [20], [VEC.W], [250], [0.4], { threshold: 0.6 });
+    expect(assignRoles(a, ALL_VOICES, 165)).toEqual([]);
+    expect(a.speakers[0].role).toBe('A');
+    // Juste sous le seuil (0,84) : homme.
+    const b = emptySpeakers();
+    assignSpeakers(b, [12], [VEC.W], [230], [0.84], { threshold: 0.6 });
+    assignRoles(b, ALL_VOICES);
+    expect(b.speakers[0].role).toBe('A');
+  });
+
+  it('trop peu de parole classée (< 10 s, ou répliques de moins d’1 s non classées) : pas encore F', () => {
+    const a = emptySpeakers();
+    assignSpeakers(a, [12, 9.5], [VEC.X, VEC.W], [110, 210], [0.02, 0.99], { threshold: 0.6 });
+    assignRoles(a, ALL_VOICES);
+    expect(a.speakers.map((s) => [s.role, s.femaleSec])).toEqual([
+      ['A', 12],
+      ['B4', 9.5],
+    ]);
+    // Répliques courtes sans probabilité : du temps de parole, pas de preuve.
+    assignSpeakers(a, [0.8, 0.9, 0.7], [VEC.W, VEC.W, VEC.W], [210, 212, 208], [null, null, null], { threshold: 0.6, minNewSec: 0.5 });
+    expect(assignRoles(a, ALL_VOICES)).toEqual([]);
+    expect(a.speakers[1]).toMatchObject({ role: 'B4', femaleSec: 9.5 });
+    expect(a.speakers[1].talk).toBeCloseTo(11.9, 6);
+    // Réplique sans empreinte (rattachée par voisinage) : sa probabilité ne compte pas.
+    assignSpeakers(a, [0.8, 3], [VEC.W, null], [210, null], [null, 0.99], { threshold: 0.6, minNewSec: 0.5 });
+    expect(assignRoles(a, ALL_VOICES)).toEqual([]);
+    expect(a.speakers[1]).toMatchObject({ role: 'B4', femaleSec: 9.5 });
+  });
+
+  it('bascule unique vers F quand les preuves arrivent dans les 30 premières secondes ; la voix libérée resservira', () => {
+    const a = emptySpeakers();
+    // W vue d'abord 3 s (plus que X) : voix d'homme provisoire A.
+    assignSpeakers(a, [3, 2], [VEC.W, VEC.X], [210, 110], [0.97, 0.02], { threshold: 0.6 });
+    assignRoles(a, ALL_VOICES);
+    expect(a.speakers.map((s) => s.role)).toEqual(['A', 'B4']);
+    // Tronçon suivant : 8 s de plus → 11 s classées à 0,97 → bascule.
+    assignSpeakers(a, [8], [VEC.W], [212], [0.97], { threshold: 0.6 });
+    const switched = assignRoles(a, ALL_VOICES);
+    expect(switched.map((s) => s.id)).toEqual([0]);
+    expect(a.speakers[0]).toMatchObject({ role: 'F', roleBefore: 'A' });
+    expect(heardFemale(a.speakers[0])).toBe(true);
+    // Puis plus rien ne change, même si la suite paraît moins féminine (hors fenêtre ou non).
+    assignSpeakers(a, [10, 10], [VEC.W, VEC.W], [200, 200], [0.1, 0.1], { threshold: 0.6 });
+    expect(assignRoles(a, ALL_VOICES)).toEqual([]);
+    expect(a.speakers[0].role).toBe('F');
+    // A libérée : un nouveau commentateur la prend ; voix utilisées = A (avant la bascule), B4, F.
+    assignSpeakers(a, [5], [basis(7)], [105], [0.01], { threshold: 0.6 });
+    assignRoles(a, ALL_VOICES);
+    expect(a.speakers[2].role).toBe('A');
+    expect(rolesUsed(a)).toEqual(['A', 'B4', 'F']);
+  });
+
+  it(`passé ${FEMALE_WINDOW_SEC} s de parole, le genre est figé : pas de bascule tardive`, () => {
+    const a = emptySpeakers();
+    // W : 31 s de répliques sans classement (moteur sans classifieur), puis des preuves « femme ».
+    assignSpeakers(a, [12, 12, 7], [VEC.W, VEC.W, VEC.W], [200, 200, 200], [], { threshold: 0.6 });
+    assignRoles(a, ALL_VOICES);
+    assignSpeakers(a, [12, 12], [VEC.W, VEC.W], [200, 200], [0.99, 0.99], { threshold: 0.6 });
+    expect(assignRoles(a, ALL_VOICES)).toEqual([]);
+    expect(a.speakers[0]).toMatchObject({ role: 'A', talk: 55 });
+    expect(a.speakers[0].femaleSec).toBeUndefined();
+    // Une réplique commencée dans la fenêtre compte en entier (28 s + 10 s).
+    const b = emptySpeakers();
+    assignSpeakers(b, [28], [VEC.W], [200], [null], { threshold: 0.6 });
+    assignRoles(b, ALL_VOICES);
+    assignSpeakers(b, [10, 6], [VEC.W, VEC.W], [200, 200], [0.95, 0.1], { threshold: 0.6 });
+    expect(b.speakers[0].femaleSec).toBe(10); // la 2e réplique (après 38 s de parole) ne compte pas
+    expect(b.speakers[0].femaleP).toBeCloseTo(0.95, 9);
+    expect(assignRoles(b, ALL_VOICES).map((s) => s.id)).toEqual([0]);
+    expect(FEMALE_MIN_SEC).toBe(10);
   });
 
   it('voix absente du moteur : repli', () => {
@@ -315,8 +428,7 @@ describe('locuteurs et voix', () => {
 
 describe('runDub', () => {
   it('double les tronçons traduits : locuteurs → voix, emphase, répliques non traduites sautées, publication', async () => {
-    // Détection des voix de femme par la hauteur : désactivée par défaut, activée ici.
-    process.env.DUB_FEMALE_F0 = '165';
+    // W (reporter, 10 s à P(femme) 0,96) : voix féminine par le classifieur, réglages par défaut.
     publish(M, 0, CHUNK0);
     publish(M, 1, CHUNK1);
     const { deps, calls } = fake({ voices: ['A', 'B4', 'B1', 'F'] });
@@ -370,6 +482,50 @@ describe('runDub', () => {
     expect(last.end_ts).toBeCloseTo(258.6); // dernier tronçon : fin de la dernière réplique + 0,6 s
     expect(db.getDubTrack(M)?.complete).toBe(1);
     expect(dubManifest(M).status).toBe('ready');
+  });
+
+  it('locutrice vue d’abord trop brièvement : voix d’homme provisoire, puis bascule unique vers F au travail suivant (état conservé en base)', async () => {
+    const late: Line[] = [
+      [2, 8, 'Tatum remonte le ballon.', 'X'],
+      [10, 13, 'Je suis au bord du terrain.', 'W'], // 3 s : pas assez pour décider
+      [20, 26, 'Il accélère et marque.', 'X'],
+      [125, 133, 'Le coach semble inquiet.', 'W'], // 3 + 8 = 11 s → femme
+      [134, 140, 'Panier à trois points.', 'X'],
+      [250, 253, 'On revient au jeu.', 'W'],
+    ];
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((m: string) => void logs.push(String(m)));
+    publish(M, 0, late.slice(0, 3));
+    const first = fake({ voices: ALL_VOICES, script: late });
+    expect((await runDub({ matchId: M }, () => {}, signal(), first.deps)).ok).toBe(true);
+    expect(first.calls.synth.map((s) => s.voice)).toEqual(['A', 'B4', 'A']);
+    const saved = JSON.parse(db.getDubTrack(M)!.speakers) as { speakers: { id: number; role: string; femaleSec?: number; femaleP?: number }[] };
+    expect(saved.speakers.map((s) => [s.id, s.role, s.femaleSec, s.femaleP])).toEqual([
+      [0, 'A', 12, 0.02],
+      [1, 'B4', 3, 0.96],
+    ]);
+
+    publish(M, 1, late.slice(3, 5));
+    publish(M, 2, late.slice(5));
+    const second = fake({ voices: ALL_VOICES, script: late });
+    expect((await runDub({ matchId: M }, () => {}, signal(), second.deps)).ok).toBe(true);
+    expect(second.calls.synth).toEqual([
+      { text: 'Le coach semble inquiet.', voice: 'F' },
+      { text: 'Panier à trois points.', voice: 'A' },
+      { text: 'On revient au jeu.', voice: 'F' },
+    ]);
+    expect(logs.filter((l) => l.includes('reconnu comme une femme'))).toEqual([
+      `[doublage] match ${M} : locuteur #1 reconnu comme une femme (P(femme) 0,96 sur 11 s) : voix B4 → F`,
+    ]);
+    // B4 a servi (premières répliques de W) : elle reste dans les voix du doublage.
+    expect(db.getDubTrack(M)?.voices).toBe(JSON.stringify(['A', 'B4', 'F']));
+  });
+
+  it('moteur sans classifieur (ancienne version) : aucune voix féminine par défaut', async () => {
+    publish(M, 1, CHUNK1);
+    const { deps, calls } = fake({ voices: ALL_VOICES, noGender: true });
+    expect((await runDub({ matchId: M }, () => {}, signal(), deps)).ok).toBe(true);
+    expect(calls.synth.map((s) => s.voice)).toEqual(['B4', 'B1', 'A', 'A']); // W parle le plus : A
   });
 
   it('réplique trop longue : accélérée ×1,35 au plus, la suivante repoussée, dépassement compté', async () => {
