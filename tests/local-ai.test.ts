@@ -98,6 +98,10 @@ describe('Ollama embarqué (faux binaire)', () => {
 
   it('démarre `ollama serve`, télécharge le modèle manquant avec progression, puis s’arrête', async () => {
     const s = await OllamaSession.open(20_000);
+    // HOME dans le volume des modèles (clé ~/.ollama/id_ed25519 accessible à `node`), jamais /root.
+    const v = (await (await fetch(`${s.base}/api/version`)).json()) as { home: string };
+    expect(v.home).toBe(path.join(process.env.MODELS_DIR!, 'ollama-home'));
+    expect(fs.existsSync(v.home)).toBe(true);
     const steps: [number, number][] = [];
     await s.ensureModel('hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0', (d, t) => steps.push([d, t]));
     expect(steps).toEqual([

@@ -8,7 +8,7 @@ http
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      if (req.url === '/api/version') return res.end(JSON.stringify({ version: '0.0.0-test' }));
+      if (req.url === '/api/version') return res.end(JSON.stringify({ version: '0.0.0-test', home: process.env.HOME }));
       if (req.url === '/api/show') {
         res.statusCode = pulled ? 200 : 404;
         return res.end(pulled ? '{}' : '{"error":"model not found"}');

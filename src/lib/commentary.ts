@@ -675,23 +675,40 @@ const defaultDeps: CommentaryDeps = {
   extract: extractAudioChunk,
   transcribe: transcribeAudio,
   translate: translateBatch,
+  // Démarrage d'un service embarqué ou téléchargement d'un modèle en échec :
+  // panne de SERVICE (nouvel essai rapide, sans compter d'échec), pas un
+  // défaut du match — sinon toute la file échouerait match après match.
   openTranscriber: async (cfg) => {
     if (cfg.transcribeMode !== 'embedded') return remoteTranscriber(cfg, transcribeAudio);
-    const s = await WhisperSession.open(cfg.transcribeModel);
+    let s: WhisperSession;
+    try {
+      s = await WhisperSession.open(cfg.transcribeModel);
+    } catch (e) {
+      throw asServiceError(e, 'transcription');
+    }
     return { transcribe: (file, prompt, signal) => s.transcribe(file, prompt, signal), close: () => s.close() };
   },
   openTranslator: async (cfg, signal, onProgress) => {
     if (cfg.translateMode !== 'embedded') return { close: async () => {} };
-    const s = await OllamaSession.open();
+    let s: OllamaSession;
+    try {
+      s = await OllamaSession.open();
+    } catch (e) {
+      throw asServiceError(e, 'traduction');
+    }
     try {
       await s.ensureModel(cfg.translateModel, onProgress, signal);
     } catch (e) {
       await s.close();
-      throw e;
+      throw asServiceError(e, 'traduction');
     }
     return s;
   },
 };
+
+function asServiceError(e: unknown, service: 'transcription' | 'traduction'): ServiceError {
+  return e instanceof ServiceError ? e : new ServiceError((e as Error)?.message || String(e), service);
+}
 
 function remoteTranscriber(cfg: CommentaryConfig, transcribe: CommentaryDeps['transcribe']): Transcriber {
   return { transcribe: (file, prompt, signal) => transcribe(file, cfg, { prompt, signal }), close: async () => {} };

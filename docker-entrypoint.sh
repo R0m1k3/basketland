@@ -19,6 +19,9 @@ if [ "$(id -u)" = "0" ]; then
   if [ -n "$(find "$DATA" \( ! -user node -o ! -group node \) -print -quit)" ]; then
     chown -R node:node "$DATA"
   fi
+  # setpriv garde HOME=/root : Ollama y chercherait sa clé (~/.ollama/id_ed25519)
+  # et Python son cache, dans un dossier interdit à `node`.
+  export HOME=/home/node
   exec setpriv --reuid=node --regid=node --init-groups "$@"
 fi
 
