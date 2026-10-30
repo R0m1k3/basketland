@@ -33,7 +33,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as db from './db';
-import { analysisSources, analysisStatus, backoffMs, enqueueAnalysis, MAX_AUTO_FAILURES, networkBackoffMs, pickAudioSource } from './analysis';
+import { analysisSources, backoffMs, MAX_AUTO_FAILURES, networkBackoffMs, pickAudioSource } from './analysis';
 import { ffmpegAvailable } from './audio';
 import {
   commentaryConfig,
@@ -47,6 +47,7 @@ import {
   type TranslateContext,
   type TranslateLine,
 } from './commentaryAi';
+import { audioEnvelope, withEnergy, type Envelope } from './audioEnergy';
 import { buildCues, filterTranscript, shiftTranscript, wordsFromTranscript, type AsrWord, type Cue, type Transcript } from './commentaryCues';
 import { BROWSER_UA } from './http';
 import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
@@ -56,7 +57,9 @@ import { inNightWindow } from './nightWindow';
 import { lowerPriority } from './procPriority';
 import { fixRosterNames, rosterIndex } from './rosterNames';
 
-export { inNightWindow };
+import { __clearViewersForTests, someoneWatching, touchViewer, viewerActive, viewerPosition } from './viewers';
+
+export { inNightWindow, touchViewer, viewerActive, viewerPosition };
 
 // ------------------------------------------------------------------ contrat de l'API
 
@@ -358,40 +361,12 @@ export type CommentaryRunner = (
 
 // ------------------------------------------------------------------ spectateurs et fenêtre de nuit
 
-/**
- * Spectateurs : chaque GET des sous-titres (la fiche ouverte les interroge
- * toutes les 12 s pendant la traduction) signale qu'un match est regardé,
- * et à quelle position. Sans signe de vie depuis `viewerIdleMs`, le travail
- * se met en pause et décharge les modèles.
- */
-const viewers = ((globalThis as unknown as { __commentaryViewers?: Map<number, { at: number; t: number }> }).__commentaryViewers ??= new Map());
-
-function viewerIdleMs(): number {
-  const n = Number(process.env.COMMENTARY_VIEWER_IDLE_MS);
-  return Number.isFinite(n) && n > 0 ? n : 3 * 60_000;
-}
-
-/** Signe de vie d'un spectateur (position de lecture en secondes, si connue). */
-export function touchViewer(matchId: number, t?: number | null): void {
-  const prev = viewers.get(matchId);
-  const pos = typeof t === 'number' && Number.isFinite(t) && t >= 0 ? t : (prev?.t ?? 0);
-  viewers.set(matchId, { at: Date.now(), t: pos });
-}
-
-export function viewerActive(matchId: number, now = Date.now()): boolean {
-  const v = viewers.get(matchId);
-  return !!v && now - v.at < viewerIdleMs();
-}
-
-/** Position du spectateur actif, sinon null. */
-export function viewerPosition(matchId: number): number | null {
-  return viewerActive(matchId) ? (viewers.get(matchId)?.t ?? 0) : null;
-}
-
 /** Pilotage d'un travail : continuer tant qu'on regarde le match (ou, pour un travail de fond, la nuit). */
 function controlFor(job: Job): CommentaryControl {
   return {
-    keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow()),
+    // Un travail de fond cède la place dès que quelqu'un regarde un AUTRE
+    // match : la lecture passe avant (il reprend quand la lecture s'arrête).
+    keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow() && !someoneWatching(job.matchId)),
     target: () => viewerPosition(job.matchId) ?? 0,
     watching: () => viewerActive(job.matchId),
   };
@@ -483,6 +458,26 @@ function coveredRanges(matchId: number): [number, number][] | undefined {
   return r.length ? r : undefined;
 }
 
+/** Activité de la file (panneau « En cours de traitement » de l'accueil). */
+export interface CommentaryActivity {
+  running: { matchId: number; phase: CommentaryPhase | null; done: number; total: number; watched: boolean } | null;
+  /** Matchs en attente, dans l'ordre. */
+  queued: number[];
+  /** Des travaux de fond attendent la fin d'une lecture. */
+  waitingForViewer: boolean;
+}
+
+export function commentaryActivity(): CommentaryActivity {
+  const r = st.running;
+  return {
+    running: r
+      ? { matchId: r.job.matchId, phase: r.progress?.phase ?? null, done: r.progress?.done ?? 0, total: r.progress?.total ?? 0, watched: viewerActive(r.job.matchId) }
+      : null,
+    queued: st.queue.map((j) => j.matchId),
+    waitingForViewer: st.queue.some((j) => mustWait(j)),
+  };
+}
+
 /** Match en cours de traduction (badge « VF en cours » des listes), sinon null. */
 export function commentaryRunningMatchId(): number | null {
   return st.running?.job.matchId ?? null;
@@ -550,9 +545,28 @@ function preemptBackground(): void {
   r.abort();
 }
 
+/** Travail de fond hors de la fenêtre autorisée (et personne ne regarde ce match) : abandonné. */
+const outsideWindow = (job: Job) => !job.viewer && !viewerActive(job.matchId) && !inNightWindow();
+/** Travail de fond qui doit attendre : quelqu'un regarde un autre match. */
+const mustWait = (job: Job) => !job.viewer && !viewerActive(job.matchId) && someoneWatching(job.matchId);
+
+let repumpTimer: NodeJS.Timeout | undefined;
+
 function pump(): void {
+  clearTimeout(repumpTimer);
   while (!st.running && st.queue.length) {
-    const job = st.queue.shift() as Job;
+    st.queue = st.queue.filter((j) => !outsideWindow(j));
+    // Premier travail qui peut partir : ceux des spectateurs toujours ; ceux
+    // de fond seulement quand personne ne regarde (ils restent en file).
+    const i = st.queue.findIndex((j) => !mustWait(j));
+    if (i < 0) {
+      if (st.queue.length) {
+        repumpTimer = setTimeout(pump, Number(process.env.COMMENTARY_REPUMP_MS) || 20_000);
+        repumpTimer.unref?.();
+      }
+      break;
+    }
+    const [job] = st.queue.splice(i, 1);
     if (commentaryDisabledReason() || unavailableReason(job.matchId)) continue;
     if (!job.force && commentaryReady(job.matchId)) continue;
     start(job);
@@ -603,13 +617,18 @@ function start(job: Job): void {
         return;
       }
       if (res.paused) {
-        // Ni succès ni échec : reprise à la prochaine ouverture du match (ou la nuit suivante).
+        // Ni succès ni échec. Travail de fond qui a cédé la place à une
+        // lecture : il retourne en file et reprendra quand la lecture
+        // s'arrêtera ; sinon, reprise à la prochaine ouverture du match.
         try {
           db.logIngestEnd(logId, true, res.reason);
         } catch {
           /* journal facultatif */
         }
-        console.log(`[commentaires] match ${job.matchId} ${res.reason}`);
+        if (!job.viewer && inNightWindow() && someoneWatching(job.matchId)) {
+          if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.push({ ...job });
+          console.log(`[commentaires] match ${job.matchId} en pause : une vidéo est regardée, la traduction reprendra après`);
+        } else console.log(`[commentaires] match ${job.matchId} ${res.reason}`);
         return;
       }
       const prev = getCommentaryRecord(job.matchId);
@@ -632,17 +651,10 @@ function start(job: Job): void {
         console.error('[commentaires] journalisation impossible :', (e as Error).message);
       }
       if (!res.ok) console.error(`[commentaires] match ${job.matchId} : ${res.reason}`);
-      else {
-        console.log(`[commentaires] match ${job.matchId} traduit en ${Math.max(1, Math.round((Date.now() - t0) / 60_000))} min : ${res.reason}`);
-        // L'analyse vidéo (repères des quart-temps, « Revoir l'action ») ne
-        // tourne plus à l'ouverture de la fiche, pour laisser la lecture et la
-        // traduction démarrer vite : elle passe une fois la traduction finie.
-        try {
-          if (analysisStatus(job.matchId).status === 'none') enqueueAnalysis(job.matchId);
-        } catch {
-          /* analyse facultative */
-        }
-      }
+      // L'analyse vidéo (repères des quart-temps) n'est PAS lancée ici : elle
+      // télécharge le flux en haute qualité et sature le processeur (OCR),
+      // ce qui fait geler la lecture si quelqu'un regarde. Elle tourne la nuit.
+      else console.log(`[commentaires] match ${job.matchId} traduit en ${Math.max(1, Math.round((Date.now() - t0) / 60_000))} min : ${res.reason}`);
     })
     .finally(() => {
       st.running = null;
@@ -729,7 +741,7 @@ export function enqueueRecentCommentaries(days = 10, limit = 30): number {
 /** Tests : remplace l'exécuteur, vide la file. */
 export function __setCommentaryRunnerForTests(runner: CommentaryRunner | null): void {
   st.runner = runner;
-  viewers.clear();
+  __clearViewersForTests();
   st.queue.length = 0;
   st.running = null;
   st.idleResolve?.();
@@ -765,6 +777,12 @@ export interface CommentaryDeps {
    */
   openTranscriber?: (cfg: CommentaryConfig, signal: AbortSignal) => Promise<Transcriber>;
   openTranslator?: (cfg: CommentaryConfig, signal: AbortSignal, onProgress: (done: number, total: number) => void) => Promise<{ close(): Promise<void> }>;
+  /**
+   * Intensité de la voix dans l'audio d'un tronçon (audioEnergy.ts), pour
+   * couper les sous-titres sur les changements de ton et mettre en relief
+   * les moments forts. Absente (tests) ou en échec : sous-titres sans relief.
+   */
+  envelope?: (file: string, signal: AbortSignal) => Promise<Envelope | null>;
 }
 
 export interface Transcriber {
@@ -775,6 +793,7 @@ export interface Transcriber {
 const defaultDeps: CommentaryDeps = {
   resolveStream: (okId, force) => resolveOkStream(okId, { force: !!force }),
   extract: extractAudioChunk,
+  envelope: (file, signal) => audioEnvelope(file, signal),
   transcribe: transcribeAudio,
   translate: translateBatch,
   // Démarrage d'un service embarqué ou téléchargement d'un modèle en échec :
@@ -962,7 +981,14 @@ export async function runCommentary(
   }
   const duration = match.video_duration ?? stream.duration ?? 0;
   if (!duration) throw new Error('durée de la vidéo inconnue');
-  const plans = planChunks(duration, cfg.chunkSec);
+  // Une piste commencée garde son découpage (pas de travail perdu si
+  // COMMENTARY_CHUNK_SEC change) ; une nouvelle piste prend le réglage actuel.
+  const prevTrack = db.getCommentaryTrack(job.matchId);
+  const chunkSec =
+    prevTrack && !prevTrack.complete && prevTrack.ok_id === okId && prevTrack.transcribe_model === cfg.transcribeModel && prevTrack.translate_model === cfg.translateModel && prevTrack.chunk_sec
+      ? prevTrack.chunk_sec
+      : cfg.chunkSec;
+  const plans = planChunks(duration, chunkSec);
   const total = plans.length;
   const headers = { userAgent: BROWSER_UA, referer: OK_REFERER };
   // Prompt Whisper (équipes + effectifs) seulement sur demande : mesuré, il
@@ -984,7 +1010,7 @@ export async function runCommentary(
     ok_id: okId,
     transcribe_model: cfg.transcribeModel,
     translate_model: cfg.translateModel,
-    chunk_sec: cfg.chunkSec,
+    chunk_sec: chunkSec,
     chunks_total: total,
   };
   // Relance explicite d'une piste complète : on repart de zéro ; sinon reprise.
@@ -1081,7 +1107,11 @@ export async function runCommentary(
       asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
     }
     report('transcription', done.size);
-    const transcript = await asr.transcribe(audio, prompt, signal);
+    let transcript = await asr.transcribe(audio, prompt, signal);
+    // Intensité de la voix mot par mot, tant que l'audio est là.
+    const env = deps.envelope ? await deps.envelope(audio, signal).catch(() => null) : null;
+    checkAborted(signal);
+    if (env) transcript = withEnergy(transcript, env);
     writeJson(cacheJson, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
     fs.rmSync(audio, { force: true }); // transcrit : l'audio ne sert plus
     return transcript;
@@ -1114,7 +1144,7 @@ export async function runCommentary(
           todo.map((c) => ({ i: c.seq, en: c.text })),
           context,
           cfg,
-          { signal, roster },
+          { signal, roster, match: `${match.away_name} @ ${match.home_name}` },
         );
         for (const r of res) {
           const c = todo.find((x) => x.seq === r.i);
@@ -1131,7 +1161,15 @@ export async function runCommentary(
       cues.map((c) => {
         const t = cache.lines[c.seq];
         const translated = t && t.en === c.text && !t.untranslated;
-        return { seq: c.seq, start_ts: c.start, end_ts: c.end, text_en: c.text, text_fr: translated ? t.fr : c.text, untranslated: translated ? 0 : 1 };
+        return {
+          seq: c.seq,
+          start_ts: c.start,
+          end_ts: c.end,
+          text_en: c.text,
+          text_fr: translated ? t.fr : c.text,
+          untranslated: translated ? 0 : 1,
+          emphasis: c.emphasis ?? 0,
+        };
       }),
     );
     done.add(plan.index);

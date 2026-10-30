@@ -294,7 +294,9 @@ function VfSummary({ ready, running, partial, todo }: { ready: number; running: 
       {item(partial, 'en partie traduit' + (partial > 1 ? 's' : ''), 'bg-flame/50')}
       {item(todo, 'à traduire', 'bg-ink-500')}
       <span className="text-paper-faint">
-        {night ? `Pré-traduction ${night} ; ` : ''}un match ouvert est traduit aussitôt.
+        {night === 'en continu'
+          ? 'Traduits dès que le replay est disponible (en pause pendant la lecture).'
+          : `${night ? `Traduction automatique ${night} ; ` : ''}un match ouvert est traduit aussitôt.`}
       </span>
     </p>
   );

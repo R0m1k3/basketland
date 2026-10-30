@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCue, findOnScreen, readDuration, type Subtitle } from '../src/components/match/playback';
+import { findCue, findOnScreen, minReadTime, readDuration, type Subtitle } from '../src/components/match/playback';
 import { fmtTime, parseClock } from '../src/components/match/format';
 import { stripScores } from '../src/components/match/spoiler';
 
@@ -76,6 +76,17 @@ describe('findOnScreen (VF en roll-up)', () => {
   it('au plus deux lignes, les plus récentes', () => {
     const subs = [mk(1, 100), mk(2, 100.5), mk(3, 101)];
     expect(findOnScreen(subs, 101.2)).toEqual([1, 2]);
+  });
+
+  it('la ligne précédente ne reste en retrait que si elle n’a pas pu être lue', () => {
+    // Lue (1,5 s pour « Faute ») : remplacée sans rester.
+    const lue = [mk(1, 10, 'Faute'), mk(2, 13, 'Lancers francs pour Brunson')];
+    expect(findOnScreen(lue, 13.2)).toEqual([1]);
+    // Longue ligne remplacée après 1 s : reste au-dessus, au plus 2 s.
+    const vite = [mk(1, 0, 'Shai Gilgeous-Alexander marque un shoot à 3 points, passe décisive de Jalen Williams'), mk(2, 1, 'Et la salle explose')];
+    expect(minReadTime(vite[0])).toBeGreaterThan(3);
+    expect(findOnScreen(vite, 2.5)).toEqual([0, 1]);
+    expect(findOnScreen(vite, 3.2)).toEqual([1]);
   });
 
   it('une ligne longue reste plus longtemps', () => {

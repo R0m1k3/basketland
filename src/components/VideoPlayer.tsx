@@ -28,7 +28,7 @@ interface Props {
 }
 
 type SubSize = 'S' | 'M' | 'L' | 'XL';
-/** Position de la VF : en bas (défaut) ou en haut, pour dégager le bandeau du score. */
+/** Position de la VF : en haut (défaut, dégage le bandeau du score) ou en bas. */
 type SubPos = 'bas' | 'haut';
 type Quality = 'auto' | number;
 interface LevelOption {
@@ -171,7 +171,8 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   const [menuOpen, setMenuOpen] = useState(false);
   const [vfOn, setVfOn] = useState(true);
   const [subSize, setSubSize] = useState<SubSize>('M');
-  const [subPos, setSubPos] = useState<SubPos>('bas');
+  // VF en haut par défaut : plus facile à suivre, et le bandeau du score (en bas) reste dégagé.
+  const [subPos, setSubPos] = useState<SubPos>('haut');
   const [subDelay, setSubDelay] = useState(DEFAULT_SUB_DELAY);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
 
@@ -181,7 +182,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   useEffect(() => {
     const s = readPref('bl:subsize');
     if (s === 'S' || s === 'M' || s === 'L' || s === 'XL') setSubSize(s);
-    if (readPref('bl:subpos') === 'haut') setSubPos('haut');
+    if (readPref('bl:subpos') === 'bas') setSubPos('bas');
     const d = Number(readPref('bl:subdelay'));
     if (readPref('bl:subdelay') !== null && Number.isFinite(d)) setSubDelay(Math.max(-5, Math.min(10, d)));
     if (readPref('bl:vf') === '0') setVfOn(false);
@@ -233,6 +234,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     let netRetries = 0;
     let mediaRecoveries = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupDiag = () => {};
 
     (async () => {
       const { default: Hls } = await import('hls.js');
@@ -297,6 +299,53 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         hls.destroy();
         hlsRef.current = null;
       });
+      // Diagnostic : un gel de plus d'1,5 s en lecture (pas un saut, pas le
+      // démarrage) est signalé au serveur, qui l'écrit dans les logs avec la
+      // qualité et le débit estimé — pour savoir d'où viennent les gels.
+      let waitingAt = 0;
+      let seekingNow = false;
+      const onWaiting = () => {
+        if (!seekingNow && video.currentTime > 1) waitingAt = performance.now();
+      };
+      const onSeeking = () => {
+        seekingNow = true;
+        waitingAt = 0;
+      };
+      const onSeeked = () => {
+        seekingNow = false;
+      };
+      const onResume = () => {
+        if (!waitingAt) return;
+        const ms = performance.now() - waitingAt;
+        waitingAt = 0;
+        if (ms < 1500) return;
+        const lvl = hls.levels[hls.currentLevel];
+        let ahead = 0;
+        for (let i = 0; i < video.buffered.length; i++) if (video.currentTime >= video.buffered.start(i) - 0.5) ahead = video.buffered.end(i) - video.currentTime;
+        const body = JSON.stringify({
+          ms: Math.round(ms),
+          t: Math.round(video.currentTime),
+          height: lvl?.height ?? null,
+          bitrate: lvl?.bitrate ?? null,
+          estimate: Math.round(hls.bandwidthEstimate || 0),
+          ahead: Math.round(ahead * 10) / 10,
+        });
+        try {
+          navigator.sendBeacon?.('/api/diag/stall', new Blob([body], { type: 'text/plain' }));
+        } catch {
+          /* diagnostic facultatif */
+        }
+      };
+      video.addEventListener('waiting', onWaiting);
+      video.addEventListener('seeking', onSeeking);
+      video.addEventListener('seeked', onSeeked);
+      video.addEventListener('playing', onResume);
+      cleanupDiag = () => {
+        video.removeEventListener('waiting', onWaiting);
+        video.removeEventListener('seeking', onSeeking);
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('playing', onResume);
+      };
       hls.loadSource(src);
       hls.attachMedia(video);
     })().catch((e: unknown) => {
@@ -305,6 +354,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
 
     return () => {
       disposed = true;
+      cleanupDiag();
       clearTimeout(retryTimer);
       hlsRef.current?.destroy();
       hlsRef.current = null;
@@ -728,24 +778,43 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
 // ---------------------------------------------------------------- sous-composants
 
 /**
- * VF écrite sur l'image : UNE seule ligne à la fois (la plus récente),
- * compacte, sur un fond léger, pour masquer le moins possible de l'image.
- * Elle entre par un léger fondu. Seul composant re-rendu au changement de
- * ligne.
+ * VF écrite sur l'image : la ligne en cours, compacte, sur un fond léger,
+ * pour masquer le moins possible de l'image. Elle entre par un léger fondu.
+ * Si les commentateurs enchaînent trop vite, la ligne précédente reste un
+ * instant au-dessus, plus petite et estompée, le temps de finir de la lire.
+ * Les moments forts (voix qui monte, cri) ressortent : texte plus appuyé,
+ * liseré orange, et pour les plus forts une ligne plus grande qui « claque ».
+ * Seul composant re-rendu au changement de ligne.
  */
 const SubtitleOverlay = memo(function SubtitleOverlay({ subs, lifted, pos }: { subs: Subtitle[]; lifted: boolean; pos: SubPos }) {
   const lines = useScreenLines();
   const noSpoil = useNoSpoil();
-  const s = lines.length ? subs[lines[lines.length - 1]] : undefined;
-  if (!s) return null;
-  const text = noSpoil ? stripScores(s.text) : s.text;
-  const banner = s.kind === 'score' || s.kind === 'banniere';
+  if (!lines.length) return null;
+  const last = lines[lines.length - 1];
   const where = pos === 'haut' ? 'top-[5%]' : lifted ? 'bottom-[84px] sm:bottom-[96px]' : 'bottom-[5%]';
   return (
-    <div className={`pointer-events-none absolute inset-x-0 z-[5] flex justify-center px-[6%] transition-[bottom] duration-300 ${where}`} aria-live="polite">
-      <div key={s.seq} className={`subtitle-box subtitle-roll ${banner ? 'subtitle-banner' : ''}`}>
-        <span className="subtitle-overlay subtitle-text">{text}</span>
-      </div>
+    <div
+      className={`pointer-events-none absolute inset-x-0 z-[5] flex flex-col items-center gap-1 px-[6%] transition-[bottom] duration-300 ${where}`}
+      aria-live="polite"
+    >
+      {lines.map((i) => {
+        const s = subs[i];
+        if (!s) return null;
+        const current = i === last;
+        const text = noSpoil ? stripScores(s.text) : s.text;
+        const banner = s.kind === 'score' || s.kind === 'banniere';
+        const emph = current && s.emphasis ? ` subtitle-emph-${Math.min(2, s.emphasis)}` : '';
+        // Clé = n° de ligne : la ligne qui passe en retrait n'est pas recréée (pas de nouvelle animation).
+        return (
+          <div
+            key={s.seq}
+            className={`subtitle-box ${current ? 'subtitle-roll' : 'subtitle-prev'}${banner ? ' subtitle-banner' : ''}${emph}`}
+            aria-hidden={current ? undefined : true}
+          >
+            <span className="subtitle-overlay subtitle-text">{text}</span>
+          </div>
+        );
+      })}
     </div>
   );
 });

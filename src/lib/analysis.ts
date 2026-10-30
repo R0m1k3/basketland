@@ -32,6 +32,7 @@ import { addDays } from './time';
 import type { AnchorRow } from './types';
 import { scanVideo, type ScanPhase } from './videoScan';
 import { inNightWindow } from './nightWindow';
+import { someoneWatching } from './viewers';
 
 // ------------------------------------------------------------------ choix de la source média
 
@@ -230,7 +231,12 @@ export interface AnalysisOutcome {
   kind?: AnalysisFailureKind;
 }
 
-export type AnalysisRunner = (job: Job, progress: (p: AnalysisProgress) => void) => Promise<AnalysisOutcome>;
+/** Crochets d'exécution : `gate` est attendu avant chaque image (pause pendant une lecture). */
+export interface AnalysisHooks {
+  gate: () => Promise<void>;
+}
+
+export type AnalysisRunner = (job: Job, progress: (p: AnalysisProgress) => void, hooks?: AnalysisHooks) => Promise<AnalysisOutcome>;
 
 interface QueueState {
   queue: Job[];
@@ -337,12 +343,26 @@ export function enqueueAnalysis(
 }
 
 /** Démarre les analyses en attente tant que la limite de parallélisme le permet. */
+let repumpTimer: NodeJS.Timeout | undefined;
+
 function pump(): void {
+  clearTimeout(repumpTimer);
   while (st.running.size < maxParallel() && st.queue.length) {
-    const job = st.queue.shift() as Job;
+    // Analyse de fond hors de la fenêtre autorisée : abandonnée.
+    st.queue = st.queue.filter((j) => !(j.background && !inNightWindow()));
+    // Pendant qu'une vidéo est regardée, les analyses de fond attendent en
+    // file (elles téléchargent le flux en haute qualité et chargent le
+    // processeur) ; les demandes explicites partent tout de suite.
+    const i = st.queue.findIndex((j) => !(j.background && someoneWatching()));
+    if (i < 0) {
+      if (st.queue.length) {
+        repumpTimer = setTimeout(pump, 20_000);
+        repumpTimer.unref?.();
+      }
+      break;
+    }
+    const [job] = st.queue.splice(i, 1);
     if (st.running.has(job.matchId) || unavailableReason(job.matchId)) continue;
-    // Analyse de fond pas encore démarrée à la fin de la fenêtre de nuit : abandonnée.
-    if (job.background && !inNightWindow()) continue;
     start(job);
   }
   if (!st.running.size && !st.queue.length && st.idleResolve) {
@@ -360,17 +380,31 @@ function start(job: Job): void {
   const logId = db.logIngestStart(`analyse-${job.matchId}`);
   // Garde-fou : une analyse qui ne rend jamais la main (worker bloqué…) passe
   // en échec au lieu de rester « en cours » et de bloquer la file.
+  // Le temps passé en pause (lecture en cours) ne compte pas dans le délai.
+  let pausedMs = 0;
+  const t0 = Date.now();
   let watchdog: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    watchdog = setTimeout(() => reject(new Error(`délai dépassé (${Math.max(1, Math.round(analysisTimeoutMs() / 60_000))} min)`)), analysisTimeoutMs());
+    watchdog = setInterval(() => {
+      if (Date.now() - t0 - pausedMs > analysisTimeoutMs()) reject(new Error(`délai dépassé (${Math.max(1, Math.round(analysisTimeoutMs() / 60_000))} min)`));
+    }, Math.min(30_000, analysisTimeoutMs()));
     watchdog.unref?.();
   });
-  void Promise.race([runner(job, (p) => Object.assign(state, p)), timeout])
+  const gate = async () => {
+    if (!job.background || !someoneWatching()) return;
+    const saved = { phase: state.phase, done: state.done, total: state.total };
+    Object.assign(state, { phase: 'en pause pendant la lecture' });
+    const p0 = Date.now();
+    while (someoneWatching()) await new Promise((r) => setTimeout(r, 5_000));
+    pausedMs += Date.now() - p0;
+    Object.assign(state, saved);
+  };
+  void Promise.race([runner(job, (p) => Object.assign(state, p), { gate }), timeout])
     .then(
       (res) => res,
       (e: unknown): AnalysisOutcome => ({ ok: false, anchors: 0, kind: 'erreur', reason: `Analyse impossible : ${(e as Error)?.message || String(e)}` }),
     )
-    .finally(() => clearTimeout(watchdog))
+    .finally(() => clearInterval(watchdog))
     .then((res) => {
       const prev = getAnalysisRecord(job.matchId);
       const sameVideo = !prev?.okId || prev.okId === okId;
@@ -401,6 +435,14 @@ function start(job: Job): void {
       st.running.delete(job.matchId);
       pump();
     });
+}
+
+/** Activité de la file d'analyse (panneau « En cours de traitement » de l'accueil). */
+export function analysisActivity(): { running: { matchId: number; phase: string; done: number; total: number }[]; queued: number[] } {
+  return {
+    running: [...st.running.entries()].map(([matchId, r]) => ({ matchId, phase: r.phase, done: r.done, total: r.total })),
+    queued: st.queue.map((j) => j.matchId),
+  };
 }
 
 /** Statut d'analyse d'un match (contrat de l'API GET /api/matches/[id]/sync). */
@@ -496,7 +538,7 @@ function networkOutcome(detail: string, netFailures: number): AnalysisOutcome {
   };
 }
 
-async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): Promise<AnalysisOutcome> {
+async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void, hooks?: AnalysisHooks): Promise<AnalysisOutcome> {
   const matchId = job.matchId;
   const match = db.getMatch(matchId);
   if (!match?.video_ok_id) throw new Error('pas de replay');
@@ -547,7 +589,10 @@ async function runAnalysis(job: Job, progress: (p: AnalysisProgress) => void): P
       tp,
       breaks,
       scores: scoreTimeline(plays),
-      grab: (t) => grabFrame(source.url, t, headers),
+      grab: async (t) => {
+        await hooks?.gate(); // analyse de fond : en pause tant qu'une vidéo est regardée
+        return grabFrame(source.url, t, headers);
+      },
       location: cached,
       stepSec: Number(process.env.OCR_STEP_SEC ?? 105),
       onProgress: (phase, done, total) => progress({ phase: PHASE_LABEL[phase], done, total }),

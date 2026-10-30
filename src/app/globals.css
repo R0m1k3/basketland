@@ -279,6 +279,49 @@ body {
 .subtitle-banner .subtitle-text {
   @apply font-display uppercase tracking-wide;
 }
+/* Ligne précédente, remplacée avant d'avoir pu être lue : en retrait. */
+.subtitle-prev {
+  opacity: 0.55;
+  transform: scale(0.86);
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+/* Voix qui monte : texte plus appuyé, liseré orange. */
+.subtitle-emph-1 {
+  box-shadow: inset 3px 0 0 theme('colors.flame.DEFAULT');
+}
+.subtitle-emph-1 .subtitle-text {
+  font-weight: 700;
+}
+/* Moment fort (cri, exclamation) : plus grand, plus chaud, entrée qui claque. */
+.subtitle-emph-2 {
+  @apply bg-black/60;
+  /* Liseré + contour fin (un seul box-shadow : un `ring` serait écrasé). */
+  box-shadow:
+    inset 4px 0 0 theme('colors.flame.DEFAULT'),
+    0 0 0 1px rgb(255 90 31 / 0.7);
+  animation: subtitle-pop 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+.subtitle-emph-2 .subtitle-text {
+  font-weight: 800;
+  color: #ffe9c7;
+  font-size: clamp(13px, calc(var(--sub-scale, 1) * 1.85cqw), 40px);
+}
+@keyframes subtitle-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
 
 /* Play-by-play */
 .pbp-row {

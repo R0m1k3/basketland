@@ -36,15 +36,17 @@ import { nameRendered, type RosterIndex } from './rosterNames';
  */
 export const DEFAULT_TRANSCRIBE_MODEL = 'deepdml/faster-whisper-large-v3-turbo-ct2';
 /**
- * Gemma 4 E4B instruct (Ollama, Q4_K_M, 6,6 Go) : 1er du banc d'essai
- * (55 phrases de commentateurs NBA, 13 modèles) avec 97/110 — jargon basket
- * juste, lignes jamais décalées. MiLMMT-46-4B, modèle de traduction pur,
- * n'y fait que 66/110 (contresens sur le jargon) : il reste utilisable via
- * TRANSLATE_MODEL (moteur 'mt').
+ * TranslateGemma 12B (Google, Ollama `translategemma:12b`, Q4_K_M, 8,1 Go) :
+ * modèle de traduction, choisi par l'utilisateur. Au banc d'essai (55 phrases
+ * de commentateurs NBA) : 93/110 piloté comme ici — nos consignes basket et
+ * des lots JSON dans le gabarit Gemma brut (son gabarit officiel n'accepte
+ * pas de consignes système) —, contre 65/110 dans son format officiel, une
+ * phrase à la fois. Gemma 4 E4B (`gemma4:e4b`, 97/110, 6,6 Go) reste
+ * disponible via TRANSLATE_MODEL.
  */
-export const DEFAULT_TRANSLATE_MODEL = 'gemma4:e4b';
+export const DEFAULT_TRANSLATE_MODEL = 'translategemma:12b';
 /** Lignes précédentes données au modèle pour le sens (non traduites). */
-export const CONTEXT_LINES = 3;
+export const CONTEXT_LINES = 5;
 
 /**
  * Deux façons de piloter le modèle de traduction :
@@ -106,8 +108,9 @@ export interface CommentaryConfig {
   /** Lots traduits en même temps (Ollama embarqué : OLLAMA_NUM_PARALLEL réglé pareil). */
   parallel: number;
   /**
-   * Durée d'un tronçon audio (s, 60 par défaut) : les premiers sous-titres
-   * arrivent ~20-30 s après l'ouverture du match (traduction à la demande).
+   * Durée d'un tronçon audio (s, 120 par défaut) : les premiers sous-titres
+   * arrivent ~20-40 s après l'ouverture du match (traduction à la demande),
+   * et un match entier ne coûte que ~60 lancements de ffmpeg/Whisper.
    */
   chunkSec: number;
   /** Raison de l'inactivité de la fonctionnalité, ou null si elle est active. */
@@ -161,7 +164,7 @@ export function commentaryConfig(): CommentaryConfig {
     batch: intEnv('TRANSLATE_BATCH', 14, 1, 60),
     // L'API OpenAI encaisse plus de requêtes simultanées qu'un GPU de NAS.
     parallel: openai ? intEnv('TRANSLATE_PARALLEL', 4, 1, 16) : translateParallel(),
-    chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 60, 30, 3600),
+    chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 120, 30, 3600),
     disabledReason,
   };
 }
@@ -294,6 +297,7 @@ export function whisperPrompt(home: string, away: string, players: string[]): st
 export const TRANSLATE_SYSTEM_PROMPT = `Tu traduis en sous-titres français les commentaires TV en anglais d'un match NBA. Le texte anglais vient d'une transcription automatique (Whisper) : il peut contenir des noms mal orthographiés ou des phrases coupées.
 
 Règles :
+0. Tout ce qui est dit concerne le match de basket indiqué dans « match » : interprète chaque mot dans son sens basket (« three » = tir à trois points, « board » = rebond, « dime » = passe décisive, « glass » = planche, « paint » = raquette), jamais au sens courant.
 1. Écris un français parlé naturel, comme un commentateur de basket français à la télé (beIN Sports, Canal+), pas une traduction mot à mot. Les commentateurs se tutoient entre eux.
 2. Noms propres : ne traduis pas les noms d'équipes (Celtics, Knicks, Warriors…). La transcription écorche souvent les noms de joueurs : si un nom ressemble (par le son ou l'orthographe) à un joueur de la liste « joueurs », écris-le avec l'orthographe exacte de la liste (« Kata » → « Queta », « Edie » → « Edey »). Sinon, garde le nom tel qu'il est écrit.
 3. Vocabulaire basket français :
@@ -305,6 +309,7 @@ Règles :
    - turnover → « balle perdue » ; steal → « interception » ; fast break / in transition → « contre-attaque », « en transition » ;
    - layup → « lay-up » ; dunk / slam → « dunk » ; bucket → « panier » ; foul → « faute » ; timeout → « temps mort » ;
    - shot clock → « les 24 secondes » ; run → « série » (« un 10-0 ») ; step-back, iso, alley-oop, 3-and-D → garder tel quel.
+   - expressions de commentateurs : « he's cooking » / « on fire » / « heating up » → « il est en feu » ; « nothing but net » / « splash » → « ficelle » ; « and-one » → « panier plus la faute » ; « bucket » / « hoop » → « panier » ; « clean look » / « wide open » → « tir ouvert » ; « drop coverage » → « défense en recul » ; « switch » → « changement (défensif) » ; « help side » → « aide » ; « boards » → « rebonds » ; « glass » → « la planche » ; « charity stripe » → « la ligne des lancers francs » ; « bench » → « le banc » ; « going the other way » → « en contre-attaque » ; « tough shot » → « tir difficile » ; « foul trouble » → « en délicatesse avec les fautes » ; « crunch time » → « money time ».
 4. Chiffres en chiffres : scores, statistiques et pourcentages (« 41 % à trois points », « 12-4 »).
 5. Chaque ligne est un sous-titre et peut n'être qu'un morceau de phrase qui continue à la ligne suivante : traduis-la comme un morceau, dans l'ordre, sans déplacer de mots d'une ligne à l'autre, sans fusionner ni découper de lignes.
 6. Phrases courtes et lisibles. N'ajoute rien, n'omets rien, n'explique rien. Si une ligne est confuse, traduis-la au plus près sans inventer.
@@ -335,6 +340,8 @@ export interface TranslateLine {
 }
 
 export interface TranslateContext {
+  /** Match en cours (« Memphis Grizzlies @ Portland Trail Blazers ») : le contexte basket du lot. */
+  match?: string;
   /** Effectif du match : orthographe exacte des joueurs (donnée au LLM, et tolérée par le contrôle des noms). */
   roster?: RosterIndex;
   signal?: AbortSignal;
@@ -344,9 +351,10 @@ export interface TranslateContext {
 }
 
 /** Message utilisateur d'un lot (format du banc d'essai) : contexte à ne pas traduire, puis lignes. */
-export function buildUserMessage(lines: TranslateLine[], context: string[], model: string, roster?: RosterIndex): string {
+export function buildUserMessage(lines: TranslateLine[], context: string[], model: string, roster?: RosterIndex, match?: string): string {
   const players = roster?.full.length ? { joueurs: roster.full } : {};
-  const payload = JSON.stringify({ ...players, context, lines: lines.map((l) => ({ i: l.i, en: l.en })) });
+  const game = match ? { match } : {};
+  const payload = JSON.stringify({ ...game, ...players, context, lines: lines.map((l) => ({ i: l.i, en: l.en })) });
   return `Traduis ces lignes. Réponds uniquement avec le JSON demandé.\n${payload}${needsNoThink(model) ? '\n/no_think' : ''}`;
 }
 
@@ -480,16 +488,37 @@ const TRANSLATION_SCHEMA = {
  *   un schéma JSON imposé ;
  * - serveur externe : `/chat/completions` compatible OpenAI.
  */
+/**
+ * TranslateGemma n'accepte qu'un message utilisateur (pas de consignes
+ * système) : comme au banc d'essai, consignes et lot partent dans le gabarit
+ * Gemma brut (`/api/generate`, `raw: true`).
+ */
+export const needsRawGemma = (model: string) => /translategemma/i.test(model);
+
+export function gemmaRawPrompt(system: string, user: string): string {
+  return `<start_of_turn>user\n${system}\n\n${user}<end_of_turn>\n<start_of_turn>model\n`;
+}
+
 export async function chatCompletion(system: string, user: string, cfg: CommentaryConfig, o: TranslateContext = {}, temperature = 0.2): Promise<string> {
   const native = cfg.translateMode === 'embedded';
-  const url = native ? `${ollamaBase(cfg.translateUrl)}/api/chat` : `${cfg.translateUrl}/chat/completions`;
+  const raw = native && needsRawGemma(cfg.translateModel);
+  const url = raw ? `${ollamaBase(cfg.translateUrl)}/api/generate` : native ? `${ollamaBase(cfg.translateUrl)}/api/chat` : `${cfg.translateUrl}/chat/completions`;
   const timeoutMs = o.timeoutMs ?? intEnv('TRANSLATE_TIMEOUT_MS', 5 * 60_000, 5_000, 3600_000);
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: user },
   ];
   const body = JSON.stringify(
-    native
+    raw
+      ? {
+          model: cfg.translateModel,
+          prompt: gemmaRawPrompt(system, user),
+          raw: true,
+          stream: false,
+          keep_alive: '10m',
+          options: { temperature, top_p: 0.9, num_ctx: 4096, num_predict: 1200, stop: ['<end_of_turn>'] },
+        }
+      : native
       ? {
           model: cfg.translateModel,
           messages,
@@ -531,8 +560,9 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
       const data = (await res.json().catch(() => null)) as {
         choices?: { message?: { content?: unknown } }[];
         message?: { content?: unknown };
+        response?: unknown;
       } | null;
-      const content = native ? data?.message?.content : data?.choices?.[0]?.message?.content;
+      const content = raw ? data?.response : native ? data?.message?.content : data?.choices?.[0]?.message?.content;
       // Réponse vide ou mal formée : c'est le CONTENU qui est en cause, le lot sera retenté.
       return typeof content === 'string' ? content : '';
     }
@@ -570,7 +600,7 @@ async function chatAttempt(
   o: TranslateContext,
   temperature: number,
 ): Promise<{ got: Map<number, string>; missing: number; suspect: number }> {
-  const raw = parseTranslation(await chatCompletion(system, buildUserMessage(lines, context, cfg.translateModel, o.roster), cfg, o, temperature));
+  const raw = parseTranslation(await chatCompletion(system, buildUserMessage(lines, context, cfg.translateModel, o.roster, o.match), cfg, o, temperature));
   // Ligne seule renvoyée sous un autre id : c'est bien elle.
   if (lines.length === 1 && raw.size === 1 && !raw.has(lines[0].i)) {
     const [[otherId, fr]] = [...raw.entries()];

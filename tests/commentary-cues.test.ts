@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildCues,
+  cueEmphasis,
   filterTranscript,
   hallucinationReason,
   isRepetitionLoop,
@@ -179,14 +180,14 @@ describe('tronçons', () => {
 });
 
 describe('buildCues', () => {
-  it('respecte 84 caractères, 6 s, et ne fait jamais chevaucher deux sous-titres', () => {
+  it('respecte 60 caractères, ~5 s, et ne fait jamais chevaucher deux sous-titres', () => {
     const text =
       'He crosses over, steps back, and drills the three from the corner. That is his fifth of the night and the Lakers are rolling now, they have outscored Portland by twelve in this quarter alone and the crowd is on its feet';
     const cues = buildCues(words(text, 100, 0.28));
     expect(cues.length).toBeGreaterThan(2);
     for (const [i, c] of cues.entries()) {
-      expect(c.text.length).toBeLessThanOrEqual(84);
-      expect(c.end - c.start).toBeLessThanOrEqual(6.0001);
+      expect(c.text.length).toBeLessThanOrEqual(60);
+      expect(c.end - c.start).toBeLessThanOrEqual(5.4001);
       expect(c.end).toBeGreaterThan(c.start);
       if (cues[i + 1]) expect(c.end).toBeLessThanOrEqual(cues[i + 1].start);
       expect(c.seq).toBe(i + 1);
@@ -195,9 +196,9 @@ describe('buildCues', () => {
     expect(cues.map((c) => c.text).join(' ')).toBe(text);
   });
 
-  it('coupe de préférence après la ponctuation', () => {
+  it('coupe de préférence après la ponctuation : des groupes de sens, pas du texte au kilomètre', () => {
     const cues = buildCues(words('He crosses over, steps back, and drills the three from the corner. That is his fifth of the night', 0, 0.3));
-    expect(cues[0].text).toBe('He crosses over, steps back, and drills the three from the corner.');
+    expect(cues.map((c) => c.text)).toEqual(['He crosses over, steps back,', 'and drills the three from the corner.', 'That is his fifth of the night']);
   });
 
   it('sans ponctuation : coupe avant une conjonction, jamais après un article', () => {
@@ -205,6 +206,11 @@ describe('buildCues', () => {
     expect(cues[0].text).toBe('they have outscored Portland by twelve in this quarter alone');
     const noOpener = buildCues(words('Shai Gilgeous-Alexander gets to his spot over the outstretched arm of the long defender', 0, 0.28));
     expect(noOpener[0].text).not.toMatch(/\b(the|of|over)$/);
+  });
+
+  it('coupe sur une respiration (pause ≥ 0,35 s)', () => {
+    const w = [...words('Brown drives to the rim', 0), ...words('and he is fouled hard', 1.85)];
+    expect(buildCues(w).map((c) => c.text)).toEqual(['Brown drives to the rim', 'and he is fouled hard']);
   });
 
   it('coupe sur une pause de plus de 0,5 s', () => {
@@ -219,6 +225,33 @@ describe('buildCues', () => {
     expect(cues[0].end).toBeGreaterThanOrEqual(6.2);
     const tight = buildCues([{ word: ' Wow!', start: 5, end: 5.3 }, { word: ' Yes!', start: 7.0, end: 7.2 }]);
     expect(tight[0].end).toBeLessThanOrEqual(tight[1].start);
+  });
+
+  it('la voix qui monte d’un coup ouvre une nouvelle ligne, mise en relief', () => {
+    const calm = words('Brown brings it up the floor, looks inside', 0).map((w) => ({ ...w, energy: 0 }));
+    // Micro-pause de 0,15 s seulement : c'est le changement de ton qui coupe.
+    const burst = words('and he slams it home!', 2.5).map((w) => ({ ...w, energy: 8 }));
+    const cues = buildCues([...calm, ...burst]);
+    expect(cues.map((c) => c.text)).toEqual(['Brown brings it up the floor, looks inside', 'and he slams it home!']);
+    expect(cues[0].emphasis).toBeUndefined();
+    expect(cues[1].emphasis).toBe(2);
+  });
+
+  it('niveau de relief : intensité de la moitié la plus forte des mots, « ! » en bonus', () => {
+    const w = (e: number[]) => e.map((energy, i) => ({ word: ` w${i}`, start: i, end: i + 0.5, energy }));
+    expect(cueEmphasis(w([0, 1, -2]), 'calme')).toBe(0);
+    expect(cueEmphasis(w([-3, 4, 4, -1]), 'monte')).toBe(1);
+    expect(cueEmphasis(w([7, 6, -4, -6]), 'cri')).toBe(2);
+    expect(cueEmphasis(w([]), 'Wow!')).toBe(1);
+    expect(cueEmphasis(w([4, 3]), 'Yes!')).toBe(2);
+  });
+
+  it('une ligne reste affichée le temps d’être lue en français si le silence le permet', () => {
+    const text = 'Gilgeous-Alexander gets to his spot and buries it';
+    const cues = buildCues(words(text, 10, 0.2, 0.15));
+    expect(cues).toHaveLength(1);
+    // ~50 caractères × 1,15 / 15 car./s ≈ 3,8 s, bien plus que la parole (1,6 s).
+    expect(cues[0].end - cues[0].start).toBeGreaterThanOrEqual((text.length * 1.15) / 15 - 0.01);
   });
 
   it('assemble mots, ponctuation isolée et contractions', () => {

@@ -39,7 +39,19 @@ export function startScheduler(): void {
 
   every(15 * MIN, () => syncSchedule(), 5_000);
   every(5 * MIN, () => syncStats(), 60_000);
-  every(VIDEO_JOB_INTERVAL_MS, () => syncVideos(), 3 * MIN);
+  // Recherche des replays ; un replay qui vient d'apparaître est mis en file
+  // de traduction et d'analyse tout de suite (pas d'attente du job suivant).
+  every(
+    VIDEO_JOB_INTERVAL_MS,
+    async () => {
+      await syncVideos();
+      if (!inNightWindow()) return;
+      const c = enqueueRecentCommentaries();
+      const a = enqueueRecentAnalyses();
+      if (c || a) console.log(`[cron] nouveaux replays : ${c} traduction(s), ${a} analyse(s) mise(s) en file`);
+    },
+    3 * MIN,
+  );
   every(60 * MIN, () => syncSubtitles(), 10 * MIN);
   // Tâches de fond lourdes (analyse vidéo OCR, pré-traduction des
   // commentaires) : SEULEMENT dans la fenêtre de nuit (2 h-6 h, heure de

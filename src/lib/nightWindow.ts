@@ -1,12 +1,13 @@
 /**
- * Fenêtre des tâches de fond lourdes (pré-traduction des commentaires,
- * analyse vidéo OCR), en heures de Paris : `COMMENTARY_NIGHT_WINDOW`,
- * « 2-6 » par défaut (de 2 h à 6 h), « off » pour la désactiver, « always »
- * pour travailler en continu. Hors fenêtre, rien ne tourne en tâche de
- * fond : seuls les matchs qu'on ouvre sont analysés et traduits.
+ * Fenêtre des tâches de fond lourdes (traduction des commentaires, analyse
+ * vidéo OCR), en heures de Paris : `COMMENTARY_NIGHT_WINDOW`, « always » par
+ * défaut (dès qu'un replay est disponible), « 2-6 » pour de 2 h à 6 h
+ * seulement, « off » pour ne traiter que les matchs qu'on ouvre. Dans tous
+ * les cas, les tâches de fond s'effacent pendant qu'une vidéo est regardée
+ * (voir viewers.ts).
  */
 export function inNightWindow(now = new Date()): boolean {
-  const spec = (process.env.COMMENTARY_NIGHT_WINDOW ?? '2-6').trim().toLowerCase();
+  const spec = (process.env.COMMENTARY_NIGHT_WINDOW ?? 'always').trim().toLowerCase();
   if (spec === 'off' || spec === '0' || spec === '') return false;
   if (spec === 'always' || spec === 'on') return true;
   const m = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(spec);
@@ -22,7 +23,7 @@ export function inNightWindow(now = new Date()): boolean {
 
 /** Libellé de la fenêtre (« de 2 h à 6 h », « en continu »), ou null si elle est désactivée. */
 export function nightWindowLabel(): string | null {
-  const spec = (process.env.COMMENTARY_NIGHT_WINDOW ?? '2-6').trim().toLowerCase();
+  const spec = (process.env.COMMENTARY_NIGHT_WINDOW ?? 'always').trim().toLowerCase();
   if (spec === 'always' || spec === 'on') return 'en continu';
   const m = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(spec);
   return m ? `chaque nuit de ${Number(m[1]) % 24} h à ${Number(m[2]) % 24} h` : null;

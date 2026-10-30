@@ -284,6 +284,12 @@ function migrate(db: DatabaseSyncType): void {
   // publiée d'un bloc ou en préfixe continu.
   if (!trackCols.has('chunk_sec')) db.exec('ALTER TABLE commentary_tracks ADD COLUMN chunk_sec INTEGER');
   if (!trackCols.has('chunks_total')) db.exec('ALTER TABLE commentary_tracks ADD COLUMN chunks_total INTEGER');
+  // Mise en relief d'un sous-titre (0 ton normal, 1 voix qui monte, 2 moment
+  // fort), tirée de l'intensité de la voix des commentateurs.
+  const cueCols = new Set(
+    (db.prepare('PRAGMA table_info(commentary_cues)').all() as { name: string }[]).map((c) => c.name),
+  );
+  if (!cueCols.has('emphasis')) db.exec('ALTER TABLE commentary_cues ADD COLUMN emphasis INTEGER NOT NULL DEFAULT 0');
 }
 
 export function getDb(): DatabaseSyncType {
@@ -762,6 +768,8 @@ export interface CommentaryCueRow {
   text_en: string;
   text_fr: string;
   untranslated: number;
+  /** 0 ton normal, 1 voix qui monte, 2 moment fort. */
+  emphasis?: number;
 }
 
 export interface CommentaryTrackRow {
@@ -791,11 +799,20 @@ type CueInput = Omit<CommentaryCueRow, 'match_id'>;
 
 function insertCues(matchId: number, cues: CueInput[]): void {
   const st = getDb().prepare(
-    `INSERT OR REPLACE INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated)
-     VALUES ($m, $seq, $start, $end, $en, $fr, $u)`,
+    `INSERT OR REPLACE INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated, emphasis)
+     VALUES ($m, $seq, $start, $end, $en, $fr, $u, $e)`,
   );
   for (const c of cues)
-    st.run({ m: matchId, seq: c.seq, start: c.start_ts, end: c.end_ts, en: c.text_en, fr: c.text_fr, u: c.untranslated ? 1 : 0 });
+    st.run({
+      m: matchId,
+      seq: c.seq,
+      start: c.start_ts,
+      end: c.end_ts,
+      en: c.text_en,
+      fr: c.text_fr,
+      u: c.untranslated ? 1 : 0,
+      e: Math.max(0, Math.min(2, Math.round(c.emphasis ?? 0))),
+    });
 }
 
 /** Métadonnées de la piste ; compteurs recalculés sur les sous-titres en base. */

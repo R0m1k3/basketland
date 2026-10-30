@@ -9,6 +9,8 @@ export interface Subtitle {
   text: string;
   speaker: string;
   kind: string;
+  /** Mise en relief (VF des commentaires) : 0 ton normal, 1 voix qui monte, 2 moment fort. */
+  emphasis?: number;
 }
 
 export interface CueState {
@@ -211,22 +213,31 @@ export function readDuration(s: Subtitle): number {
 }
 
 /**
+ * Temps minimal pour LIRE une ligne (≈ 15 caractères par seconde, 1,5 s au
+ * moins). Une ligne remplacée avant ce délai reste visible, en retrait.
+ */
+export function minReadTime(s: Subtitle): number {
+  return Math.max(1.5, s.text.length / 15);
+}
+
+/** Durée maximale pendant laquelle une ligne remplacée reste en retrait (s). */
+const LINGER_MAX = 2;
+
+/**
  * Lignes à afficher à l'instant `t` (indices croissants, au plus
- * MAX_ON_SCREEN) : chaque ligne commencée reste à l'écran pendant sa
- * durée de lecture, et une nouvelle ligne s'empile sous la précédente au
- * lieu de l'effacer (défilement « roll-up » des sous-titres TV).
+ * MAX_ON_SCREEN). La dernière ligne commencée reste à l'écran pendant sa
+ * durée de lecture. La précédente ne reste (en retrait, au-dessus) que si
+ * elle a été remplacée avant d'avoir pu être lue — les commentateurs
+ * enchaînent vite — et jamais plus de 2 s après l'arrivée de la nouvelle.
  */
 export function findOnScreen(subs: Subtitle[], t: number): number[] {
   const last = findCue(subs, t).index;
   if (last < 0) return NO_LINES;
-  const out: number[] = [];
-  for (let i = last; i >= 0 && out.length < MAX_ON_SCREEN; i--) {
-    const s = subs[i];
-    // Au-delà de 8 s, aucune ligne plus ancienne ne peut encore être affichée.
-    if (t - s.video_ts > 8) break;
-    if (t <= s.video_ts + readDuration(s)) out.unshift(i);
-  }
-  return out;
+  const cur = subs[last];
+  if (t > cur.video_ts + readDuration(cur)) return NO_LINES;
+  const prev = last > 0 ? subs[last - 1] : undefined;
+  if (prev && MAX_ON_SCREEN > 1 && t < Math.min(prev.video_ts + minReadTime(prev), cur.video_ts + LINGER_MAX)) return [last - 1, last];
+  return [last];
 }
 
 /** Recherche dichotomique de la dernière ligne commencée à l'instant `t`. */
