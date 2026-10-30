@@ -29,6 +29,8 @@ interface Props {
   durationHint?: number | null;
   /** Identifiant du match : sert à la VF doublée (manifeste /api/matches/[id]/dub). */
   matchId?: number;
+  /** « Voix » par défaut quand l'utilisateur n'a jamais choisi : VF doublée (réglage « Version française » = doublage). */
+  dubDefault?: boolean;
 }
 
 type SubSize = 'S' | 'M' | 'L' | 'XL';
@@ -163,7 +165,7 @@ function errorMessage(data: ErrorData): string {
  * Aucune donnée temporelle ne passe par l'état React de ce composant : la
  * barre de progression et le chrono s'abonnent à l'horloge `Playback`.
  */
-export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAbbr, homeAbbr, durationHint, matchId }: Props) {
+export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAbbr, homeAbbr, durationHint, matchId, dubDefault = false }: Props) {
   const playback = usePlayback();
   const shellRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -206,14 +208,14 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     const d = Number(readPref('bl:subdelay'));
     if (readPref('bl:subdelay') !== null && Number.isFinite(d)) setSubDelay(Math.max(-5, Math.min(10, d)));
     if (readPref('bl:vf') === '0') setVfOn(false);
-    if (readPref('bl:dub') === '1') setDubOn(true);
+    if (readPref('bl:dub') === '1' || (readPref('bl:dub') === null && dubDefault)) setDubOn(true);
     const q = readPref('bl:quality');
     if (q && q !== 'auto' && Number.isFinite(Number(q))) setQuality(Number(q));
     if (posKey) {
       const p = Number(readPref(posKey));
       if (Number.isFinite(p) && p > 30) setResumeAt(p);
     }
-  }, [posKey]);
+  }, [posKey, dubDefault]);
 
   // Branche l'horloge partagée sur l'élément vidéo.
   useEffect(() => {

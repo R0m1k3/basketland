@@ -5,9 +5,11 @@ import AutoTranslateSettings from '@/components/settings/AutoTranslateSettings';
 import OpenAiSettings from '@/components/settings/OpenAiSettings';
 import SubtitleSettings from '@/components/settings/SubtitleSettings';
 import UsersAdmin from '@/components/settings/UsersAdmin';
+import VfModeSettings from '@/components/settings/VfModeSettings';
 import { currentSession } from '@/lib/authServer';
 import { listUsers } from '@/lib/db';
-import { autoTranslateEnabled, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView } from '@/lib/settings';
+import { dubDisabledReason } from '@/lib/dub';
+import { autoTranslateEnabled, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView, vfMode } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Paramètres' };
@@ -68,6 +70,7 @@ export default async function SettingsPage() {
             Traduction des commentaires
           </SectionTitle>
           <AutoTranslateSettings initial={autoTranslateEnabled()} />
+          <VfModeSettings initial={vfMode()} voiceDisabledReason={await dubDisabledReason()} />
           <OpenAiSettings initial={openAiSettingsView()} placeholderModel={OPENAI_MODEL_PLACEHOLDER} />
         </section>
       )}

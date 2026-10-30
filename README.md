@@ -368,8 +368,20 @@ lecture ») et la file d'attente, ainsi que l'état de chaque replay : « VF »
 **Traduction automatique** (Paramètres, administrateurs ; activée par
 défaut) : désactivée, plus rien ne part tout seul — ni travail de fond (ceux
 déjà en file sont abandonnés), ni lancement à l'ouverture d'un match. La
-fiche affiche alors un bouton **« Traduire ce match »** (pour tout
-utilisateur connecté). Moins de charge pour le serveur.
+fiche affiche alors les boutons **« Sous-titrer ce match »** et **« Doubler
+ce match »** (pour tout utilisateur connecté). Moins de charge pour le
+serveur.
+
+**Version française** (Paramètres, administrateurs) : **Sous-titres** (par
+défaut) ou **Doublage voix**. Le doublage part des sous-titres : la
+traduction est faite dans les deux modes. Avec la traduction automatique,
+le mode Doublage voix double aussi chaque replay traduit, et le lecteur
+part en « VF doublée » tant que l'utilisateur n'a rien choisi ; en mode
+Sous-titres, aucun doublage automatique (ceux déjà en file sont abandonnés),
+mais « Doubler ce match » double un match précis. Un doublage demandé ainsi
+va jusqu'au bout même si l'on quitte la fiche (en pause pendant la lecture
+d'un autre match et pendant une traduction) ; les administrateurs ont en
+plus « Relancer le doublage » (efface le doublage et le refait).
 
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
 et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
@@ -521,14 +533,16 @@ tronçon est monté en AAC (`/data/dub/<match>/chunk-N.m4a`). Le doublage **ne
 tourne jamais en même temps qu'une traduction ou une analyse** (la carte
 graphique est partagée) : il s'arrête à la réplique suivante et reprend
 après. Comme la traduction, il s'efface pendant la lecture d'un autre match,
-suit la « Traduction automatique » et `COMMENTARY_NIGHT_WINDOW`, et le match
+suit la « Traduction automatique », la « Version française » (doublage de
+fond en mode Doublage voix seulement ; sinon sur un clic « Doubler ce
+match », `POST /api/matches/[id]/dub`) et `COMMENTARY_NIGHT_WINDOW`, et le match
 regardé passe devant (`GET /api/matches/[id]/dub` : manifeste des tronçons ;
 `/dub/<n>` : l'audio). Un match vu pour la première fois est doublé une fois
 sa traduction terminée ; un replay traduit en tâche de fond est souvent déjà
 doublé quand on l'ouvre.
 
 **Dans le lecteur** : menu ⚙ → « Voix » : « Originale (VO) » / « VF
-doublée » (mémorisé). La voix française est calée sur l'image (saut, pause,
+doublée » (mémorisé ; par défaut, VF doublée en mode Doublage voix). La voix française est calée sur l'image (saut, pause,
 gel, reprise) ; pendant qu'elle parle, le son d'origine est baissé à 20 % —
 la foule reste audible entre les phrases. Les passages pas encore doublés
 restent en VO (« bientôt disponible ici »). À une vitesse autre que ×1, la
