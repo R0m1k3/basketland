@@ -328,6 +328,16 @@ l'écrit dans les journaux du conteneur (`[lecteur] gel de 2.4 s à 31:05 ·
 vidéo lents à venir d'ok.ru (`[vidéo] segment lent depuis ok.ru …`) : de
 quoi distinguer un problème de réseau d'une surcharge du serveur.
 
+**Lecture plus stable** : une connexion ok.ru qui se bloque (plus un octet
+pendant 5 s, `SEGMENT_STALL_MS`) est coupée et le segment reprend où il en
+était sur une nouvelle connexion (`[vidéo] flux ok.ru … : reprise n° N …`,
+jusqu'à `SEGMENT_RETRIES` reprises) ; le serveur précharge ~90 s devant la
+position de chaque spectateur, dans la qualité réellement lue
+(`PREFETCH_AHEAD_SEC`, 3 téléchargements en parallèle), et son cache
+(`SEGMENT_CACHE_MB`, 512 Mo) garde en priorité les segments à venir. Si
+`[vidéo] le lecteur rattrape le préchargement` revient souvent, ok.ru est
+trop lent pour la qualité choisie (ou le cache trop petit).
+
 **Noms des joueurs** : Whisper écorche souvent les noms (« Edie » pour
 Edey). Avec l'effectif du match (feuille de stats ESPN), les écarts d'une ou
 deux lettres sont corrigés avant la traduction, et la liste des joueurs est
