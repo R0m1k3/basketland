@@ -198,6 +198,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
       <section id="replay" aria-label="Replay" className="space-y-3">
         <div ref={playerRef} className="-mx-4 sm:mx-0">
           <VideoPlayer
+            matchId={matchId}
             kind={video.kind}
             src={video.src}
             subtitles={subtitles}
