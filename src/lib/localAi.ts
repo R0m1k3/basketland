@@ -252,6 +252,12 @@ export class OllamaSession {
     if (await ollamaUp(s.base)) return s;
     const models = path.join(modelsDir(), 'ollama');
     fs.mkdirSync(models, { recursive: true });
+    // Ollama range sa clé d'identification (~/.ollama/id_ed25519, exigée pour
+    // télécharger depuis registry.ollama.ai) dans HOME : un HOME hérité de root
+    // (/root) est interdit à l'utilisateur `node` → « permission denied ».
+    // La clé est gardée dans le volume, à côté des modèles.
+    const home = path.join(modelsDir(), 'ollama-home');
+    fs.mkdirSync(home, { recursive: true });
     let tail = '';
     s.child = spawn(embeddedPaths().ollama, ['serve'], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -259,6 +265,7 @@ export class OllamaSession {
         ...process.env,
         OLLAMA_HOST: s.base.replace(/^https?:\/\//, ''),
         OLLAMA_MODELS: models,
+        HOME: home,
         // Requêtes simultanées = TRANSLATE_PARALLEL (2 par défaut, cf. commentaryAi.translateParallel).
         OLLAMA_NUM_PARALLEL: String(Math.max(1, Math.min(8, Math.trunc(Number(process.env.TRANSLATE_PARALLEL) || 2)))),
         // Même contexte que les requêtes (/api/chat, num_ctx 4096) : pas de rechargement du modèle.
