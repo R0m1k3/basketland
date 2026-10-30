@@ -51,6 +51,8 @@ export class Playback {
   private tickListeners = new Set<TickListener>();
   private raf = 0;
   private lastT = -1;
+  /** Retard d'affichage de la VF (s) : positif = le texte apparaît plus tard (réglage « Synchro VF »). */
+  private subDelay = DEFAULT_SUB_DELAY;
 
   get element(): HTMLVideoElement | null {
     return this.video;
@@ -103,6 +105,12 @@ export class Playback {
 
   setSubtitles(subs: Subtitle[]) {
     this.subs = subs;
+    this.tick(true);
+  }
+
+  /** Règle le retard d'affichage de la VF (s), appliqué tout de suite. */
+  setSubtitleDelay(sec: number) {
+    this.subDelay = Number.isFinite(sec) ? sec : 0;
     this.tick(true);
   }
 
@@ -160,12 +168,14 @@ export class Playback {
     if (!force && t === this.lastT) return;
     this.lastT = t;
     for (const cb of this.tickListeners) cb(t, v);
-    const next = findCue(this.subs, t);
+    // La VF est lue à « t − retard » : avec un retard positif, chaque ligne apparaît plus tard.
+    const st = t - this.subDelay;
+    const next = findCue(this.subs, st);
     if (next.index !== this.cue.index || next.visible !== this.cue.visible) {
       this.cue = next;
       for (const cb of this.cueListeners) cb();
     }
-    const lines = findOnScreen(this.subs, t);
+    const lines = findOnScreen(this.subs, st);
     if (lines.length !== this.screen.length || lines.some((x, i) => x !== this.screen[i])) {
       this.screen = lines.length ? lines : NO_LINES;
       for (const cb of this.screenListeners) cb();
@@ -174,6 +184,13 @@ export class Playback {
 }
 
 const NO_LINES: number[] = [];
+
+/**
+ * Retard par défaut de la VF (s). Les horodatages de Whisper placent le
+ * début d'une ligne un peu avant la voix ; un léger retard recale le texte.
+ * Réglable dans le lecteur (menu ⚙, « Synchro de la VF »).
+ */
+export const DEFAULT_SUB_DELAY = 0.5;
 
 /** Lignes empilées au maximum en surimpression. */
 export const MAX_ON_SCREEN = 2;

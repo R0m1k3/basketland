@@ -300,6 +300,16 @@ se charge pendant la première transcription. L'analyse vidéo (repères des
 quart-temps) ne tourne plus à l'ouverture d'un match : elle passe une fois sa
 traduction terminée, ou la nuit.
 
+**Noms des joueurs** : Whisper écorche souvent les noms (« Edie » pour
+Edey). Avec l'effectif du match (feuille de stats ESPN), les écarts d'une ou
+deux lettres sont corrigés avant la traduction, et la liste des joueurs est
+donnée au modèle de traduction, chargé de remplacer un nom qui ressemble à
+un joueur par son orthographe exacte.
+
+**Synchro** : la VF s'affiche 0,5 s après l'horodatage de Whisper (qui tombe
+un peu avant la voix) ; menu ⚙ du lecteur → « Synchro de la VF » pour
+l'avancer ou la retarder par pas de 0,5 s (mémorisé).
+
 **Pause et déchargement** : sans signe de vie de la fiche pendant 3 min, le
 travail se met en pause et les modèles sont **déchargés** de la carte
 graphique ; à la fin de chaque travail aussi. Ce qui est traduit reste, et la
