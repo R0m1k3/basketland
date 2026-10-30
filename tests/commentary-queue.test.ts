@@ -242,24 +242,22 @@ describe('runCommentary', () => {
     const phases: string[] = [];
     const res = await runCommentary({ matchId: A, force: false }, (p) => phases.push(`${p.phase} ${p.done}/${p.total}`), ctrl(), deps);
     expect(res.ok).toBe(true);
-    expect(calls.extract).toEqual([0, 597, 1197]);
+    // Extraction anticipée : le tronçon suivant se télécharge pendant le traitement du courant.
+    expect([...calls.extract].sort((a, b) => a - b)).toEqual([0, 597, 1197]);
     const cues = db.getCommentaryCues(A);
     expect(cues.map((c) => [c.start_ts, c.text_en, c.text_fr])).toEqual([
       [10, 'Play number 1 is good.', 'Action 1 réussie.'],
       [607, 'Play number 2 is good.', 'Action 2 réussie.'],
       [1207, 'Play number 3 is good.', 'Action 3 réussie.'],
     ]);
-    // Tronçon par tronçon : chaque tronçon est extrait, transcrit, traduit et publié avant le suivant.
-    expect(phases.filter((p) => !p.startsWith('preparation'))).toEqual([
-      'extraction 0/3',
+    // Tronçon par tronçon : chaque tronçon est transcrit, traduit et publié avant le suivant.
+    expect(phases.filter((p) => p.startsWith('transcription') || p.startsWith('traduction'))).toEqual([
       'transcription 0/3',
       'traduction 0/3',
       'traduction 1/3',
-      'extraction 1/3',
       'transcription 1/3',
       'traduction 1/3',
       'traduction 2/3',
-      'extraction 2/3',
       'transcription 2/3',
       'traduction 2/3',
       'traduction 3/3',
@@ -278,7 +276,7 @@ describe('runCommentary', () => {
     const second = fakeDeps();
     const res = await runCommentary({ matchId: A, force: false }, () => {}, ctrl(), second.deps);
     expect(res.ok).toBe(true);
-    expect(second.calls.extract).toEqual([597, 1197]);
+    expect(second.calls.extract).toEqual([1197]); // tronçon 2 déjà téléchargé par anticipation
     expect(second.calls.transcribe.map(startOf)).toEqual([597, 1197]);
     expect(db.getCommentaryCues(A)).toHaveLength(3);
   });

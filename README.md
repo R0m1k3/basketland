@@ -213,8 +213,9 @@ Le jeton d'ingestion est soit défini par la variable d'environnement
 
 ### Calibration automatique de la VF
 
-La synchronisation se fait **toute seule** : ouvrir la fiche d'un match
-lance son analyse (3 à 6 min). En tâche de fond, les matchs terminés depuis
+La synchronisation se fait **toute seule** : un match est analysé (3 à
+6 min) une fois sa traduction terminée, pour ne pas ralentir le démarrage de
+la lecture. En tâche de fond, les matchs terminés depuis
 moins de 10 jours qui ont un replay ne sont analysés que la nuit, de 2 h à
 6 h (`COMMENTARY_NIGHT_WINDOW`), pour ne pas charger le serveur en journée. L'état est affiché sous le lecteur
 (« Synchro automatique en cours · 34 % », « VF calée », « Synchro estimée »…).
@@ -277,14 +278,24 @@ tous les tronçons faits : piste complète (badge « VF », statut « ready »)
 ```
 
 **Traduction à la demande** : rien n'est traduit pour rien. Ouvrir la fiche
-d'un match lance sa traduction tout de suite (un travail de fond éventuel
-est mis en pause), **à partir de la position de lecture**, par tronçons d'une
-minute : les premiers sous-titres arrivent ~20-30 s après l'ouverture
+d'un match lance sa traduction dès que la lecture a démarré (le lecteur a
+~15 s d'avance chargée, ou au plus tard 20 s après l'ouverture : **la vidéo
+passe d'abord**), en mettant en pause un travail de fond éventuel, **à
+partir de la position de lecture**, par tronçons d'une minute : les premiers sous-titres arrivent ~20-30 s après l'ouverture
 (estimation), puis la traduction prend de l'avance sur la lecture (Whisper
 turbo et Gemma vont plusieurs fois plus vite que le temps réel). Un saut dans
 la vidéo réoriente le travail : la fiche envoie sa position à chaque
 interrogation (`GET /subtitles?t=…`, toutes les 12 s et après chaque saut).
 Le bandeau sous le lecteur indique « Sous-titres prêts jusqu'à 34:10 ».
+
+**La lecture reste prioritaire** : ffmpeg, Whisper, Ollama et l'OCR
+tournent en priorité processeur basse (`nice` 10, `BACKGROUND_NICE`) ;
+l'extraction audio réutilise le flux déjà résolu par le lecteur (pas de
+nouvelle résolution ok.ru en pleine lecture) ; le tronçon suivant se
+télécharge pendant que le GPU traite le courant, et le modèle de traduction
+se charge pendant la première transcription. L'analyse vidéo (repères des
+quart-temps) ne tourne plus à l'ouverture d'un match : elle passe une fois sa
+traduction terminée, ou la nuit.
 
 **Pause et déchargement** : sans signe de vie de la fiche pendant 3 min, le
 travail se met en pause et les modèles sont **déchargés** de la carte
@@ -342,6 +353,7 @@ pas démarré du tout.
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
 | `COMMENTARY_CHUNK_SEC` | `60` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt. |
 | `COMMENTARY_NIGHT_WINDOW` | `2-6` | Fenêtre de pré-traduction et d'analyse vidéo en tâche de fond (heures de Paris) : `2-6` = de 2 h à 6 h, `off` = jamais (seulement à la demande), `always` = en continu. |
+| `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
 | `OPENAI_API_KEY` | — | Clé API OpenAI : si définie (ou enregistrée dans la page Paramètres, prioritaire), la traduction passe par l'API OpenAI au lieu d'Ollama. La transcription reste locale. Facturée à l'usage par OpenAI (ce n'est pas l'abonnement ChatGPT). |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Modèle OpenAI de traduction. |

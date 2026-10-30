@@ -1,6 +1,6 @@
 import { getMatch } from '@/lib/db';
 import { allowedOrigins, error, isOriginAllowed, json, parseId, type RouteCtx } from '@/lib/api';
-import { commentaryStatus, enqueueCommentary, touchViewer } from '@/lib/commentary';
+import { commentaryStatus, enqueueCommentary, prioritizeOnView, touchViewer } from '@/lib/commentary';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +34,14 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   }
   if (body?.action !== 'start' && body?.action !== 'retry') return error(400, "action invalide (attendu : 'start' ou 'retry')");
   touchViewer(id); // demandé depuis la fiche : quelqu'un regarde
-  const r = enqueueCommentary(id, { priority: true, force: body.action === 'retry' });
+  if (body.action === 'start') {
+    // Lancement à l'ouverture : en tête de file, sauf piste prête ou backoff après un échec.
+    const before = commentaryStatus(id).status;
+    prioritizeOnView(id);
+    const after = commentaryStatus(id);
+    const started = after.status === 'running' || after.status === 'queued';
+    return json({ commentary: after, message: started ? 'Traduction des commentaires lancée' : `Pas de lancement (${before})` }, { status: started ? 202 : 200 });
+  }
+  const r = enqueueCommentary(id, { priority: true, force: true });
   return json({ commentary: commentaryStatus(id), message: r.message }, { status: r.queued ? 202 : 200 });
 }

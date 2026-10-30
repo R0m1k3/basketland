@@ -8,6 +8,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import type { CutInterval } from './types';
+import { lowerPriority } from './procPriority';
 
 export const SILENCE_FLOOR_DB = -90;
 
@@ -166,6 +167,7 @@ export function analyzeHlsAudio(playlistUrl: string, o: HlsAudioOptions): Promis
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
+    lowerPriority(ff);
     const acc = new RmsAccumulator(sr, 1);
     let stderr = '';
     const timer = setTimeout(() => ff.kill('SIGKILL'), o.timeoutMs ?? 45 * 60_000);

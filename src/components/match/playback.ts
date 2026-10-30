@@ -60,6 +60,17 @@ export class Playback {
     return this.video?.currentTime ?? 0;
   }
 
+  /** Secondes déjà chargées devant la position de lecture. */
+  bufferedAhead(): number {
+    const v = this.video;
+    if (!v) return 0;
+    const t = v.currentTime;
+    for (let i = 0; i < v.buffered.length; i++) {
+      if (t >= v.buffered.start(i) - 0.5 && t <= v.buffered.end(i)) return v.buffered.end(i) - t;
+    }
+    return 0;
+  }
+
   /** Branche l'élément vidéo ; renvoie la fonction de débranchement. */
   attach(video: HTMLVideoElement): () => void {
     this.video = video;

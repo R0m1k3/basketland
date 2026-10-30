@@ -28,6 +28,7 @@ import {
 } from '../src/lib/commentary';
 import type { AsrWord, Transcript } from '../src/lib/commentaryCues';
 import { GET as getSubtitles } from '../src/app/api/matches/[id]/subtitles/route';
+import { POST as postCommentary } from '../src/app/api/matches/[id]/commentary/route';
 import { freshDb, insertMatch } from './helpers/db';
 
 /**
@@ -193,10 +194,11 @@ describe('runCommentary à la demande', () => {
     expect(published()).toEqual([0, 1, 2].flatMap((i) => expected(i).map((c) => ({ seq: c.seq, start: c.start, end: c.end, text: c.text, fr: `FR ${c.text}` }))));
     expect(db.getCommentaryTrack(A)).toMatchObject({ complete: 1, cues: 6, untranslated: 0, chunk_sec: CHUNK, chunks_total: 3 });
     expect(commentaryReady(A)).toBe(true);
+    // Le traducteur se charge EN PARALLÈLE de Whisper, dès le début du travail.
     expect(calls.events).toEqual([
+      'ollama ouvert',
       'whisper ouvert',
       'transcription 0',
-      'ollama ouvert',
       'traduction 3',
       'transcription 1',
       'traduction 2',
@@ -270,7 +272,12 @@ describe('file : spectateur et nuit', () => {
       },
     });
     viaQueue(deps);
-    const res = await getSubtitles(new Request(`http://nas.local/api/matches/${A}/subtitles?t=700`), { params: Promise.resolve({ id: String(A) }) });
+    // La fiche envoie sa position, puis « start » une fois la lecture lancée.
+    await getSubtitles(new Request(`http://nas.local/api/matches/${A}/subtitles?t=700`), { params: Promise.resolve({ id: String(A) }) });
+    const res = await postCommentary(
+      new Request(`http://nas.local/api/matches/${A}/commentary`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://nas.local', host: 'nas.local' }, body: JSON.stringify({ action: 'start' }) }),
+      { params: Promise.resolve({ id: String(A) }) },
+    );
     expect((await res.json()).commentary.status).toBe('running');
     await __commentaryIdle();
     vi.useRealTimers();

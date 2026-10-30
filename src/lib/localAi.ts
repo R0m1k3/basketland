@@ -28,6 +28,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { dataDir } from './db';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
+import { lowerPriority } from './procPriority';
 
 // ------------------------------------------------------------------ chemins
 
@@ -135,6 +136,7 @@ export class WhisperSession {
         },
       },
     );
+    lowerPriority(this.child);
     this.child.stderr?.on('data', (b: Buffer) => {
       const s = b.toString();
       this.stderrTail = (this.stderrTail + s).slice(-2000);
@@ -273,6 +275,7 @@ export class OllamaSession {
         OLLAMA_KEEP_ALIVE: '10m',
       },
     });
+    lowerPriority(s.child);
     const keep = (b: Buffer) => {
       tail = (tail + b.toString()).slice(-2000);
     };
@@ -337,6 +340,23 @@ export class OllamaSession {
     if (last.error) throw new Error(`Ollama : ${last.error}`);
     if (last.status !== 'success') throw new Error(`Ollama : téléchargement de ${name} incomplet (${last.status ?? 'sans statut'})`);
     console.log(`[commentaires] modèle ${name} téléchargé`);
+  }
+
+  /**
+   * Charge le modèle en mémoire GPU tout de suite (requête vide) : il est
+   * prêt quand les premiers sous-titres arrivent à traduire, au lieu de se
+   * charger à la première traduction. Sans gravité en cas d'échec.
+   */
+  async warm(name: string, signal?: AbortSignal): Promise<void> {
+    try {
+      await fetch(`${this.base}/api/generate`, {
+        method: 'POST',
+        body: JSON.stringify({ model: name, prompt: '', stream: false }),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
+      });
+    } catch {
+      /* le modèle se chargera à la première requête */
+    }
   }
 
   async close(): Promise<void> {
