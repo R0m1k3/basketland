@@ -3,7 +3,11 @@ import type { RouteCtx } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
-/** Playlist maître : l'embed ok.ru est ré-résolu à chaque requête (signatures expirantes). */
+/**
+ * Playlist maître : flux ok.ru résolu gardé en cache tant que sa signature
+ * est valable (rafraîchi en arrière-plan avant expiration), variantes
+ * réécrites vers le proxy.
+ */
 export async function GET(_req: Request, ctx: RouteCtx<{ okId: string }>) {
   try {
     const { okId } = await ctx.params;
