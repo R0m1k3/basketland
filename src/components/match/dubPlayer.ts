@@ -20,6 +20,9 @@
  *   tampon) arrête puis reprogramme ; une vérification par seconde corrige
  *   une dérive de plus de 150 ms ;
  * - tranche absente (doublage en cours) : la VO joue, simplement ;
+ * - vitesse ≠ ×1 : la VF se tait (Web Audio n'a pas de correction de
+ *   hauteur : la voix accélérée monterait dans les aigus), la VO reste à
+ *   plein ; retour à ×1 → resynchronisation et reprise ;
  * - pendant la parole française (`speech`), le son ORIGINAL baisse à 20 %
  *   du volume choisi (rampes de 150 ms) ; entre deux phrases, l'ambiance de
  *   la salle revient à plein. Pour cela l'élément vidéo passe par Web Audio
@@ -59,7 +62,7 @@ export interface DubState {
   enabled: boolean;
   /** Indication courte pour le menu (« en préparation… »), ou null. */
   hint: string | null;
-  /** VF doublée choisie ET une tranche existe à la position de lecture. */
+  /** VF doublée choisie, une tranche existe à la position de lecture, vitesse ×1. */
   active: boolean;
 }
 
@@ -184,6 +187,14 @@ const STATUSES: readonly DubStatus[] = ['none', 'waiting', 'running', 'partial',
 
 // ---------------------------------------------------------------- fonctions pures
 
+/** Indication du menu quand la vidéo n'est pas à vitesse normale. */
+export const NORMAL_RATE_HINT = 'VF doublée à vitesse normale seulement';
+
+/** La VF ne joue qu'à vitesse normale (×1). */
+export function isNormalRate(rate: number): boolean {
+  return Math.abs(rate - 1) < 1e-3;
+}
+
 export function isDubAvailable(status: DubStatus | null | undefined): boolean {
   return !!status && status !== 'none' && status !== 'disabled';
 }
@@ -284,10 +295,13 @@ export function duckPoints(merged: readonly Interval[], level = DUCK_LEVEL, ramp
  * Indication du menu « Voix » à la position `t` :
  * - rien n'est encore doublé (en file, ou en cours sans tranche) → « en préparation… » ;
  * - d'autres passages sont prêts, pas celui-ci → « bientôt disponible ici » ;
- * - doublage en échec et passage absent → « indisponible ici ».
+ * - doublage en échec et passage absent → « indisponible ici » ;
+ * - vitesse ≠ ×1 (prioritaire) → « VF doublée à vitesse normale seulement ».
  */
-export function dubHint(m: DubManifest | null, t: number): string | null {
-  if (!m || !isDubAvailable(m.status) || chunkAt(m.chunks, t)) return null;
+export function dubHint(m: DubManifest | null, t: number, rate = 1): string | null {
+  if (!m || !isDubAvailable(m.status)) return null;
+  if (!isNormalRate(rate)) return NORMAL_RATE_HINT;
+  if (chunkAt(m.chunks, t)) return null;
   if (m.status === 'waiting' || (m.status === 'running' && !m.chunks.length)) return 'en préparation…';
   if (m.status === 'failed') return 'indisponible ici';
   if (m.status === 'ready') return null; // passage sans voix française : la VO suffit
@@ -592,10 +606,12 @@ export class DubPlayer {
     if (this.video.readyState < HAVE_FUTURE_DATA) this.onWaiting();
   };
 
+  /** Vitesse ≠ ×1 : silence (et VO à plein) ; retour à ×1 : reprogrammation. */
   private onRateChange = () => {
     this.lastTickT = -1;
     this.stopAll();
     this.sync();
+    this.publish();
   };
 
   private onStop = () => this.stopAll();
@@ -742,7 +758,7 @@ export class DubPlayer {
       !v.seeking &&
       !this.stalled &&
       v.readyState >= HAVE_FUTURE_DATA &&
-      v.playbackRate > 0
+      isNormalRate(v.playbackRate)
     );
   }
 
@@ -1043,12 +1059,13 @@ export class DubPlayer {
     const t = this.video.currentTime;
     const status = m?.status ?? null;
     const available = isDubAvailable(status);
-    const covered = !!m && !!chunkAt(m.chunks, t);
+    const rate = this.video.playbackRate;
+    const covered = !!m && !!chunkAt(m.chunks, t) && isNormalRate(rate);
     const next: DubState = {
       status,
       available,
       enabled: this.enabled,
-      hint: available ? dubHint(m, t) : null,
+      hint: available ? dubHint(m, t, rate) : null,
       active: this.enabled && available && covered,
     };
     const p = this.state;

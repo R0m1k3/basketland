@@ -376,6 +376,10 @@ describe('manifeste et tranches', () => {
     expect(dubHint(m('none'), 10)).toBeNull();
     expect(dubHint(m('disabled'), 10)).toBeNull();
     expect(dubHint(null, 10)).toBeNull();
+    // Vitesse ≠ ×1 : indication prioritaire, même là où une tranche existe.
+    expect(dubHint(m('ready', [chunk(0, 0, 120)]), 10, 1.5)).toBe('VF doublée à vitesse normale seulement');
+    expect(dubHint(m('waiting'), 10, 2)).toBe('VF doublée à vitesse normale seulement');
+    expect(dubHint(m('none'), 10, 2)).toBeNull();
   });
 });
 
@@ -480,16 +484,51 @@ describe('DubPlayer : programmation', () => {
     expect(head.startArgs![1]).toBeCloseTo(31.05);
   });
 
-  it('vitesse : playbackRate sur la source, calcul à la bonne cadence', async () => {
-    const s = await playingAt(100);
+  it('vitesse ≠ ×1 : VF muette, VO à plein sans baisse, indication dans le menu', async () => {
+    const s = await playingAt(4, { manifest: manifestOf('ready', [chunk(0, 0, 120, [[3, 10]]), chunk(1, 120, 240)]) });
+    const gain = s.ctx.routed!.gain;
+    expect(gain.valueAt(s.ctx.currentTime + 0.1)).toBeCloseTo(0.2);
+    s.video.playbackRate = 1.5;
+    s.video.emit('ratechange');
+    expect(s.ctx.live).toHaveLength(0);
+    expect(gain.valueAt(s.ctx.currentTime + 0.2)).toBe(1);
+    expect(s.player.getSnapshot()).toMatchObject({ enabled: true, active: false, hint: 'VF doublée à vitesse normale seulement' });
+    // Rien ne repart pendant la lecture accélérée (contrôle de dérive compris).
+    await s.advance(3);
+    expect(s.ctx.live).toHaveLength(0);
+    expect(gain.valueAt(s.ctx.currentTime + 0.2)).toBe(1);
+  });
+
+  it('retour à ×1 : resynchronisation et reprise au bon décalage', async () => {
+    const s = await playingAt(4, { manifest: manifestOf('ready', [chunk(0, 0, 120, [[3, 10], [30, 40]]), chunk(1, 120, 240)]) });
     s.video.playbackRate = 2;
     s.video.emit('ratechange');
-    const [head, next] = s.ctx.live;
-    expect(head.playbackRate.value).toBe(2);
-    expect(head.startArgs![1]).toBeCloseTo(100.1); // LEAD × 2
-    expect(next.playbackRate.value).toBe(2);
-    // (120 − 100,1) / 2 = 9,95 s après le démarrage
-    expect(next.startArgs![0]).toBeCloseTo(0.05 + 9.95);
+    await s.advance(5); // 10 s de vidéo à ×2
+    expect(s.ctx.live).toHaveLength(0);
+    s.video.playbackRate = 1;
+    s.video.emit('ratechange');
+    const t = s.video.currentTime;
+    const head = s.ctx.live.find((x) => x.startArgs![1] > 0)!;
+    expect(head.playbackRate.value).toBe(1);
+    expect(head.startArgs![0]).toBeCloseTo(s.ctx.currentTime + 0.05);
+    expect(head.startArgs![1]).toBeCloseTo(t + 0.05);
+    expect(s.player.getSnapshot()).toMatchObject({ active: true, hint: null });
+    // La baisse de la VO reprend, calée sur la nouvelle correspondance.
+    expect(s.ctx.routed!.gain.valueAt(s.ctx.currentTime + (35 - t))).toBeCloseTo(0.2);
+  });
+
+  it('repli sans routage, vitesse ≠ ×1 : video.volume rendu au volume choisi', async () => {
+    const video = new FakeVideo();
+    video.volume = 0.8;
+    await flush();
+    const s = await playingAt(4, { video, failRoute: true, manifest: manifestOf('ready', [chunk(0, 0, 120, [[3, 10]])]) });
+    await flush();
+    expect(video.volume).toBeCloseTo(0.16);
+    video.playbackRate = 2;
+    video.emit('ratechange');
+    await vi.advanceTimersByTimeAsync(60);
+    expect(video.volume).toBeCloseTo(0.8);
+    expect(s.ctx.live).toHaveLength(0);
   });
 
   it('attente de tampon : silence jusqu’à « playing »', async () => {

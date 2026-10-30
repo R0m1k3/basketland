@@ -1133,7 +1133,7 @@ function Seg({ active, onClick, children }: { active: boolean; onClick: () => vo
 
 /** Pastille « VF doublée » à côté du bouton VF, quand la voix française est choisie. */
 function DubBadge({ active, hint }: { active: boolean; hint: string | null }) {
-  const label = active ? 'VF doublée active' : `VF doublée${hint ? ` : ${hint}` : ' : version originale ici'}`;
+  const label = active ? 'VF doublée active' : hint?.startsWith('VF doublée') ? hint : `VF doublée : ${hint ?? 'version originale ici'}`;
   return (
     <span className={`${active ? 'chip-flame' : 'chip'} mr-1 hidden whitespace-nowrap sm:inline-flex`} title={label}>
       <span className={`h-1.5 w-1.5 rounded-full ${active ? 'bg-flame' : 'bg-paper-faint'}`} aria-hidden="true" />
