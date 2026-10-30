@@ -483,22 +483,25 @@ Ces voix ont été **créées** par Qwen3-TTS VoiceDesign à partir d'une
 description (aucune voix réelle n'est imitée) puis validées à l'écoute ;
 `voice.json` garde leur fiche de création. Pour attribuer chaque ligne au bon
 commentateur, le même moteur calcule l'**empreinte vocale** des passages
-(SpeechBrain ECAPA, `speechbrain/spkrec-ecapa-voxceleb`) et la hauteur
-médiane de la voix (F0).
+(SpeechBrain ECAPA, `speechbrain/spkrec-ecapa-voxceleb`), la hauteur
+médiane de la voix (F0) et la **probabilité que ce soit une voix de femme**
+(classifieur `JaesungHuh/voice-gender-classifier`, licence MIT : un
+ECAPA-TDNN affiné sur VoxCeleb2, 62 Mo ; architecture dans
+`scripts/voice_gender.py`).
 
 Le moteur (`scripts/voice_worker.py`, environnement Python `/opt/tts` de
 l'image, piloté par `src/lib/voiceAi.ts`) est démarré à la demande puis
 arrêté à la fin, comme Whisper. Modèles téléchargés au premier usage dans
-`/data/models/hf` (≈ 2,5 Go pour Qwen3-TTS, ≈ 85 Mo pour ECAPA), jamais dans
-l'image. Qwen3-TTS peut parfois ne pas finir sa phrase : chaque synthèse est
-plafonnée en longueur (proportionnelle au texte) et en temps, une prise ratée
-(plafond atteint, délai dépassé, durée absurde) est refaite une fois, puis
-signalée en erreur.
+`/data/models/hf` (≈ 2,5 Go pour Qwen3-TTS, ≈ 85 Mo pour ECAPA, 62 Mo pour
+le classifieur homme/femme), jamais dans l'image. Qwen3-TTS peut parfois ne
+pas finir sa phrase : chaque synthèse est plafonnée en longueur
+(proportionnelle au texte) et en temps, une prise ratée (plafond atteint,
+délai dépassé, durée absurde) est refaite une fois, puis signalée en erreur.
 
 **Mémoire GPU** : Qwen3-TTS 0.6B en bf16 ≈ **3 à 4 Go** (estimation, pas
 mesurée sur carte : 1,8 Go de poids et 0,7 Go de codec, plus le cache et les
-activations ; ECAPA ≈ 0,1 Go de plus). Le doublage passe **après** la
-traduction : Whisper et TranslateGemma sont déchargés avant, ils ne tournent
+activations ; ECAPA et le classifieur homme/femme ≈ 0,2 Go de plus). Le
+doublage passe **après** la traduction : Whisper et TranslateGemma sont déchargés avant, ils ne tournent
 jamais en même temps. bf16 à partir des RTX 30xx, float16 sur les RTX 20xx
 (les builds CUDA 12.8 de torch exigent une carte Turing ou plus récente).
 Sans carte, le moteur tourne sur le processeur en float32, environ 8 fois
@@ -511,11 +514,12 @@ Whisper.
 tronçon** dès que ses sous-titres français existent (piste en cours ou
 complète), dans une file à part, un match à la fois. Pour chaque tronçon :
 l'audio est réextrait, chaque réplique reçoit son locuteur (empreintes ECAPA
-regroupées sur tout le match, seuil `DUB_SPEAKER_SIM`), puis sa voix — par
-temps de parole : le 1er locuteur prend **A**, le 2e **B4**, les suivants
-**B1** ; une voix attribuée ne change plus de tout le match. Chaque réplique
-est dite (« ! » ajouté sur les moments forts : l'intonation suit la
-ponctuation), accélérée si elle déborde de sa place (×1,35 au plus, sinon la
+regroupées sur tout le match, seuil `DUB_SPEAKER_SIM`), puis sa voix — une
+locutrice prend **F** (voir ci-dessous), les autres par temps de parole : le
+1er locuteur prend **A**, le 2e **B4**, les suivants **B1** ; une voix
+attribuée ne change plus de tout le match (sauf la bascule unique vers F).
+Chaque réplique est dite (« ! » ajouté sur les moments forts : l'intonation
+suit la ponctuation), accélérée si elle déborde de sa place (×1,35 au plus, sinon la
 suivante est repoussée : deux voix ne parlent jamais en même temps), puis le
 tronçon est monté en AAC (`/data/dub/<match>/chunk-N.m4a`). Le doublage **ne
 tourne jamais en même temps qu'une traduction ou une analyse** (la carte
@@ -527,6 +531,43 @@ regardé passe devant (`GET /api/matches/[id]/dub` : manifeste des tronçons ;
 sa traduction terminée ; un replay traduit en tâche de fond est souvent déjà
 doublé quand on l'ouvre.
 
+**Voix féminine automatique** : une locutrice (reporter au bord du terrain,
+consultante) prend la voix **F**. Pour chaque réplique d'au moins 1 s, le
+classifieur donne la probabilité d'une voix de femme ; un locuteur prend F
+quand au moins **10 s** de ses répliques ont été classées et que leur
+probabilité moyenne (pondérée par la durée) atteint `DUB_FEMALE_PROB`
+(**0,85**). Seules ses **30 premières secondes** de parole comptent : un
+locuteur vu d'abord trop brièvement reçoit une voix d'homme provisoire, puis
+bascule **une seule fois** vers F si les preuves arrivent dans ces 30 s
+(journal : « locuteur #n reconnu comme une femme ») ; ensuite son genre est
+figé, jamais de changement de voix en plein match. La hauteur de voix ne
+décide pas : sur le son diffusé, un commentateur qui s'emballe parle à
+230-250 Hz, autant qu'une femme.
+
+Mesures (CPU, petit échantillon, octobre 2026) :
+
+- **commentateurs NBA réels** (5 extraits de 3,5 min, 292 répliques, dont
+  60 emballées à 200-380 Hz) : P(femme) médiane 0,005, une seule réplique
+  au-dessus de 0,5 (1,1 s à 0,52), moyenne ≤ 0,09 sur toute fenêtre de 6 s ;
+- **reporter réelle** (bord du terrain, dans l'un de ces extraits,
+  38 s) : 0,995 à 0,997 sur chacune de ses 10 répliques ;
+- **voix de synthèse** : A, B4, B1 ≤ 0,003 ; F et les candidates F2, F3
+  ≥ 0,99 ;
+- **livres audio français** (MLS, CC BY 4.0 : 7 lectrices, 9 lecteurs,
+  découpés en répliques de 3 s, aussi mêlés au bruit de salle à 10 et 5 dB) :
+  sur n'importe quelles 30 s, moyenne ≥ 0,87 pour 6 lectrices sur 7 ;
+  ≤ 0,3 pour les lecteurs sans bruit, jusqu'à 0,57 pour l'un d'eux noyé dans
+  le bruit. Mais sur 6 s, un lecteur qui **imite une voix de femme**
+  (fausset) monte à 0,97, le lecteur noyé dans le bruit à 0,93 : d'où
+  10 s minimum et 0,85 (pire homme 0,83 sur 10 s, bruit à 5 dB). En
+  contrepartie, une lectrice à la voix grave (0,65 à 0,89 sur 30 s selon le
+  passage) n'est pas toujours reconnue.
+
+Une femme qui ne parle que par bribes (moins de 10 s de répliques d'au moins
+1 s dans ses 30 premières secondes) garde une voix d'homme. Sans réseau au
+premier usage, le classifieur manque : pas de voix F automatique pendant ce
+doublage, le reste continue.
+
 **Dans le lecteur** : menu ⚙ → « Voix » : « Originale (VO) » / « VF
 doublée » (mémorisé). La voix française est calée sur l'image (saut, pause,
 gel, reprise) ; pendant qu'elle parle, le son d'origine est baissé à 20 % —
@@ -536,10 +577,11 @@ VF doublée se tait (elle serait déformée). Les sous-titres restent
 indépendants.
 
 **Limites connues** : la répartition des répliques entre commentateurs est
-juste pour ~85-90 % des lignes sur l'extrait testé ; la hauteur de voix ne
-sert pas à détecter une voix de femme par défaut (un commentateur qui
-s'emballe parle aussi aigu), d'où `DUB_FEMALE_F0` désactivé ; certains noms
-(Shai, Jokic) gagneraient à un lexique de prononciation.
+juste pour ~85-90 % des lignes sur l'extrait testé ; la voix féminine
+automatique est validée sur peu de voix (une seule reporter réelle en son
+diffusé) et un commentateur qui imiterait une femme en fausset plus de 10 s
+d'affilée dès ses premières répliques la prendrait ; certains noms (Shai,
+Jokic) gagneraient à un lexique de prononciation.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
@@ -552,7 +594,8 @@ s'emballe parle aussi aigu), d'où `DUB_FEMALE_F0` désactivé ; certains noms
 | `TTS_SYNTH_TIMEOUT_SEC` | auto | Délai max d'une prise (s). Auto : 20 s + 3 × la durée plausible maximale de la ligne sur GPU, 60 s + 60 × sur processeur. |
 | `DUB_SPEAKER_SIM` | `0.6` | Similarité (cosinus) minimale pour rattacher une réplique à un locuteur déjà connu ; en dessous, nouveau locuteur. |
 | `DUB_MIN_NEW_SPEAKER_SEC` | `1` | Une réplique plus courte ne crée jamais de nouveau locuteur (empreinte peu fiable). |
-| `DUB_FEMALE_F0` | — (désactivé) | Hauteur de voix médiane (Hz) à partir de laquelle un locuteur prend la voix féminine `F`. |
+| `DUB_FEMALE_PROB` | `0.85` | Probabilité moyenne « voix de femme » (classifieur, sur au moins 10 s de répliques dans les 30 premières secondes du locuteur) à partir de laquelle un locuteur prend la voix féminine `F`. Une valeur > 1 désactive la voix F automatique. |
+| `DUB_FEMALE_F0` | — (désactivé) | Repli si le classifieur manque (ou n'a pas assez entendu un nouveau locuteur) : hauteur de voix médiane (Hz) à partir de laquelle il prend `F`. Jamais contre le classifieur. |
 | `DUB_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail de doublage. |
 
 ## Développement local

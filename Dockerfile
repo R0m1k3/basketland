@@ -40,8 +40,9 @@ RUN python3 -m venv /opt/whisper \
       nvidia-cublas-cu12==12.9.2.10 nvidia-cudnn-cu12==9.26.1.1
 
 # ---------------------------------------------------------------- Voix
-# Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices)
-# et SpeechBrain ECAPA (empreintes vocales des commentateurs), dans un
+# Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices),
+# SpeechBrain ECAPA (empreintes vocales des commentateurs) et le classifieur
+# homme/femme de scripts/voice_gender.py (mêmes bibliothèques), dans un
 # environnement Python séparé de Whisper (torch et transformers aux versions
 # imposées par qwen-tts). Liste complète et figée dans
 # scripts/voice-requirements.txt, installée sans résolution (--no-deps).
@@ -62,7 +63,7 @@ RUN python3 -m venv /opt/tts \
  && ln -s "$WSP/nvidia/cublas" "$SP/nvidia/cublas" \
  && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
  && /opt/tts/bin/python -c "import re, torch, torch.backends.cudnn as cudnn; v = cudnn.version(); libs = sorted(set(re.findall(r'\S+/lib(?:cublas|cudnn)\.so\.\d+', open('/proc/self/maps').read()))); print('torch', torch.__version__, 'CUDA', torch.version.cuda, 'cuDNN', v, libs); assert v and len(libs) == 2 and all(l.startswith('/opt/whisper/') for l in libs), libs" \
- && /opt/tts/bin/python -c "import torchaudio, soundfile, librosa, speechbrain.inference.speaker, qwen_tts" \
+ && /opt/tts/bin/python -c "import torchaudio, soundfile, librosa, safetensors.torch, huggingface_hub, speechbrain.inference.speaker, qwen_tts" \
  && rm /tmp/voice-requirements.txt
 
 # ---------------------------------------------------------------- runtime
@@ -109,7 +110,7 @@ COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --chown=node:node scripts/whisper_worker.py ./scripts/whisper_worker.py
-COPY --chown=node:node scripts/voice_worker.py ./scripts/voice_worker.py
+COPY --chown=node:node scripts/voice_worker.py scripts/voice_gender.py ./scripts/
 # Voix figées du doublage (WAV de référence + transcription + voice.json).
 COPY --chown=node:node assets/voices ./assets/voices
 # Récupération d'accès : docker exec -it basketland node scripts/reset-password.mjs <identifiant> <mot-de-passe>

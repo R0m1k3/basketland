@@ -9,8 +9,14 @@ une requête JSON par ligne :
   → {"id": 1, "op": "synth", "text": "…", "voice": "A", "out": "/abs/x.wav", "language": "French"}
   ← {"id": 1, "ok": true, "duration": 2.31, "sample_rate": 24000}
   → {"id": 2, "op": "embed", "file": "/abs/audio.ogg", "segments": [[12.0, 14.5], …]}
-  ← {"id": 2, "ok": true, "embeddings": [[…192 nombres…] | null, …], "f0": [hz | null, …]}
+  ← {"id": 2, "ok": true, "embeddings": [[…192 nombres…] | null, …], "f0": [hz | null, …],
+     "female": [p | null, …]}
   ← {"id": n, "ok": false, "error": "…"}   (le processus continue)
+
+`female` (facultatif côté Node) : probabilité que le segment soit une voix
+de femme (classifieur scripts/voice_gender.py, chargé à la première analyse
+comme le modèle d'empreintes) ; null si le segment dure moins d'1 s ou si
+le classifieur n'a pas pu être chargé (l'analyse continue sans lui).
 
 Au démarrage : chargement du modèle (téléchargé au premier usage dans le
 cache Hugging Face, `--download-root`) puis une « empreinte de clonage » par
@@ -48,6 +54,8 @@ DEFAULT_MODEL = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 EMBED_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 EMBED_SR = 16000
 EMBED_MIN_SEC = 0.4
+# Genre de la voix : rien en dessous d'1 s (estimation trop peu fiable).
+GENDER_MIN_SEC = 1.0
 # Ordre d'affichage des voix connues ; les autres suivent par ordre alphabétique.
 VOICE_ORDER = ["A", "B4", "B1", "F"]
 CODEC_HZ = 12  # trames du codec par seconde d'audio
@@ -211,6 +219,7 @@ class Engine:
         if not self.prompts:
             raise RuntimeError(f"aucune voix utilisable dans {args.voices_dir} (reference.wav + reference.txt)")
         self.encoder = None
+        self.gender = None  # classifieur homme/femme : None = pas encore chargé, False = indisponible
         try:
             self.fixed_timeout = max(0.0, float(os.environ.get("TTS_SYNTH_TIMEOUT_SEC") or 0))
         except ValueError:
@@ -325,6 +334,21 @@ class Engine:
             self.encoder.eval()
         return self.encoder
 
+    def get_gender(self):
+        """Classifieur homme/femme, chargé au premier besoin ; None s'il est indisponible (un essai par session)."""
+        if self.gender is None:
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from voice_gender import GENDER_MODEL, GenderClassifier
+
+                log(f"chargement du classifieur de voix homme/femme {GENDER_MODEL}…")
+                self.gender = GenderClassifier(self.device, log=log)
+            except Exception as e:  # pas de réseau au premier usage, etc. : l'analyse continue sans lui
+                why = " ".join(str(e).split())[:300] or e.__class__.__name__
+                log(f"classifieur homme/femme indisponible ({why}) : pas de voix féminine automatique pendant cette session")
+                self.gender = False
+        return self.gender or None
+
     def embed(self, req: dict) -> dict:
         import numpy as np
 
@@ -351,6 +375,7 @@ class Engine:
                 windows.append([a, b, [i]])
         embeddings = [None] * len(segs)
         f0s = [None] * len(segs)
+        females = [None] * len(segs)
         enc = None
         for lo, hi, idx in windows:
             audio = decode_audio(path, lo, hi) if hi > lo else np.zeros(0, np.float32)
@@ -366,7 +391,12 @@ class Engine:
                     if n > 0 and np.isfinite(v).all():
                         embeddings[i] = [round(float(t), 6) for t in v / n]
                 f0s[i] = median_f0(x)
-        return {"embeddings": embeddings, "f0": f0s}
+                if len(x) >= GENDER_MIN_SEC * EMBED_SR:
+                    gender = self.get_gender()
+                    if gender is not None:
+                        p = gender.p_female(x)
+                        females[i] = round(p, 4) if math.isfinite(p) else None
+        return {"embeddings": embeddings, "f0": f0s, "female": females}
 
 
 # ------------------------------------------------------------------ audio
