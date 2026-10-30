@@ -861,15 +861,17 @@ export function commentaryReadyIds(ids: number[]): Set<number> {
  * Matchs terminés depuis `sinceIso`, avec replay (HLS ou MP4 : l'audio du
  * MP4 « mobile » suffit), sans piste traduite COMPLÈTE pour la vidéo
  * actuelle (une piste partielle, laissée par un travail interrompu, est à
- * reprendre).
+ * reprendre). Avec `translateModel`, une piste complète faite par un AUTRE
+ * modèle de traduction est aussi à refaire (changement de modèle).
  */
-export function finalMatchesNeedingCommentary(sinceIso: string, limit = 30): MatchRow[] {
+export function finalMatchesNeedingCommentary(sinceIso: string, limit = 30, translateModel?: string): MatchRow[] {
   return all<MatchRow>(
     `SELECT * FROM matches m WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL
        AND m.date_utc >= $since
-       AND NOT EXISTS (SELECT 1 FROM commentary_tracks t WHERE t.match_id = m.id AND t.ok_id = m.video_ok_id AND t.complete = 1)
+       AND NOT EXISTS (SELECT 1 FROM commentary_tracks t WHERE t.match_id = m.id AND t.ok_id = m.video_ok_id AND t.complete = 1
+                         AND ($model IS NULL OR t.translate_model = $model))
      ORDER BY m.date_utc DESC LIMIT $limit`,
-    { since: sinceIso, limit },
+    { since: sinceIso, limit, model: translateModel ?? null },
   );
 }
 

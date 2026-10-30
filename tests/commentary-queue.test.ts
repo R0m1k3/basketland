@@ -73,7 +73,7 @@ describe('file des traductions', () => {
       status: 'running',
       phase: 'transcription',
       progress: { done: 2, total: 3 },
-      models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL },
+      models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL },
     });
     expect(commentaryStatus(B)).toMatchObject({ status: 'queued', position: 1 });
     gates.get(A)!.resolve({ ok: true, reason: 'ok' });
@@ -136,7 +136,7 @@ describe('file des traductions', () => {
   it('job périodique : matchs récents sans piste à jour, backoff respecté', async () => {
     const runner: CommentaryRunner = () => new Promise(() => {});
     __setCommentaryRunnerForTests(runner);
-    db.replaceCommentary(A, { ok_id: db.getMatch(A)!.video_ok_id!, transcribe_model: 'w', translate_model: 'l' }, [
+    db.replaceCommentary(A, { ok_id: db.getMatch(A)!.video_ok_id!, transcribe_model: 'w', translate_model: DEFAULT_TRANSLATE_MODEL }, [
       { seq: 1, start_ts: 1, end_ts: 2, text_en: 'Hi', text_fr: 'Salut', untranslated: 0 },
     ]);
     db.setVideo(C, { slug: null, okId: null, duration: null, available: false });
@@ -147,6 +147,19 @@ describe('file des traductions', () => {
     expect(commentaryStatus(A).status).toBe('none');
     expect(enqueueRecentCommentaries()).toBe(1);
     expect(commentaryStatus(A)).toMatchObject({ status: 'queued', position: 1 });
+  });
+
+  it('job périodique : piste faite par un ancien modèle de traduction → refaite', () => {
+    __setCommentaryRunnerForTests(() => new Promise(() => {}));
+    db.setVideo(C, { slug: null, okId: null, duration: null, available: false });
+    db.replaceCommentary(B, { ok_id: db.getMatch(B)!.video_ok_id!, transcribe_model: 'w', translate_model: DEFAULT_TRANSLATE_MODEL }, [
+      { seq: 1, start_ts: 1, end_ts: 2, text_en: 'Hi', text_fr: 'Salut', untranslated: 0 },
+    ]);
+    db.replaceCommentary(A, { ok_id: db.getMatch(A)!.video_ok_id!, transcribe_model: 'w', translate_model: 'ancien-modele' }, [
+      { seq: 1, start_ts: 1, end_ts: 2, text_en: 'Hi', text_fr: 'Salut', untranslated: 0 },
+    ]);
+    expect(enqueueRecentCommentaries()).toBe(1); // A seulement (B à jour)
+    expect(commentaryStatus(A).status).toBe('running');
   });
 });
 
@@ -209,7 +222,7 @@ describe('runCommentary', () => {
       'traduction 3/3',
     ]);
     expect(fs.existsSync(workDir(db.getMatch(A)!.video_ok_id!))).toBe(false);
-    expect(commentaryStatus(A)).toEqual({ status: 'ready', models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL } });
+    expect(commentaryStatus(A)).toEqual({ status: 'ready', models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL } });
     expect(db.commentaryReadyIds([A, B, 12345])).toEqual(new Set([A]));
   });
 

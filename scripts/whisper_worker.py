@@ -111,6 +111,9 @@ def main() -> int:
                 beam_size=args.beam_size,
                 # Évite qu'une hallucination se propage d'un segment au suivant.
                 condition_on_previous_text=False,
+                # Saute les silences de plus de 2 s où Whisper « invente »
+                # (« Thank you », « I don't see you » pendant les pauses).
+                hallucination_silence_threshold=2.0,
             )
             send({"id": req_id, "ok": True, "result": to_verbose(list(segments), info)})
         except Exception as e:

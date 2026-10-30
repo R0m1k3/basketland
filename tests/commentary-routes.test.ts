@@ -35,7 +35,7 @@ function post(body: unknown, headers: Record<string, string> = {}, id = ID) {
 }
 
 function storeTrack(okId = db.getMatch(ID)!.video_ok_id!) {
-  db.replaceCommentary(ID, { ok_id: okId, transcribe_model: 'Systran/faster-distil-whisper-large-v3', translate_model: 'mistral-nemo:12b' }, [
+  db.replaceCommentary(ID, { ok_id: okId, transcribe_model: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate_model: 'mistral-nemo:12b' }, [
     { seq: 1, start_ts: 12.5, end_ts: 15, text_en: 'He pulls up from deep.', text_fr: 'Il déclenche de loin.', untranslated: 0 },
     { seq: 2, start_ts: 15.2, end_ts: 17, text_en: 'Bang!', text_fr: 'Dedans !', untranslated: 0 },
   ]);
@@ -93,7 +93,7 @@ describe('API sous-titres = traduction des commentaires', () => {
         { seq: 1, video_ts: 12.5, end_ts: 15, text: 'Il déclenche de loin.', speaker: '', kind: 'voice' },
         { seq: 2, video_ts: 15.2, end_ts: 17, text: 'Dedans !', speaker: '', kind: 'voice' },
       ],
-      commentary: { status: 'ready', models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: 'mistral-nemo:12b' } },
+      commentary: { status: 'ready', models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: 'mistral-nemo:12b' } },
     });
     const vtt = await (await getVtt(new Request(url('subtitles.vtt')), ctx())).text();
     expect(vtt).toContain('00:00:12.500 --> 00:00:15.000\nIl déclenche de loin.');
@@ -102,7 +102,7 @@ describe('API sous-titres = traduction des commentaires', () => {
 
   it('running : les sous-titres déjà publiés sont servis, avec available_until ; ready seulement une fois complète', async () => {
     const okId = db.getMatch(ID)!.video_ok_id!;
-    const meta = { ok_id: okId, transcribe_model: 'Systran/faster-distil-whisper-large-v3', translate_model: DEFAULT_TRANSLATE_MODEL };
+    const meta = { ok_id: okId, transcribe_model: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate_model: DEFAULT_TRANSLATE_MODEL };
     let finish!: () => void;
     __setCommentaryRunnerForTests(async (_job, progress) => {
       db.publishCommentaryCues(ID, meta, [
@@ -127,7 +127,7 @@ describe('API sous-titres = traduction des commentaires', () => {
         phase: 'transcription',
         progress: { done: 4, total: 10 },
         available_until: 2050,
-        models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL },
+        models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL },
       },
     });
     expect(db.commentaryReadyIds([ID])).toEqual(new Set());
@@ -136,7 +136,7 @@ describe('API sous-titres = traduction des commentaires', () => {
     await __commentaryIdle();
     const done = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
     expect(done.count).toBe(2);
-    expect(done.commentary).toEqual({ status: 'ready', models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL } });
+    expect(done.commentary).toEqual({ status: 'ready', models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL } });
     expect(db.commentaryReadyIds([ID])).toEqual(new Set([ID]));
   });
 
@@ -194,7 +194,7 @@ describe('API POST /commentary', () => {
     const r = await post({ action: 'start' });
     expect(r.status).toBe(202);
     expect(await r.json()).toEqual({
-      commentary: { status: 'queued', position: 1, models: { transcribe: 'Systran/faster-distil-whisper-large-v3', translate: DEFAULT_TRANSLATE_MODEL } },
+      commentary: { status: 'queued', position: 1, models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL } },
       message: 'Traduction en file (position 1)',
     });
 
@@ -253,6 +253,9 @@ describe('commentaryReadyIds (badges « VF »)', () => {
     expect(db.commentaryReadyIds([ID])).toEqual(new Set([ID]));
     expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z').map((m) => m.id)).not.toContain(ID);
     expect(db.commentaryPublishedUntil(ID)).toBe(42);
+    // Changement de modèle de traduction : la piste faite par l'ancien est à refaire.
+    expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z', 30, 'l').map((m) => m.id)).not.toContain(ID);
+    expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z', 30, 'gemma4:e4b').map((m) => m.id)).toContain(ID);
     // Nouvelle vidéo : l'ancienne piste est effacée à la première publication.
     db.publishCommentaryCues(ID, { ...meta, ok_id: 'nouvelle' }, [cue(7)]);
     expect(db.getCommentaryCues(ID).map((c) => c.seq)).toEqual([7]);

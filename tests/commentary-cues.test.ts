@@ -124,6 +124,11 @@ describe('filtre des hallucinations', () => {
     expect(joinWords(transcript.words)).toBe('Curry pulls up. Bang! Splash.');
   });
 
+  it('formule courte suspecte répétée (« Thank you. » en boucle) : retirée dès la deuxième', () => {
+    const t = { segments: [seg(0, 2, ' Curry pulls up.'), seg(2.5, 3, ' Thank you.'), seg(3.5, 4, ' Thank you.'), seg(4.5, 5, " I don't see you."), seg(5.5, 6, " I don't see you.")], words: [] };
+    expect(filterTranscript(t).transcript.segments.map((x) => x.text.trim())).toEqual(['Curry pulls up.', 'Thank you.', "I don't see you."]);
+  });
+
   it('retire un segment identique répété à partir du troisième', () => {
     const t = { segments: [seg(0, 1, ' Here we go.'), seg(1.2, 2, ' Here we go.'), seg(2.2, 3, ' Here we go.'), seg(3.2, 4, ' Here we go.')], words: [] };
     expect(filterTranscript(t).transcript.segments).toHaveLength(2);

@@ -35,7 +35,7 @@ L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement d�
 
 ### Prérequis : la carte NVIDIA
 
-La traduction des commentateurs (Whisper + MiLMMT) tourne **dans le
+La traduction des commentateurs (Whisper + Gemma 4) tourne **dans le
 conteneur**, sur la carte graphique. Une seule fois sur le NAS :
 
 1. **Apps** → installer le plugin **Nvidia Driver** (ich777), choisir la
@@ -65,8 +65,8 @@ docker run -d \
 > `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
 > conteneur. Whisper et Ollama sont **dans l'image** : rien d'autre à
 > installer. Au premier match traduit, les modèles sont téléchargés dans
-> `/mnt/user/appdata/basketland/models` (~1,5 Go pour Whisper, ~4 Go pour
-> MiLMMT) puis réutilisés.
+> `/mnt/user/appdata/basketland/models` (~1,6 Go pour Whisper, ~6,6 Go
+> pour Gemma 4 E4B) puis réutilisés.
 
 > Les droits du volume sont gérés automatiquement : au démarrage, le
 > conteneur rend `/data` à l'utilisateur `node` (uid 1000) puis lâche les
@@ -241,7 +241,7 @@ pour chaque tronçon de 10 min du replay :
    ──ffmpeg──▶ audio du tronçon (Opus mono 16 kHz, 24 kb/s)
    ──Whisper──▶ texte anglais horodaté au mot
    ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
-   ──Ollama (MiLMMT-46, modèle de traduction)──▶ français, phrase par phrase
+   ──Ollama (Gemma 4 E4B)──▶ français, par lots de 14 lignes contrôlés
    ──▶ publiés dans commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
 à la fin : piste marquée complète (badge « VF », statut « ready »)
 ```
@@ -259,8 +259,8 @@ le tronçon suivant (2 s de marge) sont publiés, le reste attend le tronçon
 suivant. Si le travail échoue en route, ce qui est publié reste affiché et la
 reprise continue là où elle s'était arrêtée.
 
-**Mémoire GPU** : par défaut Whisper (distil-large-v3, fp16 ≈ 1,5-2 Go) et
-le modèle de traduction (MiLMMT-46-4B Q8 ≈ 4,5 Go) restent chargés
+**Mémoire GPU** : par défaut Whisper (large-v3-turbo, fp16 ≈ 1,6 Go) et
+le modèle de traduction (Gemma 4 E4B Q4 ≈ 6,6 Go) restent chargés
 **ensemble** pendant tout le travail : ils tiennent dans une carte de
 10-12 Go. Avec un modèle de traduction plus gros, `COMMENTARY_GPU_SEQUENTIAL=1`
 revient à l'ancien enchaînement : tout transcrire, arrêter Whisper, puis
@@ -282,7 +282,9 @@ traduction seulement).
   avec `{"action":"retry"}` relance à la main). Une ligne que le LLM ne
   sait pas traduire reste en anglais (marquée `untranslated` en base) sans
   bloquer le match.
-- **Nouvelle vidéo** (autre identifiant ok.ru) : la piste est refaite.
+- **Nouvelle vidéo** (autre identifiant ok.ru) ou **nouveau modèle de
+  traduction** (`TRANSLATE_MODEL`) : la piste est refaite (pour les matchs
+  des 10 derniers jours).
 - Le play-by-play ESPN reste utilisé pour les statistiques, l'onglet
   « Actions » et le calage des actions dans la vidéo ; il ne produit plus les
   sous-titres affichés.
@@ -290,16 +292,18 @@ traduction seulement).
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `TRANSCRIBE_URL` | — (Whisper embarqué) | Serveur de transcription EXTERNE compatible OpenAI (speaches), ex. `http://192.168.1.16:8000/v1`. Vide : Whisper embarqué dans le conteneur. |
-| `TRANSCRIBE_MODEL` | `Systran/faster-distil-whisper-large-v3` | Modèle Whisper demandé à speaches. |
+| `TRANSCRIBE_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | Modèle Whisper (embarqué ou speaches). |
+| `WHISPER_PROMPT` | — | `1` : donne à Whisper les équipes et les effectifs. Désactivé par défaut : mesuré, cela corrige quelques noms mais produit des segments de 30 s. |
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama. |
-| `TRANSLATE_MODEL` | `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` | Modèle Ollama de traduction (à installer avec `ollama pull`). Par défaut **MiLMMT-46-4B v1.0** (Xiaomi), modèle spécialisé en traduction. |
+| `TRANSLATE_MODEL` | `gemma4:e4b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **Gemma 4 E4B**, 1er du banc d'essai (voir plus bas). Alternatives mesurées : `gemma4:12b` (même qualité, 2× plus lent), `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
-| `TRANSLATE_PARALLEL` | `2` | Requêtes de traduction simultanées en mode `mt` (Ollama : régler `OLLAMA_NUM_PARALLEL` en conséquence). |
-| `TRANSLATE_BATCH` | `20` | Sous-titres par lot (1 à 60). |
+| `TRANSLATE_PARALLEL` | `2` | Lots (ou phrases en mode `mt`) traduits en même temps. L'Ollama embarqué règle `OLLAMA_NUM_PARALLEL` pareil ; pour un Ollama externe, le régler soi-même. |
+| `TRANSLATE_BATCH` | `14` | Sous-titres par lot (1 à 60). 12 à 15 recommandé : au-delà, les modèles fusionnent ou décalent plus souvent des lignes. |
+| `TRANSLATE_JSON_SCHEMA` | auto | `1` / `0` : impose ou non le schéma JSON de sortie (Ollama embarqué). Auto : oui pour Gemma 4 E2B/E4B, non sinon (Gemma 4 12B décale des lignes sous schéma imposé). |
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
 | `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
@@ -308,17 +312,31 @@ traduction seulement).
 | `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
 | `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
 
-**Mode `mt` (MiLMMT, par défaut)** : le modèle traduit une phrase à la fois,
-avec son gabarit officiel (`Translate this from English to French: …`) et un
-décodage glouton. Les sous-titres d'une même phrase sont d'abord regroupés
-(jusqu'à la ponctuation finale, 4 lignes max) pour ne pas traduire des bouts
-de phrase hors contexte, puis le français est réparti sur ces sous-titres au
-prorata de l'anglais, en coupant entre deux mots. Le prompt système ne
-s'applique pas à ce mode.
+**Pourquoi Gemma 4 E4B** : banc d'essai sur 55 vraies phrases de
+commentateurs NBA (plusieurs diffuseurs, jargon, chiffres, noms), 13 modèles
+locaux, note sur 110. Gemma 4 E4B 97, Gemma 4 12B 96, Ministral 3 14B 95,
+Mistral Nemo 12B 93… MiLMMT-46-4B 66 (« Brunson got a three » → « Brunson a
+obtenu une note de 3 » ; Gemma : « Brunson marque un trois points »), NLLB et
+Opus-MT ~50. Qwen 3.8 27B ne fait pas mieux et ne tient pas dans 12 Go.
 
-**Mode `chat` (LLM généraliste)** : un lot de 20 lignes tient dans ~2 000
-jetons, le contexte par défaut d'Ollama suffit. Pour Qwen3, `/no_think` est
-ajouté automatiquement.
+**Mode `chat` (par défaut)** : lots de 14 sous-titres + les 3 lignes
+précédentes pour le contexte, prompt système dédié au commentaire basket
+(vocabulaire beIN/Canal+ : « la raquette », « les 24 secondes », « contre »…),
+température 0,2, `num_ctx` 4096, sortie JSON. Chaque lot est **contrôlé** :
+ids exacts, texte non vide et différent de l'anglais, chiffres et noms propres
+de chaque ligne retrouvés en français (une traduction décalée d'une ligne
+échoue à ce test). Lot douteux → nouvel essai à température 0, puis lot coupé
+en deux ; une ligne vraiment intraduisible reste en anglais. Pour Qwen3,
+`/no_think` est ajouté automatiquement.
+
+**Mode `mt`** (MiLMMT et autres modèles de traduction purs) : une phrase à
+la fois, gabarit officiel du modèle (`Translate this from English to French:
+…`), décodage glouton ; le français est réparti sur les sous-titres de la
+phrase au prorata de l'anglais. Le prompt système ne s'applique pas.
+
+**Temps estimé** par match (2 h) sur une carte 12 Go : Whisper turbo
+~3-6 min + Gemma 4 E4B ~6-10 min avec 2 lots en parallèle, soit **≈ 15-25 min**
+(estimation calculée, pas mesurée : à confirmer sur le NAS).
 
 ## Développement local
 

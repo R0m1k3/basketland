@@ -12,6 +12,8 @@ import {
   TRANSLATE_SYSTEM_PROMPT,
   translateSystemPrompt,
   validTranslation,
+  anchors,
+  consistentTranslation,
   whisperPrompt,
   DEFAULT_TRANSLATE_MODEL,
   groupSentences,
@@ -47,8 +49,8 @@ const chatRes = (content: string) => jsonRes({ choices: [{ message: { role: 'ass
 function requestedLines(init: RequestInit): { i: number; en: string }[] {
   const body = JSON.parse(String(init.body)) as { messages: { role: string; content: string }[] };
   const user = body.messages.find((m) => m.role === 'user')!.content;
-  const m = /Lignes à traduire :\n(\{.*\})/.exec(user)!;
-  return (JSON.parse(m[1]) as { lignes: { i: number; en: string }[] }).lignes;
+  const m = /\n(\{.*\})/.exec(user)!;
+  return (JSON.parse(m[1]) as { lines: { i: number; en: string }[] }).lines;
 }
 
 describe('configuration', () => {
@@ -68,7 +70,9 @@ describe('configuration', () => {
   it('modèles et taille de lot par défaut, surchargeables', () => {
     setEnv();
     const c = commentaryConfig();
-    expect(c).toMatchObject({ transcribeUrl: 'http://gpu.local:8000/v1', transcribeModel: 'Systran/faster-distil-whisper-large-v3', translateModel: DEFAULT_TRANSLATE_MODEL, translateEngine: 'mt', batch: 20 });
+    expect(c).toMatchObject({ transcribeUrl: 'http://gpu.local:8000/v1', transcribeModel: 'deepdml/faster-whisper-large-v3-turbo-ct2', translateModel: 'gemma4:e4b', translateEngine: 'chat', batch: 14, parallel: 2 });
+    process.env.TRANSLATE_MODEL = 'hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0';
+    expect(commentaryConfig().translateEngine).toBe('mt');
     process.env.TRANSLATE_MODEL = 'qwen3:14b';
     process.env.TRANSLATE_BATCH = '999';
     expect(commentaryConfig()).toMatchObject({ translateModel: 'qwen3:14b', translateEngine: 'chat', batch: 60 });
@@ -118,7 +122,7 @@ describe('transcription (faux serveur speaches)', () => {
     const t = await transcribeAudio(file, commentaryConfig(), { prompt: 'NBA basketball game commentary.' });
     expect(calls[0].url).toBe('http://gpu.local:8000/v1/audio/transcriptions');
     const form = calls[0].init.body as FormData;
-    expect(form.get('model')).toBe('Systran/faster-distil-whisper-large-v3');
+    expect(form.get('model')).toBe('deepdml/faster-whisper-large-v3-turbo-ct2');
     expect(form.get('language')).toBe('en');
     expect(form.get('response_format')).toBe('verbose_json');
     expect(form.getAll('timestamp_granularities[]')).toEqual(['segment', 'word']);
@@ -180,21 +184,31 @@ describe('analyse des réponses du LLM', () => {
     expect(validTranslation('Bang!', '...')).toBe(false);
     expect(validTranslation('Bang!', 'Dedans ! '.repeat(10))).toBe(false);
     expect(validTranslation('Bang!', '{"i": 3, "fr": "x"}')).toBe(false);
+    // Recopie de l'anglais : refusée, sauf ligne très courte.
+    expect(validTranslation('He pulls up from deep.', 'He pulls up from deep.')).toBe(false);
+    expect(validTranslation('Santos.', 'Santos.')).toBe(true);
+  });
+
+  it('noms et chiffres conservés : détecte une ligne décalée', () => {
+    expect(anchors('Brunson got a three, Knicks up 19-16.')).toEqual({ numbers: ['19', '16'], names: ['knick'] });
+    expect(anchors('The Celtics. He passes to Tatum')).toEqual({ numbers: [], names: ['celti', 'tatum'] });
+    expect(consistentTranslation('Knicks up 19-16.', 'Les Knicks mènent 19-16.')).toBe(true);
+    expect(consistentTranslation('Knicks up 19-16.', 'Les Knicks mènent 19 à 6.')).toBe(false);
+    expect(consistentTranslation('Here is Tatum taking it to the rim.', 'Brunson marque à trois points.')).toBe(false);
+    expect(consistentTranslation('Heading to the NBA Finals.', 'En route vers les finales NBA.')).toBe(true);
   });
 
   it('message utilisateur : contexte à ne pas traduire, lignes en JSON, /no_think pour Qwen3', () => {
-    const m = buildUserMessage([{ i: 5, en: 'Timeout Portland.' }], ['He drives.', 'Fouled.'], 'qwen3:14b', 'LeBron James');
-    expect(m).toContain('Noms propres du match : LeBron James');
-    expect(m).toContain('NE PAS traduire');
-    expect(m).toContain('- He drives.');
-    expect(m).toContain('{"lignes":[{"i":5,"en":"Timeout Portland."}]}');
+    const m = buildUserMessage([{ i: 5, en: 'Timeout Portland.' }], ['He drives.', 'Fouled.'], 'qwen3:14b');
+    expect(m).toContain('Traduis ces lignes. Réponds uniquement avec le JSON demandé.\n');
+    expect(m).toContain('{"context":["He drives.","Fouled."],"lines":[{"i":5,"en":"Timeout Portland."}]}');
     expect(m.endsWith('/no_think')).toBe(true);
     expect(buildUserMessage([{ i: 5, en: 'x' }], [], 'mistral-nemo:12b')).not.toContain('/no_think');
   });
 });
 
 describe('traduction par lots (faux serveur Ollama)', () => {
-  // LLM généraliste : lots JSON (le modèle par défaut, MiLMMT, a son propre mode).
+  // LLM généraliste (moteur 'chat', celui du modèle par défaut Gemma 4 E4B) : lots JSON.
   beforeEach(() => {
     setEnv();
     process.env.TRANSLATE_MODEL = 'mistral-nemo:12b';
@@ -219,9 +233,49 @@ describe('traduction par lots (faux serveur Ollama)', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('http://gpu.local:11434/v1/chat/completions');
     const body = JSON.parse(String(calls[0].init.body));
-    expect(body).toMatchObject({ model: 'mistral-nemo:12b', stream: false, response_format: { type: 'json_object' } });
+    expect(body).toMatchObject({ model: 'mistral-nemo:12b', stream: false, temperature: 0.2, response_format: { type: 'json_object' } });
     expect(body.messages[0]).toEqual({ role: 'system', content: TRANSLATE_SYSTEM_PROMPT });
-    expect(body.messages[1].content).toContain('- Jokic with the ball.');
+    expect(body.messages[1].content).toContain('"context":["Jokic with the ball."]');
+  });
+
+  it('Ollama embarqué : API native /api/chat, num_ctx 4096, schéma JSON pour Gemma 4 E4B', async () => {
+    const calls = fakeFetch((_u, init) => jsonRes({ message: { role: 'assistant', content: JSON.stringify({ t: requestedLines(init).map((l) => ({ i: l.i, fr: FR[l.i] })) }) } }));
+    const cfg = { ...commentaryConfig(), translateMode: 'embedded' as const, translateModel: 'gemma4:e4b' };
+    const out = await translateBatch(lines, [], cfg);
+    expect(out.every((l) => !l.untranslated)).toBe(true);
+    expect(calls[0].url).toBe('http://gpu.local:11434/api/chat');
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body).toMatchObject({ model: 'gemma4:e4b', stream: false, options: { temperature: 0.2, top_p: 0.9, num_ctx: 4096, num_predict: 1200 } });
+    expect(body.format?.required).toEqual(['t']);
+    // Gemma 4 12B : pas de schéma imposé (il décale alors des lignes).
+    await translateBatch(lines, [], { ...cfg, translateModel: 'gemma4:12b' });
+    expect(JSON.parse(String(calls[1].init.body)).format).toBeUndefined();
+  });
+
+  it('lot décalé (JSON valide, noms perdus) : nouvel essai à température 0, puis lot coupé en deux', async () => {
+    const shiftLines = [
+      { i: 1, en: 'Brunson got a three.' },
+      { i: 2, en: 'Tatum to the rim.' },
+      { i: 3, en: 'Knicks up 19-16.' },
+      { i: 4, en: 'Timeout Boston.' },
+    ];
+    const OK: Record<number, string> = { 1: 'Brunson marque à trois points.', 2: 'Tatum au cercle.', 3: 'Les Knicks mènent 19-16.', 4: 'Temps mort Boston.' };
+    const asked: { ids: number[]; temperature: number }[] = [];
+    fakeFetch((_u, init) => {
+      const req = requestedLines(init);
+      asked.push({ ids: req.map((l) => l.i), temperature: JSON.parse(String(init.body)).temperature });
+      // Lot de 4 : chaque traduction glisse d'une ligne vers le bas.
+      if (req.length === 4) return chatRes(JSON.stringify({ t: req.map((l, k) => ({ i: l.i, fr: k ? OK[req[k - 1].i] : 'Et voilà.' })) }));
+      return chatRes(JSON.stringify({ t: req.map((l) => ({ i: l.i, fr: OK[l.i] })) }));
+    });
+    const out = await translateBatch(shiftLines, [], commentaryConfig());
+    expect(out).toEqual(shiftLines.map((l) => ({ i: l.i, fr: OK[l.i], untranslated: false })));
+    expect(asked).toEqual([
+      { ids: [1, 2, 3, 4], temperature: 0.2 },
+      { ids: [1, 2, 3, 4], temperature: 0 },
+      { ids: [1, 2], temperature: 0.2 },
+      { ids: [3, 4], temperature: 0.2 },
+    ]);
   });
 
   it('JSON entouré de texte et de ``` : accepté', async () => {
@@ -229,14 +283,13 @@ describe('traduction par lots (faux serveur Ollama)', () => {
     expect((await translateBatch(lines, [], commentaryConfig())).every((l) => !l.untranslated)).toBe(true);
   });
 
-  it('lot incomplet : nouvel essai pour les lignes manquantes, puis ligne par ligne, puis l’anglais marqué', async () => {
+  it('lot incomplet : nouvel essai, puis moitiés, puis l’anglais marqué', async () => {
     const asked: number[][] = [];
     fakeFetch((_u, init) => {
       const req = requestedLines(init);
       asked.push(req.map((l) => l.i));
-      // La ligne 3 n'est jamais rendue dans un lot ; seule la ligne 2 l'est
-      // en ligne-par-ligne… et la ligne 3 reste vide.
-      if (req.length > 1) return chatRes(JSON.stringify({ t: req.filter((l) => l.i === 1).map((l) => ({ i: l.i, fr: FR[l.i] })) }));
+      // Plusieurs lignes : seule la 1 revient. Seule, la 2 revient ; la 3 reste vide.
+      if (req.length > 1 || req[0].i === 1) return chatRes(JSON.stringify({ t: req.filter((l) => l.i === 1).map((l) => ({ i: l.i, fr: FR[l.i] })) }));
       if (req[0].i === 2) return chatRes(`{"t":[{"i":2,"fr":"Dedans !"}]}`);
       return chatRes('{"t":[{"i":3,"fr":""}]}');
     });
@@ -246,8 +299,8 @@ describe('traduction par lots (faux serveur Ollama)', () => {
       { i: 2, fr: 'Dedans !', untranslated: false },
       { i: 3, fr: 'Timeout Portland.', untranslated: true },
     ]);
-    // Lot entier, nouvel essai des seules lignes manquantes, puis 2 en solo, 3 en solo deux fois.
-    expect(asked).toEqual([[1, 2, 3], [2, 3], [2], [3], [3]]);
+    // Lot entier ×2, moitié [1,2] ×2 (la 2 manque), puis 1 et 2 seules, moitié [3] ×2.
+    expect(asked).toEqual([[1, 2, 3], [1, 2, 3], [1, 2], [1, 2], [1], [2], [3], [3]]);
   });
 
   it('réponse illisible : repli sans bloquer le match', async () => {
