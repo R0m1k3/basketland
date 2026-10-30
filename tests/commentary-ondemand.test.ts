@@ -136,7 +136,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __setCommentaryRunnerForTests(null);
-  for (const k of ['DATA_DIR', 'TRANSCRIBE_URL', 'TRANSLATE_URL', 'COMMENTARY_CHUNK_SEC', 'COMMENTARY_VIEWER_IDLE_MS', 'COMMENTARY_MAX_LEAD_SEC', 'COMMENTARY_LEAD_POLL_MS']) delete process.env[k];
+  for (const k of ['DATA_DIR', 'TRANSCRIBE_URL', 'TRANSLATE_URL', 'COMMENTARY_CHUNK_SEC', 'COMMENTARY_VIEWER_IDLE_MS', 'COMMENTARY_MAX_LEAD_SEC', 'COMMENTARY_LEAD_POLL_MS', 'COMMENTARY_REPUMP_MS']) delete process.env[k];
   process.env.COMMENTARY_NIGHT_WINDOW = 'always';
   fs.rmSync(dataDir, { recursive: true, force: true });
   vi.restoreAllMocks();
@@ -167,8 +167,10 @@ describe('ordre des tronçons', () => {
 });
 
 describe('fenêtre de nuit (heures de Paris)', () => {
-  it('2-6 par défaut ; off ; always', () => {
+  it('« always » par défaut (dès que le replay est disponible) ; 2-6 ; off', () => {
     delete process.env.COMMENTARY_NIGHT_WINDOW;
+    expect(inNightWindow(new Date('2026-10-30T12:00:00Z'))).toBe(true);
+    process.env.COMMENTARY_NIGHT_WINDOW = '2-6';
     // 30 octobre 2026 : heure d'hiver, Paris = UTC+1.
     expect(inNightWindow(new Date('2026-10-30T00:59:00Z'))).toBe(false); // 01:59
     expect(inNightWindow(new Date('2026-10-30T01:00:00Z'))).toBe(true); // 02:00
@@ -303,6 +305,35 @@ describe('file : spectateur et nuit', () => {
     const st = commentaryStatus(A);
     expect(st.status).toBe('none');
     expect(st.covered).toEqual([[600, 1200]]);
+  });
+
+  it('travail de fond : cède la place quand un AUTRE match est regardé, attend en file, reprend après', async () => {
+    process.env.COMMENTARY_NIGHT_WINDOW = 'always';
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    process.env.COMMENTARY_REPUMP_MS = '20';
+    insertMatch(402000002);
+    let watched = false;
+    const { deps, calls } = fakeDeps({
+      afterChunk: (idx) => {
+        // Pendant le 1er tronçon, quelqu'un se met à regarder un autre match.
+        if (idx === 0 && !watched) {
+          watched = true;
+          touchViewer(402000002, 10);
+        }
+      },
+    });
+    viaQueue(deps);
+    enqueueCommentary(A); // travail de fond
+    await vi.waitFor(() => expect(calls.transcribe).toEqual([0]));
+    // En pause, remis en file : il attend la fin de la lecture.
+    await vi.waitFor(() => expect(commentaryStatus(A).status).toBe('queued'));
+    expect(getCommentaryRecord(A)).toBeUndefined();
+    // La lecture s'arrête (plus de signe de vie) : le travail reprend là où il s'était arrêté.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await __commentaryIdle();
+    vi.useRealTimers();
+    expect(calls.transcribe).toEqual([0, 1, 2]);
+    expect(commentaryStatus(A).status).toBe('ready');
   });
 
   it('travail de fond hors de la fenêtre de nuit : pause immédiate, rien n’est fait', async () => {

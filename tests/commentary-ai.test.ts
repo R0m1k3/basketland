@@ -72,7 +72,7 @@ describe('configuration', () => {
   it('modèles et taille de lot par défaut, surchargeables', () => {
     setEnv();
     const c = commentaryConfig();
-    expect(c).toMatchObject({ transcribeUrl: 'http://gpu.local:8000/v1', transcribeModel: 'deepdml/faster-whisper-large-v3-turbo-ct2', translateModel: 'gemma4:e4b', translateEngine: 'chat', batch: 14, parallel: 2 });
+    expect(c).toMatchObject({ transcribeUrl: 'http://gpu.local:8000/v1', transcribeModel: 'deepdml/faster-whisper-large-v3-turbo-ct2', translateModel: 'translategemma:12b', translateEngine: 'chat', batch: 14, parallel: 2, chunkSec: 120 });
     process.env.TRANSLATE_MODEL = 'hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0';
     expect(commentaryConfig().translateEngine).toBe('mt');
     process.env.TRANSLATE_MODEL = 'qwen3:14b';

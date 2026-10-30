@@ -103,6 +103,32 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
     };
   }, [matchId, video.src, loadSubtitles, command, playback]);
 
+  // Signe de vie pendant la LECTURE (toutes les 20 s, et au lancement) :
+  // tant qu'il arrive, les tâches de fond du serveur (traduction d'autres
+  // matchs, analyse vidéo) s'effacent pour laisser la bande passante et le
+  // processeur au lecteur.
+  useEffect(() => {
+    const beat = () => {
+      const v = playback.element;
+      if (!v || v.paused) return;
+      fetch(`/api/matches/${matchId}/watching`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ t: Math.floor(v.currentTime) }),
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+    const timer = setInterval(beat, 20_000);
+    const onPlay = (e: Event) => {
+      if (e.target instanceof HTMLVideoElement) beat();
+    };
+    document.addEventListener('play', onPlay, true);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('play', onPlay, true);
+    };
+  }, [matchId, playback]);
+
   // Suivi tant que la traduction est en file ou en cours.
   const status = commentary?.status;
   useEffect(() => {

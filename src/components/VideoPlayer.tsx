@@ -233,6 +233,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     let netRetries = 0;
     let mediaRecoveries = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupDiag = () => {};
 
     (async () => {
       const { default: Hls } = await import('hls.js');
@@ -297,6 +298,53 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         hls.destroy();
         hlsRef.current = null;
       });
+      // Diagnostic : un gel de plus d'1,5 s en lecture (pas un saut, pas le
+      // démarrage) est signalé au serveur, qui l'écrit dans les logs avec la
+      // qualité et le débit estimé — pour savoir d'où viennent les gels.
+      let waitingAt = 0;
+      let seekingNow = false;
+      const onWaiting = () => {
+        if (!seekingNow && video.currentTime > 1) waitingAt = performance.now();
+      };
+      const onSeeking = () => {
+        seekingNow = true;
+        waitingAt = 0;
+      };
+      const onSeeked = () => {
+        seekingNow = false;
+      };
+      const onResume = () => {
+        if (!waitingAt) return;
+        const ms = performance.now() - waitingAt;
+        waitingAt = 0;
+        if (ms < 1500) return;
+        const lvl = hls.levels[hls.currentLevel];
+        let ahead = 0;
+        for (let i = 0; i < video.buffered.length; i++) if (video.currentTime >= video.buffered.start(i) - 0.5) ahead = video.buffered.end(i) - video.currentTime;
+        const body = JSON.stringify({
+          ms: Math.round(ms),
+          t: Math.round(video.currentTime),
+          height: lvl?.height ?? null,
+          bitrate: lvl?.bitrate ?? null,
+          estimate: Math.round(hls.bandwidthEstimate || 0),
+          ahead: Math.round(ahead * 10) / 10,
+        });
+        try {
+          navigator.sendBeacon?.('/api/diag/stall', new Blob([body], { type: 'text/plain' }));
+        } catch {
+          /* diagnostic facultatif */
+        }
+      };
+      video.addEventListener('waiting', onWaiting);
+      video.addEventListener('seeking', onSeeking);
+      video.addEventListener('seeked', onSeeked);
+      video.addEventListener('playing', onResume);
+      cleanupDiag = () => {
+        video.removeEventListener('waiting', onWaiting);
+        video.removeEventListener('seeking', onSeeking);
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('playing', onResume);
+      };
       hls.loadSource(src);
       hls.attachMedia(video);
     })().catch((e: unknown) => {
@@ -305,6 +353,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
 
     return () => {
       disposed = true;
+      cleanupDiag();
       clearTimeout(retryTimer);
       hlsRef.current?.destroy();
       hlsRef.current = null;

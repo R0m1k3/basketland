@@ -213,9 +213,9 @@ Le jeton d'ingestion est soit défini par la variable d'environnement
 
 ### Calibration automatique de la VF
 
-La synchronisation se fait **toute seule** : un match est analysé (3 à
-6 min) une fois sa traduction terminée, pour ne pas ralentir le démarrage de
-la lecture. En tâche de fond, les matchs terminés depuis
+La synchronisation se fait **toute seule**, la nuit (de 2 h à 6 h) : chaque
+analyse (3 à 6 min) télécharge le flux en haute qualité et sollicite fort le
+processeur, ce qui ferait geler une lecture en cours. En tâche de fond, les matchs terminés depuis
 moins de 10 jours qui ont un replay ne sont analysés que la nuit, de 2 h à
 6 h (`COMMENTARY_NIGHT_WINDOW`), pour ne pas charger le serveur en journée. L'état est affiché sous le lecteur
 (« Synchro automatique en cours · 34 % », « VF calée », « Synchro estimée »…).
@@ -297,8 +297,9 @@ l'extraction audio réutilise le flux déjà résolu par le lecteur (pas de
 nouvelle résolution ok.ru en pleine lecture) ; le tronçon suivant se
 télécharge pendant que le GPU traite le courant, et le modèle de traduction
 se charge pendant la première transcription. L'analyse vidéo (repères des
-quart-temps) ne tourne plus à l'ouverture d'un match : elle passe une fois sa
-traduction terminée, ou la nuit.
+quart-temps) ne tourne plus pendant la journée : elle télécharge le flux en
+haute qualité et sature le processeur (OCR), ce qui fige la lecture ; elle
+passe la nuit, de 2 h à 6 h.
 
 **Noms des joueurs** : Whisper écorche souvent les noms (« Edie » pour
 Edey). Avec l'effectif du match (feuille de stats ESPN), les écarts d'une ou
