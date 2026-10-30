@@ -76,7 +76,10 @@ export default async function HomePage() {
         </section>
       )}
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      {/* En large : la colonne « Cette nuit » prend la hauteur du bloc principal
+          (son contenu est hors flux) et sa liste défile — une soirée de 15
+          matchs ne laisse plus un grand vide sous la une. */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         {hero ? (
           <Hero game={hero} kicker={nightLabel(nightKeyOf(hero.date_utc))} />
         ) : (
@@ -93,8 +96,9 @@ export default async function HomePage() {
         )}
 
         {/* Cette nuit */}
-        <aside aria-labelledby="night-title" className="panel flex flex-col overflow-hidden">
-          <div className="border-b border-ink-700/70 px-5 pb-4 pt-5">
+        <aside aria-labelledby="night-title" className="panel relative overflow-hidden lg:min-h-[440px]">
+          <div className="flex flex-col lg:absolute lg:inset-0">
+          <div className="shrink-0 border-b border-ink-700/70 px-5 pb-4 pt-5">
             <p className="kicker">{night ? nightLabel(night) : 'Programme'}</p>
             <div className="mt-1 flex items-end justify-between gap-3">
               <h2 id="night-title" className="section-title">
@@ -115,10 +119,10 @@ export default async function HomePage() {
           {nightGames.length === 0 ? (
             <p className="px-5 py-8 text-sm text-paper-mute">Aucun match programmé pour le moment.</p>
           ) : (
-            <ol className="flex flex-col gap-0.5 p-2">
+            <ol className="scroll-thin flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
               {nightGames.map((g) => (
                 <li key={g.id}>
-                  <CompactGame game={g} highlight={g.id === nextUp?.id} />
+                  <CompactGame game={g} highlight={g.id === nextUp?.id} dense />
                 </li>
               ))}
             </ol>
@@ -126,7 +130,7 @@ export default async function HomePage() {
           {nightGames.length > 0 && (
             <Link
               href={`/matchs?d=${nightGames[0].day_paris}`}
-              className="mt-auto flex items-center justify-between border-t border-ink-700/70 px-5 py-3.5 text-sm font-medium text-paper-dim transition hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-flame"
+              className="mt-auto flex shrink-0 items-center justify-between border-t border-ink-700/70 px-5 py-3.5 text-sm font-medium text-paper-dim transition hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-flame"
             >
               <span className="flex items-center gap-2">
                 <IconCalendar />
@@ -135,6 +139,7 @@ export default async function HomePage() {
               <IconArrowRight />
             </Link>
           )}
+          </div>
         </aside>
       </div>
 

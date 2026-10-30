@@ -65,8 +65,13 @@ export default function CommentaryStatus({
   } else if (status === 'queued') {
     tone = 'text-flame-hot';
     dot = 'bg-flame';
-    title = state.position && state.position > 1 ? `Traduction en file d’attente (${state.position}e)` : 'Traduction en file d’attente';
-    detail = 'Un match est traduit à la fois.';
+    if (state.position && state.position > 1) {
+      title = `Traduction en file d’attente (${state.position}e)`;
+      detail = 'Un match est traduit à la fois.';
+    } else {
+      title = 'Traduction : démarrage imminent';
+      detail = 'Ce match passe avant tous les autres (un travail de fond éventuel est mis en pause).';
+    }
   } else if (status === 'failed') {
     tone = 'text-loss';
     dot = 'bg-loss';

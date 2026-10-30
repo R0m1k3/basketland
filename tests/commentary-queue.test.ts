@@ -33,8 +33,12 @@ const C = 401000003;
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((r, j) => {
+    resolve = r;
+    reject = j;
+  });
+  return { promise, resolve, reject };
 }
 
 let dataDir: string;
@@ -91,6 +95,40 @@ describe('file des traductions', () => {
     expect(enqueueCommentary(C, { priority: true })).toMatchObject({ position: 1 });
     expect(commentaryQueuePosition(B)).toBe(2);
     expect(enqueueCommentary(A)).toMatchObject({ started: true, message: 'Traduction déjà en cours' });
+  });
+
+  it('un match regardé interrompt le travail de fond, qui reprend juste après sans compter d’échec', async () => {
+    const started: number[] = [];
+    const gates = new Map<number, ReturnType<typeof deferred<CommentaryOutcome>>>();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    __setCommentaryRunnerForTests((job, _progress, signal) => {
+      started.push(job.matchId);
+      const d = deferred<CommentaryOutcome>();
+      gates.set(job.matchId, d);
+      signal.addEventListener('abort', () => d.reject(new Error('travail interrompu')));
+      return d.promise;
+    });
+    enqueueCommentary(A); // fond
+    enqueueCommentary(B); // fond
+    expect(started).toEqual([A]);
+    enqueueCommentary(C, { priority: true }); // fiche ouverte
+    await vi.waitFor(() => expect(started).toEqual([A, C]));
+    expect(commentaryStatus(C).status).toBe('running');
+    // A reprend juste derrière C, devant B ; aucun échec enregistré.
+    expect(commentaryQueuePosition(A)).toBe(1);
+    expect(commentaryQueuePosition(B)).toBe(2);
+    expect(getCommentaryRecord(A)).toBeUndefined();
+    // Un autre match regardé n'interrompt pas C (demandé par un spectateur).
+    enqueueCommentary(B, { priority: true });
+    expect(commentaryStatus(C).status).toBe('running');
+    expect(commentaryQueuePosition(B)).toBe(1);
+    gates.get(C)!.resolve({ ok: true, reason: 'ok' });
+    await vi.waitFor(() => expect(started).toEqual([A, C, B]));
+    gates.get(B)!.resolve({ ok: true, reason: 'ok' });
+    await vi.waitFor(() => expect(started).toEqual([A, C, B, A]));
+    gates.get(A)!.resolve({ ok: true, reason: 'ok' });
+    await __commentaryIdle();
+    expect(getCommentaryRecord(A)).toMatchObject({ ok: true });
   });
 
   it('inactive sans configuration : rien n’est mis en file', () => {

@@ -300,6 +300,7 @@ export class OllamaSession {
     const dec = new TextDecoder();
     let buf = '';
     let last: { status?: string; error?: string } = {};
+    let loggedTenth = -1;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -312,7 +313,15 @@ export class OllamaSession {
         try {
           last = JSON.parse(line) as { status?: string; error?: string; completed?: number; total?: number };
           const p = last as { completed?: number; total?: number };
-          if (p.total && p.completed !== undefined) onProgress?.(Math.round(p.completed / 1e6), Math.round(p.total / 1e6));
+          if (p.total && p.completed !== undefined) {
+            onProgress?.(Math.round(p.completed / 1e6), Math.round(p.total / 1e6));
+            // Gros fichier du modèle : une ligne de journal tous les 10 %.
+            const tenth = Math.floor((p.completed / p.total) * 10);
+            if (p.total > 100e6 && tenth > loggedTenth) {
+              loggedTenth = tenth;
+              console.log(`[commentaires] téléchargement de ${name} : ${tenth * 10} % (${Math.round(p.completed / 1e6)} / ${Math.round(p.total / 1e6)} Mo)`);
+            }
+          }
         } catch {
           /* ligne partielle */
         }
@@ -320,6 +329,7 @@ export class OllamaSession {
     }
     if (last.error) throw new Error(`Ollama : ${last.error}`);
     if (last.status !== 'success') throw new Error(`Ollama : téléchargement de ${name} incomplet (${last.status ?? 'sans statut'})`);
+    console.log(`[commentaires] modèle ${name} téléchargé`);
   }
 
   async close(): Promise<void> {
