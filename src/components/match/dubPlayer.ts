@@ -27,7 +27,12 @@
  *   du volume choisi (rampes de 150 ms) ; entre deux phrases, l'ambiance de
  *   la salle revient à plein. Pour cela l'élément vidéo passe par Web Audio
  *   (createMediaElementSource → GainNode) ; à défaut, on joue sur
- *   `video.volume`, toujours restauré ensuite.
+ *   `video.volume`, toujours restauré ensuite ;
+ * - le manifeste porte `?t=<position>` seulement quand la VF doublée est
+ *   choisie ET que la vidéo joue : c'est un signe de vie du spectateur (le
+ *   serveur met alors les tâches de fond en pause et double à partir de
+ *   là). En pause, à la fin ou avant le lancement, on n'interroge que le
+ *   statut ; la lecture relance aussitôt une interrogation avec `?t=`.
  */
 
 export type DubStatus = 'none' | 'waiting' | 'running' | 'partial' | 'ready' | 'disabled' | 'failed';
@@ -158,7 +163,7 @@ export const LEAD = 0.05;
 /** Écart toléré (s) entre la voix et l'image avant de reprogrammer. */
 export const DRIFT_MAX = 0.15;
 export const DRIFT_CHECK_MS = 1000;
-/** Manifeste : toutes les 30 s quand la VF doublée est choisie (avec `?t=`)… */
+/** Manifeste : toutes les 30 s quand la VF doublée est choisie (avec `?t=` pendant la lecture seulement)… */
 export const REFRESH_MS = 30_000;
 /** …toutes les 60 s sinon (sans `?t=` : on ne fait que guetter la disponibilité). */
 export const IDLE_REFRESH_MS = 60_000;
@@ -507,13 +512,18 @@ export class DubPlayer {
     this.publish();
   }
 
-  /** Recharge le manifeste (avec `?t=` quand la VF doublée est choisie). */
+  /**
+   * Recharge le manifeste. `?t=` (signe de vie du spectateur) seulement
+   * quand la VF doublée est choisie et que la vidéo JOUE : un onglet en
+   * pause ne doit pas bloquer les tâches de fond du serveur.
+   */
   refresh(): Promise<void> {
     if (this.destroyed) return Promise.resolve();
     clearTimeout(this.refreshTimer);
     const my = ++this.manifestSeq;
     const sep = this.manifestUrl.includes('?') ? '&' : '?';
-    const url = this.enabled ? `${this.manifestUrl}${sep}t=${Math.max(0, Math.floor(this.video.currentTime))}` : this.manifestUrl;
+    const watching = this.enabled && !this.video.paused && !this.video.ended;
+    const url = watching ? `${this.manifestUrl}${sep}t=${Math.max(0, Math.floor(this.video.currentTime))}` : this.manifestUrl;
     return this.fetchFn(url, { cache: 'no-store' })
       .then((r) => (r.status === 404 ? { status: 'none' } : r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(
@@ -588,6 +598,8 @@ export class DubPlayer {
     // Filet de sécurité si l'appel direct à unlock() a manqué ; et une VO
     // routée dont le contexte a été suspendu serait muette : on le relance.
     if (this.enabled || this.graph?.route) this.unlock(true);
+    // Lecture (re)lancée : le signe de vie `?t=` repart tout de suite.
+    if (this.enabled) void this.refresh();
   };
 
   private onPlaying = () => {

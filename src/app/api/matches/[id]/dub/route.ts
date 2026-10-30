@@ -14,9 +14,11 @@ export const dynamic = 'force-dynamic';
  * `speech` liste les plages où la voix française parle. Les tronçons déjà
  * doublés sont servis même pendant `running` / `partial`.
  *
- * `?t=<secondes>` : position de lecture. Comme pour les sous-titres, c'est
- * un signe de vie du spectateur (`touchViewer`), et le doublage du match
- * passe en tête de file s'il reste des sous-titres à doubler (il démarre
+ * `?t=<secondes>` : position de lecture, envoyée par le lecteur seulement
+ * pendant la lecture de la VF doublée (en pause : statut seul). Comme pour
+ * les sous-titres, c'est un signe de vie du spectateur (`touchViewer`), et
+ * le doublage du match passe en tête de file s'il reste des sous-titres à
+ * doubler (il démarre
  * quand le GPU est libre : la traduction passe d'abord) — en mode
  * « doublage » avec la traduction automatique, ou si un doublage a déjà été
  * demandé pour ce match. Sans `t`, aucun effet de bord.
