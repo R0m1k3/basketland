@@ -251,6 +251,7 @@ export function openDatabase(file: string): DatabaseSyncType {
   }
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA_SQL);
+  db.exec(AUTH_SCHEMA_SQL); // utilisateurs, sessions, paramètres : bloc « authentification » en fin de fichier
   migrate(db);
   return db;
 }
@@ -1047,3 +1048,174 @@ export function dbHealth(): { ok: boolean; matches: number; error?: string } {
     return { ok: false, matches: 0, error: (e as Error).message };
   }
 }
+
+// ==================================================================
+// AUTHENTIFICATION, UTILISATEURS ET PARAMÈTRES
+// Bloc autonome (tables + accès SQL). La logique (hachage, règles, limitation
+// des tentatives) est dans src/lib/auth.ts, les paramètres dans
+// src/lib/settings.ts. Le script scripts/reset-password.mjs recrée les
+// tables `users` et `sessions` à l'identique : garder les deux en phase.
+// ==================================================================
+
+export const AUTH_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+-- Seul le SHA-256 du jeton de session est stocké : une copie de la base ne
+-- donne aucune session utilisable.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+export type UserRole = 'admin' | 'user';
+
+export interface UserRow {
+  id: number;
+  username: string;
+  password_hash: string;
+  role: UserRole;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+/** Utilisateur sans son empreinte de mot de passe : seule forme qui sort du serveur. */
+export type PublicUser = Omit<UserRow, 'password_hash'>;
+
+export function countUsers(): number {
+  return one<{ n: number }>('SELECT COUNT(*) AS n FROM users')?.n ?? 0;
+}
+
+export function countAdmins(): number {
+  return one<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'")?.n ?? 0;
+}
+
+export function listUsers(): PublicUser[] {
+  // Copie en objets ordinaires : les lignes de node:sqlite ont un prototype
+  // nul, que React refuse de transmettre à un composant client.
+  return all<PublicUser>('SELECT id, username, role, created_at, last_login_at FROM users ORDER BY username').map((u) => ({ ...u }));
+}
+
+export function getUserById(id: number): UserRow | undefined {
+  return one<UserRow>('SELECT * FROM users WHERE id = $id', { id });
+}
+
+export function getUserByUsername(username: string): UserRow | undefined {
+  return one<UserRow>('SELECT * FROM users WHERE username = $username', { username });
+}
+
+export function insertUser(username: string, passwordHash: string, role: UserRole): number {
+  const r = run('INSERT INTO users (username, password_hash, role, created_at) VALUES ($username, $hash, $role, $now)', {
+    username,
+    hash: passwordHash,
+    role,
+    now: nowIso(),
+  });
+  return Number(r.lastInsertRowid);
+}
+
+/**
+ * Crée le premier compte administrateur, seulement si aucun utilisateur
+ * n'existe : vérification et insertion dans la même transaction.
+ * Renvoie l'id créé, ou null si un compte existe déjà.
+ */
+export function insertFirstAdmin(username: string, passwordHash: string): number | null {
+  return tx(() => (countUsers() > 0 ? null : insertUser(username, passwordHash, 'admin')));
+}
+
+export function updateUserPassword(id: number, passwordHash: string): void {
+  run('UPDATE users SET password_hash = $hash WHERE id = $id', { id, hash: passwordHash });
+}
+
+export function updateUserRole(id: number, role: UserRole): void {
+  run('UPDATE users SET role = $role WHERE id = $id', { id, role });
+}
+
+export function touchUserLogin(id: number): void {
+  run('UPDATE users SET last_login_at = $now WHERE id = $id', { id, now: nowIso() });
+}
+
+/** Supprime un utilisateur et toutes ses sessions. */
+export function deleteUserRow(id: number): void {
+  tx(() => {
+    run('DELETE FROM sessions WHERE user_id = $id', { id });
+    run('DELETE FROM users WHERE id = $id', { id });
+  });
+}
+
+export interface SessionRow {
+  token_hash: string;
+  user_id: number;
+  created_at: string;
+  expires_at: string;
+}
+
+export function insertSession(tokenHash: string, userId: number, expiresAt: string): void {
+  const now = nowIso();
+  // Ménage opportuniste des sessions expirées à chaque nouvelle session.
+  run('DELETE FROM sessions WHERE expires_at <= $now', { now });
+  run('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES ($h, $u, $now, $exp)', {
+    h: tokenHash,
+    u: userId,
+    now,
+    exp: expiresAt,
+  });
+}
+
+/** Session et son utilisateur (jointure), ou undefined si le jeton est inconnu. */
+export function getSessionWithUser(tokenHash: string): (SessionRow & { username: string; role: UserRole }) | undefined {
+  return one(
+    `SELECT s.token_hash, s.user_id, s.created_at, s.expires_at, u.username, u.role
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = $h`,
+    { h: tokenHash },
+  );
+}
+
+export function extendSession(tokenHash: string, expiresAt: string): void {
+  run('UPDATE sessions SET expires_at = $exp WHERE token_hash = $h', { h: tokenHash, exp: expiresAt });
+}
+
+export function deleteSession(tokenHash: string): void {
+  run('DELETE FROM sessions WHERE token_hash = $h', { h: tokenHash });
+}
+
+/** Révoque toutes les sessions d'un utilisateur, sauf éventuellement une (la session courante). */
+export function deleteUserSessions(userId: number, exceptTokenHash?: string): void {
+  run('DELETE FROM sessions WHERE user_id = $u AND token_hash <> $keep', { u: userId, keep: exceptTokenHash ?? '' });
+}
+
+export function settingGet(key: string): string | null {
+  return one<{ value: string }>('SELECT value FROM settings WHERE key = $key', { key })?.value ?? null;
+}
+
+/** Écrit un paramètre ; null le supprime. */
+export function settingSet(key: string, value: string | null): void {
+  if (value === null) {
+    run('DELETE FROM settings WHERE key = $key', { key });
+    return;
+  }
+  run(
+    `INSERT INTO settings (key, value, updated_at) VALUES ($key, $value, $now)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    { key, value, now: nowIso() },
+  );
+}
+
+// ============================================================ fin du bloc authentification

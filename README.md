@@ -158,6 +158,35 @@ sans `-v` ne touche pas au dossier hôte.
 > l'onglet Docker fait la même chose (téléchargement de la nouvelle image
 > puis redémarrage), sans ligne de commande.
 
+## Connexion et utilisateurs
+
+Tout le site (pages et API) est réservé aux comptes connectés. Restent publics :
+`/api/health` (healthcheck Docker) et `/api/ingest` (protégé par son propre jeton).
+
+- **Premier démarrage** : tant qu'aucun compte n'existe, toute page mène à
+  `/setup`, qui crée le compte **administrateur** (identifiant + mot de passe de
+  8 caractères minimum). Cette page disparaît ensuite.
+- **Connexion** : `/login`. La session (cookie httpOnly) dure 30 jours et se
+  prolonge tant qu'elle sert. 5 échecs de connexion → 1 minute d'attente.
+- **Paramètres** (`/parametres`, icône d'engrenage en haut à droite) : chacun y
+  change son mot de passe et se déconnecte. Un administrateur y gère aussi les
+  comptes (ajout, rôle, réinitialisation du mot de passe, suppression — le
+  dernier administrateur ne peut être ni supprimé ni rétrogradé).
+- **Traduction via OpenAI (option)** : dans Paramètres › « Traduction des
+  commentaires », un administrateur peut enregistrer une clé API OpenAI et un
+  modèle (ex. `gpt-5.4-mini`). La traduction passe alors par l'API OpenAI au lieu
+  d'Ollama ; la transcription (Whisper) reste locale. La clé se crée sur
+  platform.openai.com et est facturée à l'usage (ce n'est pas l'abonnement
+  ChatGPT) ; elle n'est jamais réaffichée en entier.
+- **Mot de passe perdu** : depuis le NAS,
+
+  ```bash
+  docker exec -it basketland node scripts/reset-password.mjs <identifiant> <nouveau-mot-de-passe>
+  ```
+
+  redéfinit le mot de passe (et crée le compte en administrateur s'il n'existe
+  pas), puis ferme ses sessions ouvertes.
+
 ## Synchronisation des données
 
 Les matchs, statistiques et replays sont récupérés par jobs. Le premier
