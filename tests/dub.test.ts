@@ -20,6 +20,7 @@ import {
   dubActivity,
   dubDir,
   dubManifest,
+  dubQueuePosition,
   emphasize,
   emptySpeakers,
   enqueueDub,
@@ -29,6 +30,7 @@ import {
   nextDubChunk,
   placeClips,
   prioritizeDubOnView,
+  releaseGpuForTranslation,
   runDub,
   speechRanges,
   voiceFor,
@@ -572,6 +574,37 @@ describe('file : GPU partagé et priorité à la lecture', () => {
     expect(await enqueueRecentDubs()).toBe(0);
   });
 
+  it('une traduction qui démarre reprend tout de suite la carte graphique au doublage en cours (remis en tête de file)', async () => {
+    process.env.TRANSCRIBE_URL = 'http://gpu.local:8000/v1';
+    process.env.TRANSLATE_URL = 'http://gpu.local:11434/v1';
+    process.env.DUB_REPUMP_MS = '20';
+    publish(M, 0, CHUNK0);
+    let calls = 0;
+    let aborted = false;
+    __setDubRunnerForTests(async (_job, _p, signal) => {
+      calls++;
+      if (calls > 1) return { ok: true, reason: 'repris' };
+      // Réplique en cours de synthèse : ne rend la main que sur interruption.
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => ((aborted = true), resolve()), { once: true }));
+      return { ok: false, kind: 'erreur', reason: 'interrompu' };
+    });
+    expect(releaseGpuForTranslation()).toBeNull(); // rien ne tourne : pas d'attente
+    enqueueDub(M);
+    let translationStartedAfterAbort: boolean | null = null;
+    __setCommentaryRunnerForTests(async () => {
+      translationStartedAfterAbort = aborted;
+      return { ok: true, reason: 'ok' };
+    });
+    enqueueCommentary(M, { priority: true });
+    await vi.waitFor(() => expect(translationStartedAfterAbort).not.toBeNull());
+    // La traduction n'a démarré qu'une fois le doublage interrompu (carte libérée).
+    expect(translationStartedAfterAbort).toBe(true);
+    expect(getDubRecord(M)).toBeUndefined(); // ni échec ni succès compté
+    await vi.waitFor(() => expect(calls).toBe(2)); // repris après la traduction
+    await __dubIdle();
+    expect(dubQueuePosition(M)).toBeNull();
+  });
+
   it('activité : tâche « doublage » pendant le travail', async () => {
     publish(M, 0, CHUNK0);
     let release!: () => void;
@@ -587,6 +620,21 @@ describe('file : GPU partagé et priorité à la lecture', () => {
     ]);
     release();
     await __dubIdle();
+  });
+});
+
+// ------------------------------------------------------------------ base
+
+describe('doublage et sous-titres retraduits', () => {
+  it('un tronçon retraduit perd son doublage (refait), le doublage n’est plus complet', () => {
+    publish(M, 0, CHUNK0);
+    db.openDubTrack(M, 'ok1', db.commentaryKey(db.getCommentaryTrack(M)!));
+    db.publishDubChunk(M, { idx: 0, start: 0, end: 120, file: 'chunk-0.m4a', speech: [], cuesSig: 'a' }, { voices: ['A'], speakers: {} });
+    db.setDubComplete(M, true);
+    expect(db.getDubChunks(M)).toHaveLength(1);
+    publish(M, 0, CHUNK0); // retraduit (p. ex. « Relancer la traduction »)
+    expect(db.getDubChunks(M)).toEqual([]);
+    expect(db.getDubTrack(M)?.complete).toBe(0);
   });
 });
 

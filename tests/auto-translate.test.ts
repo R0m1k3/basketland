@@ -14,6 +14,7 @@ import {
   commentaryRunningMatchId,
   enqueueCommentary,
   getCommentaryRecord,
+  touchViewer,
 } from '../src/lib/commentary';
 import { freshDb, insertMatch } from './helpers/db';
 
@@ -95,6 +96,30 @@ describe('désactivation : les traductions de fond déjà en file sont abandonn�
     __setCommentaryRunnerForTests(null);
     delete process.env.TRANSCRIBE_URL;
     delete process.env.TRANSLATE_URL;
+  });
+
+  it('un clic explicite pendant une traduction lancée à l’ouverture la rend explicite (jusqu’au bout, fiche fermée)', async () => {
+    process.env.COMMENTARY_NIGHT_WINDOW = 'off';
+    insertMatch(7);
+    let ctl: { keepGoing(): boolean } | undefined;
+    __setCommentaryRunnerForTests(
+      (job, _p, _sig, c) =>
+        new Promise((resolve) => {
+          ctl = c;
+          finish.set(job.matchId, () => resolve({ ok: true, reason: 'ok' }));
+        }),
+    );
+    touchViewer(7, 0);
+    enqueueCommentary(7, { priority: true }); // ouverture de la fiche
+    await vi.waitFor(() => expect(ctl).toBeDefined());
+    vi.setSystemTime(Date.now() + 10 * 60_000); // le spectateur est parti
+    expect(ctl!.keepGoing()).toBe(false);
+    enqueueCommentary(7, { priority: true, explicit: true }); // clic « Doubler ce match »
+    expect(ctl!.keepGoing()).toBe(true);
+    vi.useRealTimers();
+    finish.get(7)!();
+    await __commentaryIdle();
+    process.env.COMMENTARY_NIGHT_WINDOW = 'always';
   });
 
   it('le travail en cours se termine, la suite de la file de fond saute ; un clic explicite passe toujours', async () => {

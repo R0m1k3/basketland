@@ -945,6 +945,8 @@ interface QueueState {
     abort: () => void;
     /** Interrompu pour laisser passer un match regardé : remis en file, sans compter d'échec. */
     preempted: boolean;
+    /** Interrompu pour rendre la carte graphique à une traduction : remis en tête de file. */
+    gpuYield?: boolean;
   } | null;
   runner: DubRunner | null;
   idle: Promise<void>;
@@ -1059,6 +1061,27 @@ function preemptBackground(): void {
 
 let repumpTimer: NodeJS.Timeout | undefined;
 
+/**
+ * Une traduction va démarrer : le doublage en cours rend la carte graphique
+ * TOUT DE SUITE (le travail est interrompu, la session de voix fermée) au
+ * lieu d'attendre la fin de sa réplique — sinon Whisper et le traducteur se
+ * chargeraient par-dessus Qwen3-TTS. Il est remis en tête de file et reprend
+ * quand la carte est libre. Appelé par commentary.ts avant chaque travail.
+ */
+export function releaseGpuForTranslation(maxWaitMs = 20_000): Promise<void> | null {
+  const r = st.running;
+  if (!r) return null; // rien à libérer : la traduction démarre aussitôt
+  r.gpuYield = true;
+  r.abort();
+  return (async () => {
+    const t0 = Date.now();
+    while (st.running === r && Date.now() - t0 < maxWaitMs) await new Promise((res) => setTimeout(res, 50));
+  })();
+}
+// Branché sur la file des traductions (via globalThis : pas d'import circulaire, et un seul
+// point d'entrée même si le module est chargé par plusieurs bundles).
+(globalThis as { __commentaryGpuGate?: () => Promise<void> | null }).__commentaryGpuGate = () => releaseGpuForTranslation();
+
 function scheduleRepump(): void {
   clearTimeout(repumpTimer);
   repumpTimer = setTimeout(pump, Number(process.env.DUB_REPUMP_MS) || 20_000);
@@ -1123,6 +1146,12 @@ function start(job: Job): void {
     )
     .finally(() => clearTimeout(watchdog))
     .then((res) => {
+      if (state.gpuYield) {
+        endLog(true, 'interrompu : une traduction a besoin de la carte graphique');
+        if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.unshift({ ...job });
+        console.log(`[doublage] match ${job.matchId} en pause : une traduction a besoin de la carte graphique ; reprise ensuite`);
+        return;
+      }
       if (state.preempted) {
         endLog(false, 'interrompu : un match regardé est passé devant');
         if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.splice(Math.min(1, st.queue.length), 0, { ...job, viewer: false });

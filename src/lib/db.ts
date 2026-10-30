@@ -860,6 +860,9 @@ export function openCommentaryTrack(matchId: number, track: CommentaryTrackMeta,
       run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
       run('DELETE FROM commentary_chunks WHERE match_id = $id', { id: matchId });
       run('DELETE FROM commentary_tracks WHERE match_id = $id', { id: matchId });
+      // Sous-titres refaits de zéro : le doublage qui les disait n'est plus valable.
+      run('DELETE FROM dub_chunks WHERE match_id = $id', { id: matchId });
+      run('UPDATE dub_tracks SET complete = 0 WHERE match_id = $id', { id: matchId });
       return new Set<number>();
     }
     return new Set(all<{ idx: number }>('SELECT idx FROM commentary_chunks WHERE match_id = $id', { id: matchId }).map((r) => r.idx));
@@ -881,6 +884,9 @@ export function publishCommentaryChunk(
     const base = chunkSeqBase(chunk.idx);
     run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $a AND seq < $b', { id: matchId, a: base, b: base + 100_000 });
     insertCues(matchId, cues);
+    // Tronçon (re)traduit : son doublage éventuel disait les anciens sous-titres, il sera refait.
+    run('DELETE FROM dub_chunks WHERE match_id = $id AND idx = $i', { id: matchId, i: chunk.idx });
+    run('UPDATE dub_tracks SET complete = 0 WHERE match_id = $id', { id: matchId });
     run('INSERT OR REPLACE INTO commentary_chunks (match_id, idx, keep_from, keep_to) VALUES ($id, $i, $f, $t)', {
       id: matchId,
       i: chunk.idx,

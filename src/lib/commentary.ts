@@ -515,7 +515,12 @@ export function enqueueCommentary(
   if (disabled) return { queued: false, started: false, message: `Traduction des commentaires inactive : ${disabled}` };
   const unavailable = unavailableReason(matchId);
   if (unavailable) return { queued: false, started: false, message: `Traduction impossible : ${unavailable}` };
-  if (st.running?.job.matchId === matchId) return { queued: false, started: true, message: 'Traduction déjà en cours' };
+  if (st.running?.job.matchId === matchId) {
+    // Demande explicite pendant un travail déjà lancé (p. ex. à l'ouverture de
+    // la fiche) : il devient explicite et ira jusqu'au bout, fiche fermée.
+    if (opts.explicit) st.running.job.explicit = true;
+    return { queued: false, started: true, message: 'Traduction déjà en cours' };
+  }
   if (!opts.force && commentaryReady(matchId)) return { queued: false, started: false, message: 'Traduction des commentaires déjà prête' };
   const existing = st.queue.findIndex((j) => j.matchId === matchId);
   const job: Job = {
@@ -609,7 +614,13 @@ function start(job: Job): void {
     }, jobTimeoutMs());
     watchdog.unref?.();
   });
-  void Promise.race([runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job)), timeout])
+  // La carte graphique d'abord libérée par un doublage en cours (session de
+  // voix fermée), pour que Whisper et le traducteur ne se chargent pas par-dessus.
+  // Sans doublage en cours, le travail démarre aussitôt (synchrone, comme avant).
+  const gpuGate = (globalThis as { __commentaryGpuGate?: () => Promise<void> | null }).__commentaryGpuGate;
+  const gpuWait = gpuGate?.() ?? null;
+  const run = () => runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job));
+  void Promise.race([gpuWait ? gpuWait.catch(() => undefined).then(run) : run(), timeout])
     .then(
       (res) => res,
       (e: unknown): CommentaryOutcome =>
