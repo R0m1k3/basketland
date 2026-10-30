@@ -172,6 +172,9 @@ beforeEach(() => {
   process.env.COMMENTARY_NIGHT_WINDOW = 'always';
   insertMatch(M, { duration: 400 });
   insertMatch(M2, { duration: 400 });
+  // Ces tests décrivent le doublage AUTOMATIQUE (fond, match regardé) : mode « doublage ».
+  // Le mode « sous-titres » (défaut) et les demandes explicites : tests/vf-mode.test.ts.
+  settingSet('vf_mode', 'doublage');
   TRACK = { ok_id: db.getMatch(M)!.video_ok_id!, transcribe_model: 'large-v3-turbo', translate_model: 'translategemma:12b', chunk_sec: 120, chunks_total: 3 };
   __setDubEngineForTests({ config: () => ({}), open: async () => fake().session });
   vi.spyOn(console, 'error').mockImplementation(() => {});

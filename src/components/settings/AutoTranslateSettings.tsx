@@ -71,14 +71,14 @@ export default function AutoTranslateSettings({ initial }: { initial: boolean })
           <span className={`mt-[7px] h-2 w-2 shrink-0 rounded-full ${on ? 'bg-flame' : 'bg-ink-500'}`} aria-hidden="true" />
           <span>
             <strong className="font-semibold text-paper">Activée</strong> : chaque replay est traduit (et analysé) dès qu&apos;il est
-            disponible, en pause pendant qu&apos;une vidéo est regardée.
+            disponible — puis doublé en mode « Doublage voix » —, en pause pendant qu&apos;une vidéo est regardée.
           </span>
         </p>
         <p className="flex gap-3">
           <span className={`mt-[7px] h-2 w-2 shrink-0 rounded-full ${on ? 'bg-ink-500' : 'bg-flame'}`} aria-hidden="true" />
           <span>
             <strong className="font-semibold text-paper">Désactivée</strong> : rien n&apos;est traduit tant qu&apos;un utilisateur ne clique
-            pas sur « Traduire ce match » sur la fiche du match — moins de charge pour le serveur.
+            pas sur « Sous-titrer ce match » ou « Doubler ce match » sur la fiche du match — moins de charge pour le serveur.
           </span>
         </p>
         {msg && (

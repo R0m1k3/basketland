@@ -228,7 +228,7 @@ describe('API POST /commentary', () => {
     expect(db.commentaryReadyIds([ID])).toEqual(new Set([ID]));
   });
 
-  it('clic « Traduire ce match » (manual) : mis en file même pendant le délai après un échec ; le lancement automatique, non', async () => {
+  it('clic « Sous-titrer ce match » (manual) : mis en file même pendant le délai après un échec ; le lancement automatique, non', async () => {
     enqueueCommentary(OTHER); // occupe la file : le match reste visible en « queued »
     const okId = db.getMatch(ID)!.video_ok_id;
     db.kvSet(`commentary:${ID}`, { at: new Date().toISOString(), ok: false, failures: 1, kind: 'erreur', reason: 'échec simulé', okId } satisfies CommentaryRecord);
@@ -250,7 +250,7 @@ describe('API POST /commentary', () => {
     expect(await auto.json()).toEqual({
       commentary: { status: 'none' },
       autoTranslate: false,
-      message: 'Traduction automatique désactivée : lancez-la avec « Traduire ce match ».',
+      message: 'Traduction automatique désactivée : lancez-la avec « Sous-titrer ce match ».',
     });
     expect(commentaryQueuePosition(ID)).toBeNull();
 

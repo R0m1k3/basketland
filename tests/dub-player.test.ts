@@ -763,6 +763,42 @@ describe('DubPlayer : cycle de vie', () => {
     expect(s.player.getSnapshot()).toMatchObject({ active: true, hint: null });
   });
 
+  it('signe de vie ?t= seulement pendant la lecture : en pause, à la fin ou avant le lancement, statut seul', async () => {
+    const withT = (from = 0) => s.requests.slice(from).filter((u) => u.startsWith(`${URL_BASE}?t=`));
+    const s = setup({ manifest: manifestOf('running', []) });
+    s.video.currentTime = 40;
+    s.player.setEnabled(true); // VF doublée choisie (ou par défaut), vidéo pas encore lancée
+    await flush();
+    await s.advance(30);
+    expect(s.requests.length).toBeGreaterThanOrEqual(3);
+    expect(withT()).toEqual([]); // un onglet ouvert sans lecture ne compte pas comme spectateur
+
+    // Lecture : le signe de vie repart aussitôt, puis toutes les 30 s.
+    s.video.play();
+    expect(s.requests.at(-1)).toBe(`${URL_BASE}?t=40`);
+    await s.advance(30);
+    expect(s.requests).toContain(`${URL_BASE}?t=70`);
+
+    // Pause : statut seul, y compris après un saut.
+    s.video.pause();
+    let n = s.requests.length;
+    s.video.seek(500);
+    await s.advance(31);
+    expect(s.requests.length).toBeGreaterThan(n);
+    expect(withT(n)).toEqual([]);
+
+    // Fin de la vidéo : statut seul aussi.
+    s.video.play();
+    expect(s.requests.at(-1)).toBe(`${URL_BASE}?t=500`);
+    s.video.ended = true;
+    s.video.pause();
+    s.video.emit('ended');
+    n = s.requests.length;
+    await s.advance(31);
+    expect(s.requests.length).toBeGreaterThan(n);
+    expect(withT(n)).toEqual([]);
+  });
+
   it('VF doublée non choisie : guet de la disponibilité toutes les 60 s, arrêté une fois prête', async () => {
     const s = setup({ manifest: manifestOf('none', []) });
     await flush();

@@ -39,7 +39,7 @@ export const dynamic = 'force-dynamic';
 function idleText(auto: boolean, untranslated: boolean): string {
   const none = 'Aucun traitement en cours';
   if (commentaryDisabledReason()) return `${none} — traduction des commentaires non configurée.`;
-  if (!auto) return `${none} — traduction à la demande : « Traduire ce match » sur la fiche d’un match.`;
+  if (!auto) return `${none} — traduction à la demande : « Sous-titrer ce match » sur la fiche d’un match.`;
   if (!inScheduleWindow()) {
     const hours = nightWindowLabel();
     return hours ? `${none} — traduction automatique ${hours}.` : `${none} — un match est traduit dès qu’on le regarde.`;
@@ -322,7 +322,7 @@ function VfSummary({ ready, running, partial, todo, auto }: { ready: number; run
       {item(todo, 'à traduire', 'bg-ink-500')}
       <span className="text-paper-faint">
         {!auto
-          ? 'Traduction à la demande : « Traduire ce match » sur la fiche.'
+          ? 'Traduction à la demande : « Sous-titrer ce match » sur la fiche.'
           : night === 'en continu'
             ? 'Traduits dès que le replay est disponible (en pause pendant la lecture).'
             : `${night ? `Traduction automatique ${night} ; ` : ''}un match ouvert est traduit aussitôt.`}

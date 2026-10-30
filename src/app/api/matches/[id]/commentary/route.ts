@@ -19,8 +19,8 @@ export async function GET(_req: Request, ctx: RouteCtx<{ id: string }>) {
  * - { action: 'start' } → lancement AUTOMATIQUE envoyé par la fiche une fois
  *   la lecture démarrée : en tête de file, sauf piste prête ou backoff après
  *   un échec. Sans effet quand la « Traduction automatique » est désactivée
- *   (réponse `autoTranslate: false` : la fiche montre « Traduire ce match ») ;
- * - { action: 'start', manual: true } → clic « Traduire ce match » (ou
+ *   (réponse `autoTranslate: false` : la fiche montre « Sous-titrer ce match ») ;
+ * - { action: 'start', manual: true } → clic « Sous-titrer ce match » (ou
  *   « Réessayer ») : toujours mis en tête de file, backoff ignoré, piste
  *   prête conservée, traduit jusqu'au bout même si l'on quitte la fiche
  *   (en pause seulement pendant la lecture d'un autre match) ;
@@ -65,7 +65,7 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
     return json({
       commentary: commentaryStatus(id),
       autoTranslate: false,
-      message: 'Traduction automatique désactivée : lancez-la avec « Traduire ce match ».',
+      message: 'Traduction automatique désactivée : lancez-la avec « Sous-titrer ce match ».',
     });
   }
   // Lancement à l'ouverture : en tête de file, sauf piste prête ou backoff après un échec.

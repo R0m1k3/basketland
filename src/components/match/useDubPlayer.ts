@@ -25,7 +25,8 @@ export interface DubControls {
 
 /**
  * VF doublée du match, jouée par-dessus l'élément vidéo (voir dubPlayer.ts).
- * Le manifeste est interrogé même VF doublée non choisie (sans `?t=`), pour
+ * Le manifeste est interrogé même VF doublée non choisie (sans `?t=`, qui
+ * n'accompagne que la lecture de la VF doublée), pour
  * savoir s'il faut proposer le choix dans le menu.
  */
 export function useDubPlayer(videoRef: RefObject<HTMLVideoElement | null>, matchId: number | null, enabled: boolean): DubControls {

@@ -105,7 +105,7 @@ export async function requestReplayCheck(
   const work = searchReplay(m, { fresh: true }).then((r) => {
     // Replay trouvé : traduction des commentaires en tête de file (la
     // fonction respecte la configuration et le backoff des échecs), sauf
-    // si la traduction automatique est désactivée (clic « Traduire ce match »).
+    // si la traduction automatique est désactivée (clic « Sous-titrer ce match »).
     if (r.changed && autoTranslateEnabled()) {
       try {
         prioritizeOnView(m.id);
