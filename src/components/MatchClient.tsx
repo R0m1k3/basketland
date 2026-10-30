@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import VideoPlayer, { type Marker } from '@/components/VideoPlayer';
-import CommentaryStatus, { type CommentaryState } from '@/components/match/CommentaryStatus';
+import CommentaryStatus, { type CommandResult, type CommentaryState } from '@/components/match/CommentaryStatus';
 import { Playback, PlaybackContext, SEEK_EVENT, type Subtitle } from '@/components/match/playback';
 import { periodName } from '@/components/match/format';
 
@@ -18,6 +18,14 @@ interface Props {
   homeAbbr: string;
   plays: PlayLite[];
   positions: PlayPosition[];
+  /**
+   * Réglage « Traduction automatique » : activé, la traduction part toute
+   * seule une fois la lecture lancée ; désactivé, seulement sur un clic
+   * « Traduire ce match ».
+   */
+  autoTranslate: boolean;
+  /** Administrateur : bouton « Relancer la traduction ». */
+  isAdmin: boolean;
 }
 
 const POLL_MS = 12_000;
@@ -37,10 +45,14 @@ function sameSubtitles(a: Subtitle[], b: Subtitle[]): boolean {
  * partagée par contexte. Ce composant ne re-rend qu'au chargement des
  * sous-titres et aux changements d'état de la traduction.
  */
-export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays, positions }: Props) {
+export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays, positions, autoTranslate, isAdmin }: Props) {
   const playback = useMemo(() => new Playback(), []);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [commentary, setCommentary] = useState<CommentaryState | null>(null);
+  // Réglage vu par le bandeau : le serveur peut répondre qu'il a été
+  // désactivé depuis l'ouverture de la page (bouton « Traduire ce match »).
+  const [auto, setAuto] = useState(autoTranslate);
+  useEffect(() => setAuto(autoTranslate), [autoTranslate]);
   const playerRef = useRef<HTMLDivElement>(null);
 
   // Un compteur écarte les réponses arrivées dans le désordre.
@@ -66,16 +78,24 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
       .catch(() => null);
   }, [matchId, playback]);
 
+  // `manual` : clic explicite (« Traduire ce match », « Réessayer ») — mis en
+  // file même pendant le délai d'attente après un échec. `retry` : relance
+  // forcée, réservée aux administrateurs.
   const command = useCallback(
-    (action: 'start' | 'retry') =>
+    (action: 'start' | 'retry', manual = false): Promise<CommandResult> =>
       fetch(`/api/matches/${matchId}/commentary`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify(manual ? { action, manual: true } : { action }),
       })
-        .then((r) => (r.ok ? (r.json() as Promise<{ commentary?: CommentaryState }>) : null))
-        .then((d) => d?.commentary && setCommentary(d.commentary))
-        .catch(() => undefined),
+        .then(async (r) => {
+          const d = (await r.json().catch(() => ({}))) as { commentary?: CommentaryState; message?: string; error?: string; autoTranslate?: boolean };
+          if (d.commentary) setCommentary(d.commentary);
+          if (d.autoTranslate === false) setAuto(false);
+          const accepted = r.ok && (d.commentary?.status === 'queued' || d.commentary?.status === 'running');
+          return { ok: r.ok, accepted, message: d.message ?? d.error ?? (r.ok ? null : `Erreur ${r.status}`) };
+        })
+        .catch(() => ({ ok: false, accepted: false, message: 'Serveur injoignable. Vérifiez votre connexion.' })),
     [matchId],
   );
 
@@ -83,12 +103,13 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   // vidéo d'abord. Elle démarre dès que le lecteur a ~15 s d'avance en
   // mémoire (ou au plus tard 20 s après l'ouverture), pour que l'extraction
   // audio et le chargement des modèles ne volent pas la bande passante et le
-  // processeur du démarrage de la lecture.
+  // processeur du démarrage de la lecture. Traduction automatique
+  // désactivée : rien ne part sans un clic sur « Traduire ce match ».
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | undefined;
     void loadSubtitles().then((c) => {
-      if (cancelled || !video.src || !c || (c.status !== 'none' && c.status !== 'queued')) return;
+      if (cancelled || !autoTranslate || !video.src || !c || (c.status !== 'none' && c.status !== 'queued')) return;
       const t0 = Date.now();
       timer = setInterval(() => {
         if (playback.bufferedAhead() >= START_BUFFER_SEC || Date.now() - t0 >= START_MAX_WAIT_MS) {
@@ -101,7 +122,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
       cancelled = true;
       clearInterval(timer);
     };
-  }, [matchId, video.src, loadSubtitles, command, playback]);
+  }, [matchId, video.src, autoTranslate, loadSubtitles, command, playback]);
 
   // Signe de vie pendant la LECTURE (toutes les 20 s, et au lancement) :
   // tant qu'il arrive, les tâches de fond du serveur (traduction d'autres
@@ -150,7 +171,8 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
     };
   }, [status, loadSubtitles]);
 
-  const retry = useCallback(() => void command('retry'), [command]);
+  const startManually = useCallback(() => command('start', true), [command]);
+  const relaunch = useCallback(() => command('retry'), [command]);
 
   // Positions des actions, triées par seq.
   const pos = useMemo(() => positions.slice().sort((a, b) => a[0] - b[0]), [positions]);
@@ -207,7 +229,14 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
             durationHint={video.duration}
           />
         </div>
-        <CommentaryStatus state={commentary} hasReplay={!!video.src} onRetry={retry} position={playback.currentTime} />
+        <CommentaryStatus
+          state={commentary}
+          hasReplay={!!video.src}
+          autoTranslate={auto}
+          onStart={startManually}
+          onRelaunch={isAdmin ? relaunch : undefined}
+          position={playback.currentTime}
+        />
         {commentary?.status === 'ready' && subtitles.length > 0 && (
           <p className="text-right text-xs text-paper-faint">
             <a href={`/api/matches/${matchId}/subtitles.vtt`} className="underline decoration-ink-500 underline-offset-2 hover:text-paper">

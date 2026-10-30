@@ -5,8 +5,17 @@
  * seulement, « off » pour ne traiter que les matchs qu'on ouvre. Dans tous
  * les cas, les tâches de fond s'effacent pendant qu'une vidéo est regardée
  * (voir viewers.ts).
+ *
+ * La fenêtre est FERMÉE quand la « Traduction automatique » est désactivée
+ * (/parametres) : les files de traduction et d'analyse abandonnent alors
+ * leurs travaux de fond déjà en attente, et un travail de fond en cours se
+ * met en pause au tronçon suivant. Les demandes explicites (clic « Traduire
+ * ce match », match regardé) ne passent pas par la fenêtre.
  */
-export function inNightWindow(now = new Date()): boolean {
+import { autoTranslateEnabled } from './settings';
+
+/** Plage horaire seule (`COMMENTARY_NIGHT_WINDOW`), sans le réglage « Traduction automatique ». */
+export function inScheduleWindow(now = new Date()): boolean {
   const spec = (process.env.COMMENTARY_NIGHT_WINDOW ?? 'always').trim().toLowerCase();
   if (spec === 'off' || spec === '0' || spec === '') return false;
   if (spec === 'always' || spec === 'on') return true;
@@ -19,6 +28,20 @@ export function inNightWindow(now = new Date()): boolean {
   const h = Number(part?.value ?? NaN);
   if (!Number.isFinite(h)) return false;
   return from <= to ? h >= from && h < to : h >= from || h < to;
+}
+
+/** Réglage « Traduction automatique » ; base illisible : valeur par défaut (activée). */
+function autoTranslateOn(): boolean {
+  try {
+    return autoTranslateEnabled();
+  } catch {
+    return true;
+  }
+}
+
+/** Les tâches de fond sont-elles permises maintenant ? Plage horaire ouverte ET traduction automatique activée. */
+export function inNightWindow(now = new Date()): boolean {
+  return inScheduleWindow(now) && autoTranslateOn();
 }
 
 /** Libellé de la fenêtre (« de 2 h à 6 h », « en continu »), ou null si elle est désactivée. */
