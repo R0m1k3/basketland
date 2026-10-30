@@ -86,7 +86,7 @@ export function whisperLibraryPath(python: string): string {
 const short = (e: unknown) => ((e as Error)?.message || String(e)).replace(/\s+/g, ' ').slice(0, 200);
 
 /** Arrêt propre d'un processus enfant : SIGTERM, puis SIGKILL au bout de `graceMs`. */
-function stopChild(child: ChildProcess, graceMs = 10_000): Promise<void> {
+export function stopChild(child: ChildProcess, graceMs = 10_000): Promise<void> {
   return new Promise((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
     const timer = setTimeout(() => child.kill('SIGKILL'), graceMs);

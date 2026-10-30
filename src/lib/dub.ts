@@ -106,8 +106,9 @@ async function loadEngine(): Promise<VoiceEngine | null> {
   if (eng.engine) return eng.engine;
   eng.loading ??= (async () => {
     try {
-      // Spécificateur typé `string` : le contrat est vérifié par VoiceAiModule.
-      const m = (await import('./voiceAi' as string)) as VoiceAiModule;
+      // Import différé (rien n'est chargé tant qu'aucun doublage n'est demandé) ;
+      // l'annotation vérifie le contrat de voiceAi.ts à la compilation.
+      const m: VoiceAiModule = await import('./voiceAi');
       eng.engine = { config: () => m.voiceConfig(), open: (signal) => m.VoiceSession.open(signal) };
       eng.loadError = null;
       return eng.engine;
