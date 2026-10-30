@@ -286,7 +286,10 @@ partir de la position de lecture**, par tronçons d'une minute : les premiers so
 turbo et Gemma vont plusieurs fois plus vite que le temps réel). Un saut dans
 la vidéo réoriente le travail : la fiche envoie sa position à chaque
 interrogation (`GET /subtitles?t=…`, toutes les 12 s et après chaque saut).
-Le bandeau sous le lecteur indique « Sous-titres prêts jusqu'à 34:10 ».
+Le bandeau sous le lecteur indique l'avance des sous-titres sur la lecture
+(« Sous-titres en direct · 2 min d'avance »). La VF s'affiche sur une seule
+ligne compacte ; taille (S à XL) et position (en bas / en haut, pour dégager
+le bandeau du score) se règlent dans le menu ⚙ du lecteur.
 
 **La lecture reste prioritaire** : ffmpeg, Whisper, Ollama et l'OCR
 tournent en priorité processeur basse (`nice` 10, `BACKGROUND_NICE`) ;
@@ -353,6 +356,7 @@ pas démarré du tout.
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
 | `COMMENTARY_CHUNK_SEC` | `60` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt. |
 | `COMMENTARY_NIGHT_WINDOW` | `2-6` | Fenêtre de pré-traduction et d'analyse vidéo en tâche de fond (heures de Paris) : `2-6` = de 2 h à 6 h, `off` = jamais (seulement à la demande), `always` = en continu. |
+| `COMMENTARY_MAX_LEAD_SEC` | `300` (5 min) | Quand quelqu'un regarde, la traduction ne prend pas plus d'avance que cela sur la lecture : elle attend, au lieu de télécharger le flux ok.ru en concurrence avec le lecteur. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
 | `OPENAI_API_KEY` | — | Clé API OpenAI : si définie (ou enregistrée dans la page Paramètres, prioritaire), la traduction passe par l'API OpenAI au lieu d'Ollama. La transcription reste locale. Facturée à l'usage par OpenAI (ce n'est pas l'abonnement ChatGPT). |

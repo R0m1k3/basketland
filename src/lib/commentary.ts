@@ -392,6 +392,7 @@ function controlFor(job: Job): CommentaryControl {
   return {
     keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow()),
     target: () => viewerPosition(job.matchId) ?? 0,
+    watching: () => viewerActive(job.matchId),
   };
 }
 
@@ -901,9 +902,34 @@ class StreamUnavailable extends Error {}
 export interface CommentaryControl {
   keepGoing(): boolean;
   target(): number;
+  /**
+   * Quelqu'un regarde : la traduction ne prend pas plus de
+   * `COMMENTARY_MAX_LEAD_SEC` d'avance sur la lecture (elle attend), pour ne
+   * pas télécharger le flux ok.ru en concurrence avec le lecteur sans besoin.
+   */
+  watching?(): boolean;
 }
 
 const RUN_TO_END: CommentaryControl = { keepGoing: () => true, target: () => 0 };
+
+/** Avance maximale (s) de la traduction sur la lecture quand on regarde (5 min par défaut). */
+function maxLeadSec(): number {
+  const n = Number(process.env.COMMENTARY_MAX_LEAD_SEC);
+  return Number.isFinite(n) && n > 0 ? n : 300;
+}
+
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 
 /**
  * Un travail : tronçon par tronçon (1 min), en commençant à la position du
@@ -1118,6 +1144,12 @@ export async function runCommentary(
       if (!ctl.keepGoing()) {
         paused = true;
         break;
+      }
+      // Assez d'avance sur la lecture : on attend que le spectateur avance.
+      const target = ctl.target();
+      if (ctl.watching?.() && coveredFrom(plans, done, target, duration) - target >= maxLeadSec()) {
+        await pause(Number(process.env.COMMENTARY_LEAD_POLL_MS) || 5_000, signal);
+        continue;
       }
       void openMt();
       // Pendant ce tronçon, l'audio du suivant probable se télécharge.

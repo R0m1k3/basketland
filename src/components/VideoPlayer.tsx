@@ -28,6 +28,8 @@ interface Props {
 }
 
 type SubSize = 'S' | 'M' | 'L' | 'XL';
+/** Position de la VF : en bas (défaut) ou en haut, pour dégager le bandeau du score. */
+type SubPos = 'bas' | 'haut';
 type Quality = 'auto' | number;
 interface LevelOption {
   height: number;
@@ -169,6 +171,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   const [menuOpen, setMenuOpen] = useState(false);
   const [vfOn, setVfOn] = useState(true);
   const [subSize, setSubSize] = useState<SubSize>('M');
+  const [subPos, setSubPos] = useState<SubPos>('bas');
   const [resumeAt, setResumeAt] = useState<number | null>(null);
 
   const posKey = src ? `bl:pos:${src}` : null;
@@ -177,6 +180,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   useEffect(() => {
     const s = readPref('bl:subsize');
     if (s === 'S' || s === 'M' || s === 'L' || s === 'XL') setSubSize(s);
+    if (readPref('bl:subpos') === 'haut') setSubPos('haut');
     if (readPref('bl:vf') === '0') setVfOn(false);
     const q = readPref('bl:quality');
     if (q && q !== 'auto' && Number.isFinite(Number(q))) setQuality(Number(q));
@@ -453,6 +457,11 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     writePref('bl:subsize', s);
   }, []);
 
+  const choosePos = useCallback((p: SubPos) => {
+    setSubPos(p);
+    writePref('bl:subpos', p);
+  }, []);
+
   const chooseSpeed = useCallback((s: number) => {
     setSpeed(s);
     if (videoRef.current) videoRef.current.playbackRate = s;
@@ -568,7 +577,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         aria-label="Replay du match"
       />
 
-      {vfOn && started && <SubtitleOverlay subs={subtitles} lifted={showControls} />}
+      {vfOn && started && <SubtitleOverlay subs={subtitles} lifted={showControls} pos={subPos} />}
 
       {/* Affiche avant la première lecture */}
       {!started && !error && (
@@ -683,6 +692,8 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           onQuality={chooseQuality}
           subSize={subSize}
           onSubSize={chooseSize}
+          subPos={subPos}
+          onSubPos={choosePos}
           speed={speed}
           onSpeed={chooseSpeed}
           onClose={closeMenu}
@@ -701,38 +712,24 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
 // ---------------------------------------------------------------- sous-composants
 
 /**
- * VF écrite sur l'image, en « roll-up » : la nouvelle ligne arrive par le
- * bas, la précédente remonte et s'estompe au lieu de disparaître d'un coup.
- * Seul composant re-rendu au changement de ligne.
+ * VF écrite sur l'image : UNE seule ligne à la fois (la plus récente),
+ * compacte, sur un fond léger, pour masquer le moins possible de l'image.
+ * Elle entre par un léger fondu. Seul composant re-rendu au changement de
+ * ligne.
  */
-const SubtitleOverlay = memo(function SubtitleOverlay({ subs, lifted }: { subs: Subtitle[]; lifted: boolean }) {
+const SubtitleOverlay = memo(function SubtitleOverlay({ subs, lifted, pos }: { subs: Subtitle[]; lifted: boolean; pos: SubPos }) {
   const lines = useScreenLines();
   const noSpoil = useNoSpoil();
-  if (!lines.length) return null;
+  const s = lines.length ? subs[lines[lines.length - 1]] : undefined;
+  if (!s) return null;
+  const text = noSpoil ? stripScores(s.text) : s.text;
+  const banner = s.kind === 'score' || s.kind === 'banniere';
+  const where = pos === 'haut' ? 'top-[5%]' : lifted ? 'bottom-[84px] sm:bottom-[96px]' : 'bottom-[5%]';
   return (
-    <div
-      className={`pointer-events-none absolute inset-x-0 z-[5] flex flex-col items-center gap-1.5 px-[4%] transition-[bottom] duration-300 ${
-        lifted ? 'bottom-[88px] sm:bottom-[100px]' : 'bottom-[6%]'
-      }`}
-      aria-live="polite"
-    >
-      {lines.map((i, pos) => {
-        const s = subs[i];
-        if (!s) return null;
-        const text = noSpoil ? stripScores(s.text) : s.text;
-        const banner = s.kind === 'score' || s.kind === 'banniere';
-        const accent = s.speaker ? teamInfo(s.speaker).accent : null;
-        const older = pos < lines.length - 1;
-        return (
-          <div
-            key={s.seq}
-            className={`subtitle-box subtitle-roll ${older ? 'subtitle-older' : ''} ${banner ? 'subtitle-banner' : ''}`}
-          >
-            {accent && !banner && <span className="subtitle-team" style={{ background: accent }} aria-hidden="true" />}
-            <span className="subtitle-overlay subtitle-text">{text}</span>
-          </div>
-        );
-      })}
+    <div className={`pointer-events-none absolute inset-x-0 z-[5] flex justify-center px-[6%] transition-[bottom] duration-300 ${where}`} aria-live="polite">
+      <div key={s.seq} className={`subtitle-box subtitle-roll ${banner ? 'subtitle-banner' : ''}`}>
+        <span className="subtitle-overlay subtitle-text">{text}</span>
+      </div>
     </div>
   );
 });
@@ -896,6 +893,8 @@ function SettingsMenu({
   onQuality,
   subSize,
   onSubSize,
+  subPos,
+  onSubPos,
   speed,
   onSpeed,
   onClose,
@@ -906,6 +905,8 @@ function SettingsMenu({
   onQuality: (q: Quality) => void;
   subSize: SubSize;
   onSubSize: (s: SubSize) => void;
+  subPos: SubPos;
+  onSubPos: (p: SubPos) => void;
   speed: number;
   onSpeed: (s: number) => void;
   onClose: () => void;
@@ -945,6 +946,14 @@ function SettingsMenu({
             {s}
           </Seg>
         ))}
+      </MenuGroup>
+      <MenuGroup title="Position de la VF">
+        <Seg active={subPos === 'bas'} onClick={() => onSubPos('bas')}>
+          En bas
+        </Seg>
+        <Seg active={subPos === 'haut'} onClick={() => onSubPos('haut')}>
+          En haut
+        </Seg>
       </MenuGroup>
       <MenuGroup title="Vitesse">
         {SPEEDS.map((s) => (

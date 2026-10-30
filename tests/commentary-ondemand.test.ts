@@ -136,7 +136,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __setCommentaryRunnerForTests(null);
-  for (const k of ['DATA_DIR', 'TRANSCRIBE_URL', 'TRANSLATE_URL', 'COMMENTARY_CHUNK_SEC', 'COMMENTARY_VIEWER_IDLE_MS']) delete process.env[k];
+  for (const k of ['DATA_DIR', 'TRANSCRIBE_URL', 'TRANSLATE_URL', 'COMMENTARY_CHUNK_SEC', 'COMMENTARY_VIEWER_IDLE_MS', 'COMMENTARY_MAX_LEAD_SEC', 'COMMENTARY_LEAD_POLL_MS']) delete process.env[k];
   process.env.COMMENTARY_NIGHT_WINDOW = 'always';
   fs.rmSync(dataDir, { recursive: true, force: true });
   vi.restoreAllMocks();
@@ -238,6 +238,23 @@ describe('runCommentary à la demande', () => {
     expect(db.getCommentaryTrack(A)?.complete).toBe(1);
   });
 
+  it('spectateur présent : pas plus de COMMENTARY_MAX_LEAD_SEC d’avance sur la lecture (la traduction attend)', async () => {
+    process.env.COMMENTARY_MAX_LEAD_SEC = '500';
+    process.env.COMMENTARY_LEAD_POLL_MS = '5';
+    let checks = 0;
+    const { deps, calls } = fakeDeps();
+    const res = await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, {
+      target: () => 0,
+      watching: () => true,
+      // Le spectateur reste 20 vérifications sans avancer, puis s'en va.
+      keepGoing: () => ++checks < 20,
+    });
+    delete process.env.COMMENTARY_MAX_LEAD_SEC;
+    delete process.env.COMMENTARY_LEAD_POLL_MS;
+    expect(res).toMatchObject({ paused: true });
+    expect(calls.transcribe).toEqual([0]); // 600 s d'avance ≥ 500 : rien de plus
+  });
+
   it('reprise après panne : tronçons publiés gardés, transcription en cache réutilisée', async () => {
     const first = fakeDeps({ failTranscribeAt: 2 });
     await expect(runCommentary({ matchId: A, force: false }, () => {}, signal(), first.deps)).rejects.toBeInstanceOf(ServiceError);
@@ -300,6 +317,7 @@ describe('file : spectateur et nuit', () => {
 
   it('travail de fond dans la fenêtre : tout le match ; un spectateur prend le relais même hors fenêtre', async () => {
     process.env.COMMENTARY_NIGHT_WINDOW = 'always';
+    process.env.COMMENTARY_MAX_LEAD_SEC = '99999'; // pas de plafond d'avance ici
     const { deps, calls } = fakeDeps();
     viaQueue(deps);
     touchViewer(A, 0);
