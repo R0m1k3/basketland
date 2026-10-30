@@ -179,6 +179,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.DUB_FEMALE_F0;
   __setDubRunnerForTests(null);
   __setCommentaryRunnerForTests(null);
   __setDubEngineForTests(null);
@@ -274,6 +275,13 @@ describe('locuteurs et voix', () => {
     expect(st.speakers[3].role).toBe('B1');
   });
 
+  it('par défaut, la hauteur de voix ne décide pas : un commentateur aigu (s’emballe) garde A', () => {
+    const a = emptySpeakers();
+    assignSpeakers(a, [3, 3], [VEC.W, VEC.X], [240, 110], { threshold: 0.6 });
+    assignRoles(a, ['A', 'B4', 'B1', 'F']); // seuil par défaut : désactivé
+    expect(a.speakers.map((s) => s.role)).toEqual(['A', 'B4']);
+  });
+
   it('voix aiguë : F si le moteur l’a, sinon B1 ; un premier locuteur seul prend A, le suivant B4', () => {
     const a = emptySpeakers();
     assignSpeakers(a, [3, 3], [VEC.W, VEC.X], [214, 110], { threshold: 0.6 });
@@ -302,6 +310,8 @@ describe('locuteurs et voix', () => {
 
 describe('runDub', () => {
   it('double les tronçons traduits : locuteurs → voix, emphase, répliques non traduites sautées, publication', async () => {
+    // Détection des voix de femme par la hauteur : désactivée par défaut, activée ici.
+    process.env.DUB_FEMALE_F0 = '165';
     publish(M, 0, CHUNK0);
     publish(M, 1, CHUNK1);
     const { deps, calls } = fake({ voices: ['A', 'B4', 'B1', 'F'] });

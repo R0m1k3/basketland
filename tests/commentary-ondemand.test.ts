@@ -188,6 +188,34 @@ describe('fenêtre de nuit (heures de Paris)', () => {
 // ------------------------------------------------------------------ travail complet
 
 describe('runCommentary à la demande', () => {
+  it('donne l’effectif du match à Whisper (« hotwords »)', async () => {
+    db.replaceStats(
+      A,
+      [],
+      ['Derrick White', 'Mike Conley', 'Derrick White'].map((name, i) => ({
+        match_id: A,
+        team_abbr: i ? 'MIN' : 'BOS',
+        player_id: String(i),
+        player_name: name,
+        position: 'G',
+        jersey: String(i),
+        starter: 1,
+        stats: {},
+      })),
+      [],
+    );
+    const { deps } = fakeDeps();
+    const seen: (string | undefined)[] = [];
+    const base = deps.openTranscriber!;
+    deps.openTranscriber = async (cfg, sig) => {
+      const t = await base(cfg, sig);
+      return { transcribe: (file, prompt, s2, hotwords) => (seen.push(hotwords), t.transcribe(file, prompt, s2)), close: t.close };
+    };
+    await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, ctl(() => 0));
+    expect(seen.length).toBeGreaterThan(0);
+    expect(new Set(seen)).toEqual(new Set(['Derrick White, Mike Conley']));
+  });
+
   it('jusqu’au bout depuis le début : tronçon par tronçon, piste complète, modèles déchargés', async () => {
     const { deps, calls } = fakeDeps();
     const events: CommentaryProgress[] = [];

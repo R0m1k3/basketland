@@ -161,8 +161,13 @@ function envNum(name: string, def: number): number {
 
 /** Similarité cosinus minimale pour rattacher une réplique à un locuteur connu. */
 export const speakerSimThreshold = () => envNum('DUB_SPEAKER_SIM', 0.6);
-/** Hauteur de voix médiane (Hz) à partir de laquelle un locuteur prend la voix féminine. */
-export const femaleF0Hz = () => envNum('DUB_FEMALE_F0', 165);
+/**
+ * Hauteur de voix médiane (Hz) à partir de laquelle un locuteur prend la voix
+ * féminine. DÉSACTIVÉ par défaut : sur le son diffusé, un commentateur qui
+ * s'emballe parle à 230-250 Hz, autant qu'une voix de femme (mesuré) — il
+ * prendrait la voix féminine. À régler (`DUB_FEMALE_F0`) seulement si besoin.
+ */
+export const femaleF0Hz = () => envNum('DUB_FEMALE_F0', Number.POSITIVE_INFINITY);
 /** Une réplique plus courte (s) ne crée jamais de nouveau locuteur (empreinte trop peu fiable). */
 const minNewSpeakerSec = () => envNum('DUB_MIN_NEW_SPEAKER_SEC', 1);
 

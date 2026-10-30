@@ -197,7 +197,8 @@ export class WhisperSession {
     }
   }
 
-  transcribe(file: string, prompt: string | undefined, signal?: AbortSignal): Promise<Transcript> {
+  /** `hotwords` : noms à privilégier (effectif du match), séparés par des virgules. */
+  transcribe(file: string, prompt: string | undefined, signal?: AbortSignal, hotwords?: string): Promise<Transcript> {
     if (this.closed) return Promise.reject(new Error('session Whisper fermée'));
     const id = this.nextId++;
     return new Promise<Transcript>((resolve, reject) => {
@@ -218,7 +219,7 @@ export class WhisperSession {
           reject(e);
         },
       });
-      this.child.stdin?.write(`${JSON.stringify({ id, file, language: 'en', prompt })}\n`);
+      this.child.stdin?.write(`${JSON.stringify({ id, file, language: 'en', prompt, ...(hotwords ? { hotwords } : {}) })}\n`);
     });
   }
 

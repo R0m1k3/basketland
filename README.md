@@ -405,6 +405,8 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSCRIBE_URL` | — (Whisper embarqué) | Serveur de transcription EXTERNE compatible OpenAI (speaches), ex. `http://192.168.1.16:8000/v1`. Vide : Whisper embarqué dans le conteneur. |
 | `TRANSCRIBE_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | Modèle Whisper (embarqué ou speaches). |
 | `WHISPER_PROMPT` | — | `1` : donne à Whisper les équipes et les effectifs. Désactivé par défaut : mesuré, cela corrige quelques noms mais produit des segments de 30 s. |
+| `WHISPER_HOTWORDS` | activé | Donne l'effectif du match à Whisper embarqué (`hotwords`) : banc d'essai sur 11 min de vrais commentaires, noms justes 61 % → 79 % et WER 8,0 → 6,0 % (avec la correction par l'effectif : 85 % et 5,5 %). Les sous-titres étant recoupés sur les mots, les segments plus longs ne gênent pas. `0` désactive. |
+| `WHISPER_COMPUTE_TYPE` | auto | Précision de Whisper. Auto : `int8_float16` sur carte NVIDIA (~1,2-1,5 Go de VRAM au lieu de ~2-2,5 Go), `int8` sur processeur. |
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
@@ -505,6 +507,40 @@ lent sur un processeur occupé) : bon pour un essai, pas pour un match entier. L
 ajoute ≈ 2,6 Go compressés à l'image ; cuBLAS et cuDNN sont partagés avec
 Whisper.
 
+**Déroulement** (`src/lib/dub.ts`) : un match est doublé **tronçon par
+tronçon** dès que ses sous-titres français existent (piste en cours ou
+complète), dans une file à part, un match à la fois. Pour chaque tronçon :
+l'audio est réextrait, chaque réplique reçoit son locuteur (empreintes ECAPA
+regroupées sur tout le match, seuil `DUB_SPEAKER_SIM`), puis sa voix — par
+temps de parole : le 1er locuteur prend **A**, le 2e **B4**, les suivants
+**B1** ; une voix attribuée ne change plus de tout le match. Chaque réplique
+est dite (« ! » ajouté sur les moments forts : l'intonation suit la
+ponctuation), accélérée si elle déborde de sa place (×1,35 au plus, sinon la
+suivante est repoussée : deux voix ne parlent jamais en même temps), puis le
+tronçon est monté en AAC (`/data/dub/<match>/chunk-N.m4a`). Le doublage **ne
+tourne jamais en même temps qu'une traduction ou une analyse** (la carte
+graphique est partagée) : il s'arrête à la réplique suivante et reprend
+après. Comme la traduction, il s'efface pendant la lecture d'un autre match,
+suit la « Traduction automatique » et `COMMENTARY_NIGHT_WINDOW`, et le match
+regardé passe devant (`GET /api/matches/[id]/dub` : manifeste des tronçons ;
+`/dub/<n>` : l'audio). Un match vu pour la première fois est doublé une fois
+sa traduction terminée ; un replay traduit en tâche de fond est souvent déjà
+doublé quand on l'ouvre.
+
+**Dans le lecteur** : menu ⚙ → « Voix » : « Originale (VO) » / « VF
+doublée » (mémorisé). La voix française est calée sur l'image (saut, pause,
+gel, reprise) ; pendant qu'elle parle, le son d'origine est baissé à 20 % —
+la foule reste audible entre les phrases. Les passages pas encore doublés
+restent en VO (« bientôt disponible ici »). À une vitesse autre que ×1, la
+VF doublée se tait (elle serait déformée). Les sous-titres restent
+indépendants.
+
+**Limites connues** : la répartition des répliques entre commentateurs est
+juste pour ~85-90 % des lignes sur l'extrait testé ; la hauteur de voix ne
+sert pas à détecter une voix de femme par défaut (un commentateur qui
+s'emballe parle aussi aigu), d'où `DUB_FEMALE_F0` désactivé ; certains noms
+(Shai, Jokic) gagneraient à un lexique de prononciation.
+
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `DUB_DISABLED` | — | `1` désactive le doublage. |
@@ -514,6 +550,10 @@ Whisper.
 | `TTS_PYTHON` | `/opt/tts/bin/python` | Python du moteur de voix. Hors Docker : `python3`, avec torch 2.8, `qwen-tts==0.1.1`, `speechbrain==1.1.2` et `soundfile` (liste complète : `scripts/voice-requirements.txt`). |
 | `TTS_LOAD_TIMEOUT_MS` | `600000` (10 min) | Délai de démarrage du moteur **sans nouvelles** de sa part : chaque étape du téléchargement du modèle le relance. |
 | `TTS_SYNTH_TIMEOUT_SEC` | auto | Délai max d'une prise (s). Auto : 20 s + 3 × la durée plausible maximale de la ligne sur GPU, 60 s + 60 × sur processeur. |
+| `DUB_SPEAKER_SIM` | `0.6` | Similarité (cosinus) minimale pour rattacher une réplique à un locuteur déjà connu ; en dessous, nouveau locuteur. |
+| `DUB_MIN_NEW_SPEAKER_SEC` | `1` | Une réplique plus courte ne crée jamais de nouveau locuteur (empreinte peu fiable). |
+| `DUB_FEMALE_F0` | — (désactivé) | Hauteur de voix médiane (Hz) à partir de laquelle un locuteur prend la voix féminine `F`. |
+| `DUB_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail de doublage. |
 
 ## Développement local
 

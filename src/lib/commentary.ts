@@ -799,7 +799,8 @@ export interface CommentaryDeps {
 }
 
 export interface Transcriber {
-  transcribe(file: string, prompt: string | undefined, signal: AbortSignal): Promise<Transcript>;
+  /** `hotwords` : effectif du match (Whisper embarqué seulement ; ignoré par un serveur externe). */
+  transcribe(file: string, prompt: string | undefined, signal: AbortSignal, hotwords?: string): Promise<Transcript>;
   close(): Promise<void>;
 }
 
@@ -820,7 +821,7 @@ const defaultDeps: CommentaryDeps = {
     } catch (e) {
       throw asServiceError(e, 'transcription');
     }
-    return { transcribe: (file, prompt, signal) => s.transcribe(file, prompt, signal), close: () => s.close() };
+    return { transcribe: (file, prompt, signal, hotwords) => s.transcribe(file, prompt, signal, hotwords), close: () => s.close() };
   },
   openTranslator: async (cfg, signal, onProgress) => {
     if (cfg.translateMode !== 'embedded') return { close: async () => {} };
@@ -1018,7 +1019,11 @@ export async function runCommentary(
         ])
       : undefined;
   // Effectif du match (feuille de stats) : corrige les noms écorchés par Whisper.
-  const roster = rosterIndex(db.getPlayerStats(job.matchId).map((p) => p.player_name));
+  const rosterNamesList = [...new Set(db.getPlayerStats(job.matchId).map((p) => p.player_name).filter(Boolean))];
+  const roster = rosterIndex(rosterNamesList);
+  // Et le donne à Whisper (« hotwords ») : noms bien mieux reconnus, sans les
+  // segments de 30 s du prompt. Les sous-titres sont recoupés sur les mots.
+  const hotwords = process.env.WHISPER_HOTWORDS === '0' || !rosterNamesList.length ? undefined : rosterNamesList.join(', ');
   const track: db.CommentaryTrackMeta = {
     ok_id: okId,
     transcribe_model: cfg.transcribeModel,
@@ -1120,7 +1125,7 @@ export async function runCommentary(
       asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
     }
     report('transcription', done.size);
-    let transcript = await asr.transcribe(audio, prompt, signal);
+    let transcript = await asr.transcribe(audio, prompt, signal, hotwords);
     // Intensité de la voix mot par mot, tant que l'audio est là.
     const env = deps.envelope ? await deps.envelope(audio, signal).catch(() => null) : null;
     checkAborted(signal);
