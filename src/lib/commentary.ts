@@ -334,6 +334,13 @@ interface Job {
    * passe devant un travail de fond, quitte à l'interrompre.
    */
   viewer?: boolean;
+  /**
+   * Demande EXPLICITE (clic « Traduire ce match », « Réessayer », « Relancer
+   * la traduction ») : le match est traduit jusqu'au bout, même si plus
+   * personne ne regarde la fiche, même hors fenêtre ou traduction automatique
+   * désactivée. Il cède quand même la place à la lecture d'un AUTRE match.
+   */
+  explicit?: boolean;
 }
 
 export interface CommentaryProgress {
@@ -366,7 +373,8 @@ function controlFor(job: Job): CommentaryControl {
   return {
     // Un travail de fond cède la place dès que quelqu'un regarde un AUTRE
     // match : la lecture passe avant (il reprend quand la lecture s'arrête).
-    keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow() && !someoneWatching(job.matchId)),
+    keepGoing: () =>
+      viewerActive(job.matchId) || ((job.explicit || (!job.viewer && inNightWindow())) && !someoneWatching(job.matchId)),
     target: () => viewerPosition(job.matchId) ?? 0,
     watching: () => viewerActive(job.matchId),
   };
@@ -499,7 +507,10 @@ export interface CommentaryEnqueueResult {
  * Met un match en file. `priority` : en tête (demande de l'utilisateur) ;
  * `force` : refait même une piste déjà prête.
  */
-export function enqueueCommentary(matchId: number, opts: { priority?: boolean; force?: boolean } = {}): CommentaryEnqueueResult {
+export function enqueueCommentary(
+  matchId: number,
+  opts: { priority?: boolean; force?: boolean; explicit?: boolean } = {},
+): CommentaryEnqueueResult {
   const disabled = commentaryDisabledReason();
   if (disabled) return { queued: false, started: false, message: `Traduction des commentaires inactive : ${disabled}` };
   const unavailable = unavailableReason(matchId);
@@ -511,6 +522,7 @@ export function enqueueCommentary(matchId: number, opts: { priority?: boolean; f
     matchId,
     force: !!opts.force || (existing >= 0 && st.queue[existing].force),
     viewer: !!opts.priority || (existing >= 0 && !!st.queue[existing].viewer),
+    explicit: !!opts.explicit || (existing >= 0 && !!st.queue[existing].explicit),
   };
   if (existing >= 0) {
     if (opts.priority) {
@@ -539,16 +551,17 @@ export function enqueueCommentary(matchId: number, opts: { priority?: boolean; f
  */
 function preemptBackground(): void {
   const r = st.running;
-  if (!r || r.job.viewer || r.preempted) return;
+  // Un travail explicite dont la fiche n'est plus regardée cède aussi la place.
+  if (!r || r.preempted || (r.job.viewer && !(r.job.explicit && !viewerActive(r.job.matchId)))) return;
   r.preempted = true;
   console.log(`[commentaires] match ${r.job.matchId} mis en pause : le match ${st.queue[0]?.matchId} est regardé, il passe en premier`);
   r.abort();
 }
 
 /** Travail de fond hors de la fenêtre autorisée (et personne ne regarde ce match) : abandonné. */
-const outsideWindow = (job: Job) => !job.viewer && !viewerActive(job.matchId) && !inNightWindow();
-/** Travail de fond qui doit attendre : quelqu'un regarde un autre match. */
-const mustWait = (job: Job) => !job.viewer && !viewerActive(job.matchId) && someoneWatching(job.matchId);
+const outsideWindow = (job: Job) => !job.viewer && !job.explicit && !viewerActive(job.matchId) && !inNightWindow();
+/** Travail de fond (ou explicite, fiche fermée) qui doit attendre : quelqu'un regarde un autre match. */
+const mustWait = (job: Job) => (!job.viewer || !!job.explicit) && !viewerActive(job.matchId) && someoneWatching(job.matchId);
 
 let repumpTimer: NodeJS.Timeout | undefined;
 
@@ -625,7 +638,7 @@ function start(job: Job): void {
         } catch {
           /* journal facultatif */
         }
-        if (!job.viewer && inNightWindow() && someoneWatching(job.matchId)) {
+        if ((job.explicit || (!job.viewer && inNightWindow())) && someoneWatching(job.matchId)) {
           if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.push({ ...job });
           console.log(`[commentaires] match ${job.matchId} en pause : une vidéo est regardée, la traduction reprendra après`);
         } else console.log(`[commentaires] match ${job.matchId} ${res.reason}`);

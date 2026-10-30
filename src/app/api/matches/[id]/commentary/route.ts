@@ -22,7 +22,8 @@ export async function GET(_req: Request, ctx: RouteCtx<{ id: string }>) {
  *   (réponse `autoTranslate: false` : la fiche montre « Traduire ce match ») ;
  * - { action: 'start', manual: true } → clic « Traduire ce match » (ou
  *   « Réessayer ») : toujours mis en tête de file, backoff ignoré, piste
- *   prête conservée ;
+ *   prête conservée, traduit jusqu'au bout même si l'on quitte la fiche
+ *   (en pause seulement pendant la lecture d'un autre match) ;
  * - { action: 'retry' } → « Relancer la traduction », ADMINISTRATEURS
  *   seulement : refait la piste même prête (l'ancienne est écrasée).
  * Mêmes garde-fous que la route sync : origine contrôlée, Content-Type JSON
@@ -48,14 +49,15 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
     const admin = requireAdmin(req);
     if (admin instanceof Response) return admin;
     touchViewer(id);
-    const r = enqueueCommentary(id, { priority: true, force: true });
+    const r = enqueueCommentary(id, { priority: true, force: true, explicit: true });
     return json({ commentary: commentaryStatus(id), message: r.message }, { status: r.queued ? 202 : 200 });
   }
 
   touchViewer(id); // demandé depuis la fiche : quelqu'un regarde
   if (body.manual === true) {
-    // Clic explicite : mis en file même pendant le délai d'attente après un échec.
-    const r = enqueueCommentary(id, { priority: true });
+    // Clic explicite : mis en file même pendant le délai d'attente après un
+    // échec, et traduit jusqu'au bout même si l'on quitte la fiche.
+    const r = enqueueCommentary(id, { priority: true, explicit: true });
     return json({ commentary: commentaryStatus(id), message: r.message }, { status: r.queued ? 202 : 200 });
   }
   if (!autoTranslateEnabled()) {

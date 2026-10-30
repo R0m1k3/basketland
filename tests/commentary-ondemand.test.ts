@@ -336,6 +336,35 @@ describe('file : spectateur et nuit', () => {
     expect(commentaryStatus(A).status).toBe('ready');
   });
 
+  it('demande explicite (« Traduire ce match ») : tout le match même fiche fermée et hors fenêtre, en pause pendant la lecture d’un autre match', async () => {
+    process.env.COMMENTARY_NIGHT_WINDOW = 'off'; // ni fenêtre ni traduction automatique ne la limitent
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    process.env.COMMENTARY_REPUMP_MS = '20';
+    process.env.COMMENTARY_MAX_LEAD_SEC = '99999';
+    insertMatch(402000002);
+    let watched = false;
+    const { deps, calls } = fakeDeps({
+      afterChunk: (idx) => {
+        // Après le 1er tronçon, quelqu'un regarde un AUTRE match.
+        if (idx === 0 && !watched) {
+          watched = true;
+          touchViewer(402000002, 10);
+        }
+      },
+    });
+    viaQueue(deps);
+    enqueueCommentary(A, { priority: true, explicit: true }); // personne ne regarde la fiche de A
+    await vi.waitFor(() => expect(calls.transcribe).toEqual([0]));
+    // Cède la place à la lecture de l'autre match : remis en file, pas abandonné.
+    await vi.waitFor(() => expect(commentaryStatus(A).status).toBe('queued'));
+    // La lecture s'arrête : reprise et fin du match, sans spectateur sur A.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await __commentaryIdle();
+    vi.useRealTimers();
+    expect(calls.transcribe).toEqual([0, 1, 2]);
+    expect(commentaryStatus(A).status).toBe('ready');
+  });
+
   it('travail de fond hors de la fenêtre de nuit : pause immédiate, rien n’est fait', async () => {
     process.env.COMMENTARY_NIGHT_WINDOW = 'off';
     const { deps, calls } = fakeDeps();
