@@ -295,7 +295,9 @@ Le bandeau sous le lecteur indique l'avance des sous-titres sur la lecture
 
 **Affichage de la VF** : une ligne compacte, **en haut de l'image** par
 défaut (le bandeau du score, en bas, reste dégagé) ; taille (S à XL) et
-position (en haut / en bas) se règlent dans le menu ⚙ du lecteur. Les
+position (en haut / en bas) se règlent dans le menu ⚙ du lecteur, ou dans
+Paramètres → « Sous-titres » (mêmes réglages, propres au navigateur, avec
+« Réinitialiser la synchro »). Les
 sous-titres sont **courts et calés sur la voix** : coupés sur les
 respirations du commentateur, la ponctuation et les changements nets de ton
 (une exclamation a sa propre ligne), jamais au milieu d'un groupe de sens,
@@ -349,6 +351,12 @@ traitement** (traduction ou analyse, avancement, « en pause pendant la
 lecture ») et la file d'attente, ainsi que l'état de chaque replay : « VF »
 (prête), « VF en cours », « VF 45 % » (en partie traduit).
 
+**Traduction automatique** (Paramètres, administrateurs ; activée par
+défaut) : désactivée, plus rien ne part tout seul — ni travail de fond (ceux
+déjà en file sont abandonnés), ni lancement à l'ouverture d'un match. La
+fiche affiche alors un bouton **« Traduire ce match »** (pour tout
+utilisateur connecté). Moins de charge pour le serveur.
+
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
 et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
 contexte) sont chargés ensemble : il faut une carte de 12 Go. Sur une carte
@@ -364,8 +372,11 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
   est remis en file pour être terminé.
 - **Échecs** : flux vidéo ou service local injoignable → nouvel essai
   automatique rapide (15 min → 6 h) ; autre échec → 1 h, 4 h, 16 h, 24 h puis
-  abandon tant que la vidéo ne change pas (`POST /api/matches/[id]/commentary`
-  avec `{"action":"retry"}` relance à la main). Une ligne que le LLM ne
+  abandon tant que la vidéo ne change pas (bouton « Réessayer » de la fiche,
+  `POST /api/matches/[id]/commentary` avec `{"action":"start","manual":true}`).
+  Un administrateur peut aussi **refaire** une piste, même terminée :
+  « Relancer la traduction » (`{"action":"retry"}`, 403 pour un simple
+  utilisateur). Une ligne que le LLM ne
   sait pas traduire reste en anglais (marquée `untranslated` en base) sans
   bloquer le match.
 - **Nouvelle vidéo** (autre identifiant ok.ru) ou **nouveau modèle de

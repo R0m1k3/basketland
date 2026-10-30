@@ -9,6 +9,8 @@ import { settingGet, settingSet } from './db';
 export const SETTING_KEYS = {
   openaiApiKey: 'openai_api_key',
   openaiModel: 'openai_model',
+  /** « Traduction automatique » : '1' (activée) ou '0' (désactivée). */
+  autoTranslate: 'auto_translate',
 } as const;
 
 /** Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire). */
@@ -21,6 +23,24 @@ export function getSetting(key: string): string | null {
 /** Écrit un paramètre ; `null` le supprime. */
 export function setSetting(key: string, value: string | null): void {
   settingSet(key, value);
+}
+
+/**
+ * « Traduction automatique » (réglage administrateur, ACTIVÉE par défaut) :
+ * - activée : chaque replay est traduit (et analysé) dès qu'il est
+ *   disponible, en pause pendant qu'une vidéo est regardée ;
+ * - désactivée : rien ne part tout seul (ni jobs du cron, ni lancement à
+ *   l'ouverture de la fiche, ni replay tout juste trouvé) et les travaux de
+ *   fond déjà en file sont abandonnés (`inNightWindow`, nightWindow.ts) ;
+ *   un match n'est traduit que sur un clic « Traduire ce match ».
+ * Seule la valeur '0' désactive : clé absente ou autre valeur = activée.
+ */
+export function autoTranslateEnabled(): boolean {
+  return getSetting(SETTING_KEYS.autoTranslate) !== '0';
+}
+
+export function setAutoTranslate(enabled: boolean): void {
+  setSetting(SETTING_KEYS.autoTranslate, enabled ? '1' : '0');
 }
 
 /**
