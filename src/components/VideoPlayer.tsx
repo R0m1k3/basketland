@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type HlsType from 'hls.js';
 import type { ErrorData, HlsConfig } from 'hls.js';
 import TeamLogo from '@/components/ui/TeamLogo';
-import { usePlayback, useScreenLines, type Subtitle } from '@/components/match/playback';
+import { DEFAULT_SUB_DELAY, usePlayback, useScreenLines, type Subtitle } from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
@@ -172,6 +172,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   const [vfOn, setVfOn] = useState(true);
   const [subSize, setSubSize] = useState<SubSize>('M');
   const [subPos, setSubPos] = useState<SubPos>('bas');
+  const [subDelay, setSubDelay] = useState(DEFAULT_SUB_DELAY);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
 
   const posKey = src ? `bl:pos:${src}` : null;
@@ -181,6 +182,8 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     const s = readPref('bl:subsize');
     if (s === 'S' || s === 'M' || s === 'L' || s === 'XL') setSubSize(s);
     if (readPref('bl:subpos') === 'haut') setSubPos('haut');
+    const d = Number(readPref('bl:subdelay'));
+    if (readPref('bl:subdelay') !== null && Number.isFinite(d)) setSubDelay(Math.max(-5, Math.min(10, d)));
     if (readPref('bl:vf') === '0') setVfOn(false);
     const q = readPref('bl:quality');
     if (q && q !== 'auto' && Number.isFinite(Number(q))) setQuality(Number(q));
@@ -200,6 +203,11 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   useEffect(() => {
     playback.setSubtitles(subtitles);
   }, [playback, subtitles]);
+
+  // Retard d'affichage de la VF (réglage « Synchro de la VF »).
+  useEffect(() => {
+    playback.setSubtitleDelay(subDelay);
+  }, [playback, subDelay]);
 
   /**
    * Chargement du flux. Dépendances : la source (et le bouton « Réessayer »)
@@ -462,6 +470,12 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     writePref('bl:subpos', p);
   }, []);
 
+  const chooseDelay = useCallback((d: number) => {
+    const v = Math.round(Math.max(-5, Math.min(10, d)) * 10) / 10;
+    setSubDelay(v);
+    writePref('bl:subdelay', String(v));
+  }, []);
+
   const chooseSpeed = useCallback((s: number) => {
     setSpeed(s);
     if (videoRef.current) videoRef.current.playbackRate = s;
@@ -694,6 +708,8 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           onSubSize={chooseSize}
           subPos={subPos}
           onSubPos={choosePos}
+          subDelay={subDelay}
+          onSubDelay={chooseDelay}
           speed={speed}
           onSpeed={chooseSpeed}
           onClose={closeMenu}
@@ -895,6 +911,8 @@ function SettingsMenu({
   onSubSize,
   subPos,
   onSubPos,
+  subDelay,
+  onSubDelay,
   speed,
   onSpeed,
   onClose,
@@ -907,6 +925,8 @@ function SettingsMenu({
   onSubSize: (s: SubSize) => void;
   subPos: SubPos;
   onSubPos: (p: SubPos) => void;
+  subDelay: number;
+  onSubDelay: (d: number) => void;
   speed: number;
   onSpeed: (s: number) => void;
   onClose: () => void;
@@ -953,6 +973,17 @@ function SettingsMenu({
         </Seg>
         <Seg active={subPos === 'haut'} onClick={() => onSubPos('haut')}>
           En haut
+        </Seg>
+      </MenuGroup>
+      <MenuGroup title="Synchro de la VF" hint={subDelay === 0 ? 'calée' : `${subDelay > 0 ? '+' : ''}${String(subDelay).replace('.', ',')} s`}>
+        <Seg active={false} onClick={() => onSubDelay(subDelay - 0.5)}>
+          Plus tôt
+        </Seg>
+        <Seg active={false} onClick={() => onSubDelay(subDelay + 0.5)}>
+          Plus tard
+        </Seg>
+        <Seg active={subDelay === DEFAULT_SUB_DELAY} onClick={() => onSubDelay(DEFAULT_SUB_DELAY)}>
+          Défaut
         </Seg>
       </MenuGroup>
       <MenuGroup title="Vitesse">

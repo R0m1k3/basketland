@@ -54,6 +54,7 @@ import { addDays } from './time';
 import { OllamaSession, WhisperSession } from './localAi';
 import { inNightWindow } from './nightWindow';
 import { lowerPriority } from './procPriority';
+import { fixRosterNames, rosterIndex } from './rosterNames';
 
 export { inNightWindow };
 
@@ -977,6 +978,8 @@ export async function runCommentary(
           ),
         ])
       : undefined;
+  // Effectif du match (feuille de stats) : corrige les noms écorchés par Whisper.
+  const roster = rosterIndex(db.getPlayerStats(job.matchId).map((p) => p.player_name));
   const track: db.CommentaryTrackMeta = {
     ok_id: okId,
     transcribe_model: cfg.transcribeModel,
@@ -1111,7 +1114,7 @@ export async function runCommentary(
           todo.map((c) => ({ i: c.seq, en: c.text })),
           context,
           cfg,
-          { signal },
+          { signal, roster },
         );
         for (const r of res) {
           const c = todo.find((x) => x.seq === r.i);
@@ -1159,7 +1162,10 @@ export async function runCommentary(
         if (!fs.existsSync(file) && !fs.existsSync(chunkJson(dir, next))) prefetched.set(next.index, extract(next, file));
       }
       const transcript = await transcribeChunk(plan);
-      await translateAndPublish(plan, chunkCues(plan, transcript, prompt));
+      await translateAndPublish(
+        plan,
+        chunkCues(plan, transcript, prompt).map((c) => ({ ...c, text: fixRosterNames(c.text, roster) })),
+      );
     }
   } catch (e) {
     if (e instanceof StreamUnavailable) return networkOutcome(e.message, job.matchId);

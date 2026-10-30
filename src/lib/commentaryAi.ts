@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
 import { embeddedOllamaAvailable, embeddedOllamaUrl, embeddedWhisperAvailable } from './localAi';
 import { getSetting, SETTING_KEYS } from './settings';
+import { nameRendered, type RosterIndex } from './rosterNames';
 
 // ------------------------------------------------------------------ configuration
 
@@ -294,7 +295,7 @@ export const TRANSLATE_SYSTEM_PROMPT = `Tu traduis en sous-titres français les 
 
 Règles :
 1. Écris un français parlé naturel, comme un commentateur de basket français à la télé (beIN Sports, Canal+), pas une traduction mot à mot. Les commentateurs se tutoient entre eux.
-2. Garde tous les noms de joueurs, d'entraîneurs, d'équipes et de salles exactement comme écrits. Ne traduis pas les noms d'équipes (Celtics, Knicks, Warriors…).
+2. Noms propres : ne traduis pas les noms d'équipes (Celtics, Knicks, Warriors…). La transcription écorche souvent les noms de joueurs : si un nom ressemble (par le son ou l'orthographe) à un joueur de la liste « joueurs », écris-le avec l'orthographe exacte de la liste (« Kata » → « Queta », « Edie » → « Edey »). Sinon, garde le nom tel qu'il est écrit.
 3. Vocabulaire basket français :
    - three / trey / from downtown / from deep / splash → « à trois points », « derrière l'arc », « de loin » ;
    - and-one → « panier plus la faute » (ou « and one ») ; free throws → « lancers francs » ;
@@ -334,6 +335,8 @@ export interface TranslateLine {
 }
 
 export interface TranslateContext {
+  /** Effectif du match : orthographe exacte des joueurs (donnée au LLM, et tolérée par le contrôle des noms). */
+  roster?: RosterIndex;
   signal?: AbortSignal;
   timeoutMs?: number;
   /** Attente avant le nouvel essai après une erreur réseau ou 5xx (3 s). */
@@ -341,8 +344,9 @@ export interface TranslateContext {
 }
 
 /** Message utilisateur d'un lot (format du banc d'essai) : contexte à ne pas traduire, puis lignes. */
-export function buildUserMessage(lines: TranslateLine[], context: string[], model: string): string {
-  const payload = JSON.stringify({ context, lines: lines.map((l) => ({ i: l.i, en: l.en })) });
+export function buildUserMessage(lines: TranslateLine[], context: string[], model: string, roster?: RosterIndex): string {
+  const players = roster?.full.length ? { joueurs: roster.full } : {};
+  const payload = JSON.stringify({ ...players, context, lines: lines.map((l) => ({ i: l.i, en: l.en })) });
   return `Traduis ces lignes. Réponds uniquement avec le JSON demandé.\n${payload}${needsNoThink(model) ? '\n/no_think' : ''}`;
 }
 
@@ -441,12 +445,13 @@ export function anchors(en: string): { numbers: string[]; names: string[] } {
  * traduction décalée (le texte de la ligne voisine sous le mauvais id, avec
  * un JSON pourtant valide) échoue presque toujours à ce test.
  */
-export function consistentTranslation(en: string, fr: string): boolean {
+export function consistentTranslation(en: string, fr: string, roster?: RosterIndex): boolean {
   const { numbers, names } = anchors(en);
   const frDigits = new Set(fr.match(/\d+/g) ?? []);
   if (numbers.some((n) => !frDigits.has(n))) return false;
   const f = ` ${fold(fr)}`;
-  return names.every((n) => f.includes(` ${n}`) || f.includes(n));
+  // Un nom corrigé vers un joueur proche de l'effectif compte comme rendu.
+  return names.every((n) => nameRendered(n, f, roster));
 }
 
 /** Le modèle accepte-t-il un schéma JSON imposé sans décaler les lignes ? (mesuré : oui pour Gemma 4 E2B/E4B, non pour le 12B). */
@@ -565,7 +570,7 @@ async function chatAttempt(
   o: TranslateContext,
   temperature: number,
 ): Promise<{ got: Map<number, string>; missing: number; suspect: number }> {
-  const raw = parseTranslation(await chatCompletion(system, buildUserMessage(lines, context, cfg.translateModel), cfg, o, temperature));
+  const raw = parseTranslation(await chatCompletion(system, buildUserMessage(lines, context, cfg.translateModel, o.roster), cfg, o, temperature));
   // Ligne seule renvoyée sous un autre id : c'est bien elle.
   if (lines.length === 1 && raw.size === 1 && !raw.has(lines[0].i)) {
     const [[otherId, fr]] = [...raw.entries()];
@@ -578,7 +583,7 @@ async function chatAttempt(
     const fr = raw.get(l.i);
     if (!validTranslation(l.en, fr)) continue;
     got.set(l.i, fr);
-    if (!consistentTranslation(l.en, fr)) suspect++;
+    if (!consistentTranslation(l.en, fr, o.roster)) suspect++;
   }
   // Ids inventés : signe de lignes coupées ou décalées.
   const ids = new Set(lines.map((l) => l.i));
