@@ -499,8 +499,23 @@ async function openSegment(okId: string, key: string, s: string, ck: string): Pr
   throw new ProxyError(502, 'segment indisponible');
 }
 
+/**
+ * Diagnostic : un segment qui met plus de `SLOW_SEGMENT_MS` à arriver
+ * d'ok.ru est signalé dans les logs (au plus une ligne toutes les 20 s),
+ * avec son débit — pour distinguer un ok.ru lent d'un problème local.
+ */
+const SLOW_SEGMENT_MS = 4_000;
+let lastSlowLog = 0;
+function logSlowSegment(ck: string, bytes: number, ms: number): void {
+  if (ms < SLOW_SEGMENT_MS || Date.now() - lastSlowLog < 20_000) return;
+  lastSlowLog = Date.now();
+  const kbps = Math.round((bytes * 8) / ms);
+  console.log(`[vidéo] segment lent depuis ok.ru : ${Math.round(bytes / 1024)} Ko en ${(ms / 1000).toFixed(1)} s (${kbps} kb/s) — ${ck.split('|').slice(1).join(' ')}`);
+}
+
 /** Lit le corps amont dans le téléchargement partagé, puis le range au cache. */
 async function pump(dl: SharedDownload, body: ReadableStream<Uint8Array>, ck: string): Promise<void> {
+  const t0 = Date.now();
   const reader = body.getReader();
   try {
     for (;;) {
@@ -515,6 +530,7 @@ async function pump(dl: SharedDownload, body: ReadableStream<Uint8Array>, ck: st
     // trouve le segment en cache.
     segCache.set(ck, dl.bytes(), dl.received);
     dl.finish();
+    logSlowSegment(ck, dl.received, Date.now() - t0);
   } catch (e) {
     dl.finish(e);
   }

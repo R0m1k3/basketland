@@ -75,12 +75,10 @@ describe('API sous-titres = traduction des commentaires', () => {
     expect(d).toEqual({ match_id: ID, count: 0, subtitles: [], commentary: { status: 'none', reason: 'pas de replay disponible' } }); // …mais plus exposés
   });
 
-  it('ouvrir la fiche met le match en tête de file', async () => {
-    insertMatch(OTHER);
-    enqueueCommentary(OTHER); // occupe le « GPU »
-    const d = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
-    expect(d.commentary).toMatchObject({ status: 'queued', position: 1 });
-    expect(commentaryQueuePosition(ID)).toBe(1);
+  it('le GET ne lance rien : la fiche démarre la traduction elle-même, après le démarrage de la lecture', async () => {
+    const d = await (await getSubtitles(new Request(url('subtitles?t=42')), ctx())).json();
+    expect(d.commentary).toEqual({ status: 'none' });
+    expect(commentaryQueuePosition(ID)).toBeNull();
   });
 
   it('ready : cues traduites au format du contrat, export VTT', async () => {
@@ -115,6 +113,7 @@ describe('API sous-titres = traduction des commentaires', () => {
       db.publishCommentaryChunk(ID, meta, { idx: 1, keepFrom: 60, keepTo: Number.POSITIVE_INFINITY }, []);
       return { ok: true, reason: 'ok' };
     });
+    enqueueCommentary(ID, { priority: true }); // « start » envoyé par la fiche
     const d = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
     expect(d).toEqual({
       match_id: ID,
@@ -148,14 +147,14 @@ describe('API sous-titres = traduction des commentaires', () => {
     ]);
     const d = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
     expect(d.count).toBe(0);
-    expect(d.commentary).toEqual({ status: 'running', models: expect.any(Object) });
+    expect(d.commentary).toEqual({ status: 'none' });
   });
 
   it('piste d’une autre vidéo : plus servie, le match est refait', async () => {
     storeTrack('111222333');
     const d = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
     expect(d.count).toBe(0);
-    expect(d.commentary.status).toBe('running');
+    expect(d.commentary.status).toBe('none'); // refaite au prochain « start » de la fiche
     expect(await (await getVtt(new Request(url('subtitles.vtt')), ctx())).text()).toBe('WEBVTT\nNOTE BasketLand VF — Portland Trail Blazers @ Los Angeles Lakers\n');
   });
 });
@@ -197,14 +196,14 @@ describe('API POST /commentary', () => {
     expect(r.status).toBe(202);
     expect(await r.json()).toEqual({
       commentary: { status: 'queued', position: 1, models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL } },
-      message: 'Traduction en file (position 1)',
+      message: 'Traduction des commentaires lancée',
     });
 
     __setCommentaryRunnerForTests(() => new Promise(() => {}));
     storeTrack();
     const again = await post({ action: 'start' });
     expect(again.status).toBe(200);
-    expect((await again.json()).message).toBe('Traduction des commentaires déjà prête');
+    expect((await again.json()).message).toBe('Pas de lancement (ready)');
     const retry = await post({ action: 'retry' });
     expect(retry.status).toBe(202);
     expect((await retry.json()).commentary.status).toBe('running');

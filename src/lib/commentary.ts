@@ -33,7 +33,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as db from './db';
-import { analysisSources, backoffMs, MAX_AUTO_FAILURES, networkBackoffMs, pickAudioSource } from './analysis';
+import { analysisSources, analysisStatus, backoffMs, enqueueAnalysis, MAX_AUTO_FAILURES, networkBackoffMs, pickAudioSource } from './analysis';
 import { ffmpegAvailable } from './audio';
 import {
   commentaryConfig,
@@ -53,6 +53,7 @@ import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
 import { addDays } from './time';
 import { OllamaSession, WhisperSession } from './localAi';
 import { inNightWindow } from './nightWindow';
+import { lowerPriority } from './procPriority';
 
 export { inNightWindow };
 
@@ -171,6 +172,7 @@ export function extractAudioChunk(sourceUrl: string, start: number, length: numb
       ],
       { stdio: ['ignore', 'ignore', 'pipe'] },
     );
+    lowerPriority(ff);
     let err = '';
     const kill = () => ff.kill('SIGKILL');
     const timer = setTimeout(kill, o.timeoutMs ?? 20 * 60_000);
@@ -390,6 +392,7 @@ function controlFor(job: Job): CommentaryControl {
   return {
     keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow()),
     target: () => viewerPosition(job.matchId) ?? 0,
+    watching: () => viewerActive(job.matchId),
   };
 }
 
@@ -628,7 +631,17 @@ function start(job: Job): void {
         console.error('[commentaires] journalisation impossible :', (e as Error).message);
       }
       if (!res.ok) console.error(`[commentaires] match ${job.matchId} : ${res.reason}`);
-      else console.log(`[commentaires] match ${job.matchId} traduit en ${Math.max(1, Math.round((Date.now() - t0) / 60_000))} min : ${res.reason}`);
+      else {
+        console.log(`[commentaires] match ${job.matchId} traduit en ${Math.max(1, Math.round((Date.now() - t0) / 60_000))} min : ${res.reason}`);
+        // L'analyse vidéo (repères des quart-temps, « Revoir l'action ») ne
+        // tourne plus à l'ouverture de la fiche, pour laisser la lecture et la
+        // traduction démarrer vite : elle passe une fois la traduction finie.
+        try {
+          if (analysisStatus(job.matchId).status === 'none') enqueueAnalysis(job.matchId);
+        } catch {
+          /* analyse facultative */
+        }
+      }
     })
     .finally(() => {
       st.running = null;
@@ -732,7 +745,13 @@ export function __commentaryIdle(): Promise<void> {
 
 /** Dépendances externes d'un travail (remplaçables dans les tests). */
 export interface CommentaryDeps {
-  resolveStream: (okId: string) => Promise<Pick<OkStream, 'variants' | 'duration'>>;
+  /**
+   * Flux ok.ru du replay. `force` : nouvelle résolution (URL signée expirée).
+   * Sans `force`, le flux déjà résolu par le lecteur est réutilisé : le
+   * re-résoudre au démarrage changerait les URL sous les pieds du proxy
+   * vidéo en pleine lecture.
+   */
+  resolveStream: (okId: string, force?: boolean) => Promise<Pick<OkStream, 'variants' | 'duration'>>;
   extract: (sourceUrl: string, start: number, length: number, outFile: string, o: ExtractOptions) => Promise<void>;
   transcribe: (file: string, cfg: CommentaryConfig, o: { prompt?: string; signal?: AbortSignal }) => Promise<Transcript>;
   translate: (lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext) => Promise<TranslatedLine[]>;
@@ -753,7 +772,7 @@ export interface Transcriber {
 }
 
 const defaultDeps: CommentaryDeps = {
-  resolveStream: (okId) => resolveOkStream(okId, { force: true }),
+  resolveStream: (okId, force) => resolveOkStream(okId, { force: !!force }),
   extract: extractAudioChunk,
   transcribe: transcribeAudio,
   translate: translateBatch,
@@ -784,6 +803,8 @@ const defaultDeps: CommentaryDeps = {
       await s.close();
       throw asServiceError(e, 'traduction');
     }
+    // Modèle chargé en mémoire GPU dès maintenant, pendant que Whisper travaille.
+    await s.warm(cfg.translateModel, signal);
     return s;
   },
 };
@@ -881,9 +902,34 @@ class StreamUnavailable extends Error {}
 export interface CommentaryControl {
   keepGoing(): boolean;
   target(): number;
+  /**
+   * Quelqu'un regarde : la traduction ne prend pas plus de
+   * `COMMENTARY_MAX_LEAD_SEC` d'avance sur la lecture (elle attend), pour ne
+   * pas télécharger le flux ok.ru en concurrence avec le lecteur sans besoin.
+   */
+  watching?(): boolean;
 }
 
 const RUN_TO_END: CommentaryControl = { keepGoing: () => true, target: () => 0 };
+
+/** Avance maximale (s) de la traduction sur la lecture quand on regarde (5 min par défaut). */
+function maxLeadSec(): number {
+  const n = Number(process.env.COMMENTARY_MAX_LEAD_SEC);
+  return Number.isFinite(n) && n > 0 ? n : 300;
+}
+
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 
 /**
  * Un travail : tronçon par tronçon (1 min), en commençant à la position du
@@ -954,18 +1000,31 @@ export async function runCommentary(
   // ne charge aucun modèle), fermées — modèles déchargés — dès la fin du
   // travail, sur erreur, pause ou abandon.
   let asr: Transcriber | null = null;
-  let mt: { close(): Promise<void> } | null = null;
-  let mtOpen = false;
+  // Traducteur : démarré EN PARALLÈLE de la première extraction et de
+  // Whisper (Ollama + chargement du modèle prennent ~10-30 s), attendu au
+  // moment de traduire.
+  let mtPromise: Promise<{ close(): Promise<void> } | null> | null = null;
+  const openMt = () => {
+    if (!mtPromise) {
+      mtPromise = deps.openTranslator ? deps.openTranslator(cfg, signal, (d, tot) => report('preparation', d, tot)) : Promise.resolve(null);
+      mtPromise.catch(() => undefined); // l'erreur est remontée par l'attente dans translateAndPublish
+    }
+    return mtPromise;
+  };
   const closeAsr = async () => {
     const s = asr;
     asr = null;
     await s?.close();
   };
   const closeMt = async () => {
-    const s = mt;
-    mt = null;
+    const p = mtPromise;
+    mtPromise = null;
+    const s = p ? await p.catch(() => null) : null;
     await s?.close();
   };
+  // Extraction anticipée du tronçon suivant pendant que le GPU traite le
+  // courant (réseau et GPU travaillent en même temps).
+  const prefetched = new Map<number, Promise<void>>();
 
   /** Extrait l'audio d'un tronçon (toutes les sources, puis une re-résolution du flux). */
   const extract = async (plan: ChunkPlan, out: string) => {
@@ -974,7 +1033,7 @@ export async function runCommentary(
     for (let round = 0; round < 2; round++) {
       if (round === 1) {
         try {
-          stream = await deps.resolveStream(okId);
+          stream = await deps.resolveStream(okId, true);
         } catch (e) {
           lastErr = `résolution du flux : ${short(e)}`;
           break;
@@ -1004,6 +1063,11 @@ export async function runCommentary(
     const cached = readJson<ChunkCache>(cacheJson);
     if (cached && cached.model === cfg.transcribeModel && cached.transcript) return cached.transcript;
     const audio = chunkAudio(dir, plan);
+    const pending = prefetched.get(plan.index);
+    if (pending) {
+      prefetched.delete(plan.index);
+      await pending.catch(() => undefined); // un échec est retenté ci-dessous
+    }
     if (!fs.existsSync(audio)) {
       report('extraction', done.size);
       await extract(plan, audio);
@@ -1025,11 +1089,7 @@ export async function runCommentary(
   /** Traduit et publie les sous-titres d'un tronçon. */
   const translateAndPublish = async (plan: ChunkPlan, cues: Cue[]) => {
     const todoAll = cues.filter((c) => cache.lines[c.seq]?.en !== c.text);
-    if (todoAll.length && !mtOpen) {
-      report('preparation', 0, 0);
-      mt = deps.openTranslator ? await deps.openTranslator(cfg, signal, (d, tot) => report('preparation', d, tot)) : null;
-      mtOpen = true;
-    }
+    if (todoAll.length) await openMt();
     if (cues.length) report('traduction', done.size);
     // Contexte du premier lot : les sous-titres déjà publiés juste avant ce tronçon.
     const before = db.commentaryCuesBefore(job.matchId, plan.keepFrom, CONTEXT_LINES);
@@ -1085,6 +1145,19 @@ export async function runCommentary(
         paused = true;
         break;
       }
+      // Assez d'avance sur la lecture : on attend que le spectateur avance.
+      const target = ctl.target();
+      if (ctl.watching?.() && coveredFrom(plans, done, target, duration) - target >= maxLeadSec()) {
+        await pause(Number(process.env.COMMENTARY_LEAD_POLL_MS) || 5_000, signal);
+        continue;
+      }
+      void openMt();
+      // Pendant ce tronçon, l'audio du suivant probable se télécharge.
+      const next = nextChunk(plans, new Set([...done, plan.index]), ctl.target());
+      if (next && !prefetched.has(next.index)) {
+        const file = chunkAudio(dir, next);
+        if (!fs.existsSync(file) && !fs.existsSync(chunkJson(dir, next))) prefetched.set(next.index, extract(next, file));
+      }
       const transcript = await transcribeChunk(plan);
       await translateAndPublish(plan, chunkCues(plan, transcript, prompt));
     }
@@ -1092,6 +1165,7 @@ export async function runCommentary(
     if (e instanceof StreamUnavailable) return networkOutcome(e.message, job.matchId);
     throw e;
   } finally {
+    await Promise.all([...prefetched.values()].map((p) => p.catch(() => undefined)));
     await closeAsr();
     await closeMt();
   }

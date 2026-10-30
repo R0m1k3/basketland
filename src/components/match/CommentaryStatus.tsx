@@ -22,11 +22,15 @@ const PHASE_LABEL: Record<NonNullable<CommentaryState['phase']>, string> = {
   traduction: 'Traduction en français',
 };
 
-function pct(p?: { done: number; total: number }, phase?: CommentaryState['phase']): string {
-  if (!p || !p.total) return '';
-  // Téléchargement d'un modèle : progression en Mo.
-  if (phase === 'preparation') return ` · ${p.done} / ${p.total} Mo`;
-  return ` · ${Math.min(100, Math.round((p.done / p.total) * 100))} % du match`;
+/** Téléchargement d'un modèle (premier lancement) : progression en Mo. */
+function download(p?: { done: number; total: number }, phase?: CommentaryState['phase']): string {
+  return phase === 'preparation' && p && p.total ? ` · ${p.done} / ${p.total} Mo` : '';
+}
+
+/** Avance des sous-titres sur la lecture, en clair. */
+function lead(sec: number): string {
+  if (sec < 60) return `${Math.max(1, Math.round(sec))} s d’avance`;
+  return `${Math.floor(sec / 60)} min d’avance`;
 }
 
 /** Plage traduite qui contient la position de lecture. */
@@ -67,13 +71,21 @@ export default function CommentaryStatus({
   } else if (status === 'running') {
     tone = 'text-flame-hot';
     spinning = true;
-    title = `${state.phase ? PHASE_LABEL[state.phase] : 'Traduction des commentaires'}${pct(state.progress, state.phase)}`;
     const here = rangeAt(state.covered, position);
     const until = here?.[1] ?? state.available_until;
-    detail =
-      until && until > position
-        ? `Sous-titres prêts jusqu’à ${fmtTime(until)} — la traduction garde de l’avance sur la lecture.`
-        : 'Les sous-titres de ce passage arrivent dans quelques secondes (traduction minute par minute, à partir d’ici).';
+    const ahead = until && until > position ? until - position : 0;
+    const share = state.progress && state.progress.total && state.phase !== 'preparation' ? Math.round((state.progress.done / state.progress.total) * 100) : null;
+    if (ahead > 0) {
+      // Ce qui compte pour le spectateur : l'avance sur la lecture, pas la part du match.
+      title = `Sous-titres en direct · ${lead(ahead)}`;
+      detail = `Prêts jusqu’à ${fmtTime(until as number)} ; la traduction continue devant la lecture${share !== null ? ` (${share} % du match traduit)` : ''}.`;
+    } else {
+      title = `${state.phase ? PHASE_LABEL[state.phase] : 'Traduction des commentaires'}${download(state.progress, state.phase)}`;
+      detail =
+        state.phase === 'preparation'
+          ? 'Démarrage : chargement des modèles de transcription et de traduction (10 à 30 s).'
+          : 'Les sous-titres de ce passage arrivent dans quelques secondes (traduction minute par minute, à partir d’ici).';
+    }
   } else if (status === 'queued') {
     tone = 'text-flame-hot';
     dot = 'bg-flame';

@@ -244,21 +244,22 @@ body {
     #0b0b0e;
 }
 
-/* Sous-titres français superposés : taille proportionnelle au lecteur */
+/* Sous-titres français superposés : compacts, fond léger, taille proportionnelle au lecteur */
 .subtitle-box {
-  @apply relative inline-flex max-w-[min(92%,52rem)] items-stretch overflow-hidden rounded-lg bg-black/70 backdrop-blur-[2px];
-}
-.subtitle-team {
-  @apply w-1 shrink-0;
+  @apply relative inline-flex max-w-[min(78%,44rem)] items-stretch overflow-hidden rounded-md bg-black/45;
 }
 .subtitle-text {
-  @apply px-3 py-1.5 text-center font-semibold leading-snug text-white;
-  font-size: clamp(14px, calc(var(--sub-scale, 1) * 2.3cqw), 46px);
+  @apply px-2.5 py-0.5 text-center font-semibold leading-snug text-white;
+  font-size: clamp(12px, calc(var(--sub-scale, 1) * 1.6cqw), 34px);
+  /* Lisible même sur le parquet clair, sans fond opaque */
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.9),
+    0 0 6px rgba(0, 0, 0, 0.6);
 }
 .subtitle-banner {
   @apply bg-ink-950/85 ring-1 ring-flame/50;
 }
-/* Roll-up : entrée par le bas, la ligne précédente remonte et s'estompe. */
+/* Entrée de la ligne : léger fondu par le bas. */
 @keyframes subtitle-in {
   from {
     opacity: 0;
@@ -274,10 +275,6 @@ body {
   transition:
     opacity 0.3s ease,
     transform 0.3s ease;
-}
-.subtitle-older {
-  opacity: 0.62;
-  transform: scale(0.94);
 }
 .subtitle-banner .subtitle-text {
   @apply font-display uppercase tracking-wide;

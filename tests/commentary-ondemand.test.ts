@@ -28,6 +28,7 @@ import {
 } from '../src/lib/commentary';
 import type { AsrWord, Transcript } from '../src/lib/commentaryCues';
 import { GET as getSubtitles } from '../src/app/api/matches/[id]/subtitles/route';
+import { POST as postCommentary } from '../src/app/api/matches/[id]/commentary/route';
 import { freshDb, insertMatch } from './helpers/db';
 
 /**
@@ -135,7 +136,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __setCommentaryRunnerForTests(null);
-  for (const k of ['DATA_DIR', 'TRANSCRIBE_URL', 'TRANSLATE_URL', 'COMMENTARY_CHUNK_SEC', 'COMMENTARY_VIEWER_IDLE_MS']) delete process.env[k];
+  for (const k of ['DATA_DIR', 'TRANSCRIBE_URL', 'TRANSLATE_URL', 'COMMENTARY_CHUNK_SEC', 'COMMENTARY_VIEWER_IDLE_MS', 'COMMENTARY_MAX_LEAD_SEC', 'COMMENTARY_LEAD_POLL_MS']) delete process.env[k];
   process.env.COMMENTARY_NIGHT_WINDOW = 'always';
   fs.rmSync(dataDir, { recursive: true, force: true });
   vi.restoreAllMocks();
@@ -193,10 +194,11 @@ describe('runCommentary à la demande', () => {
     expect(published()).toEqual([0, 1, 2].flatMap((i) => expected(i).map((c) => ({ seq: c.seq, start: c.start, end: c.end, text: c.text, fr: `FR ${c.text}` }))));
     expect(db.getCommentaryTrack(A)).toMatchObject({ complete: 1, cues: 6, untranslated: 0, chunk_sec: CHUNK, chunks_total: 3 });
     expect(commentaryReady(A)).toBe(true);
+    // Le traducteur se charge EN PARALLÈLE de Whisper, dès le début du travail.
     expect(calls.events).toEqual([
+      'ollama ouvert',
       'whisper ouvert',
       'transcription 0',
-      'ollama ouvert',
       'traduction 3',
       'transcription 1',
       'traduction 2',
@@ -236,6 +238,23 @@ describe('runCommentary à la demande', () => {
     expect(db.getCommentaryTrack(A)?.complete).toBe(1);
   });
 
+  it('spectateur présent : pas plus de COMMENTARY_MAX_LEAD_SEC d’avance sur la lecture (la traduction attend)', async () => {
+    process.env.COMMENTARY_MAX_LEAD_SEC = '500';
+    process.env.COMMENTARY_LEAD_POLL_MS = '5';
+    let checks = 0;
+    const { deps, calls } = fakeDeps();
+    const res = await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, {
+      target: () => 0,
+      watching: () => true,
+      // Le spectateur reste 20 vérifications sans avancer, puis s'en va.
+      keepGoing: () => ++checks < 20,
+    });
+    delete process.env.COMMENTARY_MAX_LEAD_SEC;
+    delete process.env.COMMENTARY_LEAD_POLL_MS;
+    expect(res).toMatchObject({ paused: true });
+    expect(calls.transcribe).toEqual([0]); // 600 s d'avance ≥ 500 : rien de plus
+  });
+
   it('reprise après panne : tronçons publiés gardés, transcription en cache réutilisée', async () => {
     const first = fakeDeps({ failTranscribeAt: 2 });
     await expect(runCommentary({ matchId: A, force: false }, () => {}, signal(), first.deps)).rejects.toBeInstanceOf(ServiceError);
@@ -270,7 +289,12 @@ describe('file : spectateur et nuit', () => {
       },
     });
     viaQueue(deps);
-    const res = await getSubtitles(new Request(`http://nas.local/api/matches/${A}/subtitles?t=700`), { params: Promise.resolve({ id: String(A) }) });
+    // La fiche envoie sa position, puis « start » une fois la lecture lancée.
+    await getSubtitles(new Request(`http://nas.local/api/matches/${A}/subtitles?t=700`), { params: Promise.resolve({ id: String(A) }) });
+    const res = await postCommentary(
+      new Request(`http://nas.local/api/matches/${A}/commentary`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://nas.local', host: 'nas.local' }, body: JSON.stringify({ action: 'start' }) }),
+      { params: Promise.resolve({ id: String(A) }) },
+    );
     expect((await res.json()).commentary.status).toBe('running');
     await __commentaryIdle();
     vi.useRealTimers();
@@ -293,6 +317,7 @@ describe('file : spectateur et nuit', () => {
 
   it('travail de fond dans la fenêtre : tout le match ; un spectateur prend le relais même hors fenêtre', async () => {
     process.env.COMMENTARY_NIGHT_WINDOW = 'always';
+    process.env.COMMENTARY_MAX_LEAD_SEC = '99999'; // pas de plafond d'avance ici
     const { deps, calls } = fakeDeps();
     viaQueue(deps);
     touchViewer(A, 0);

@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { gameElapsed, resolveAnchorWall, Timeline, type BreakInfo, type ResolvedAnchor, type TimedPlay } from './sync';
+import { lowerPriority } from './procPriority';
 
 export interface ClockReading {
   period: number | null;
@@ -351,6 +352,7 @@ export function grabFrame(sourceUrl: string, t: number, o: FrameGrabOptions, tim
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
+    lowerPriority(ff);
     const chunks: Buffer[] = [];
     let err = '';
     const timer = setTimeout(() => ff.kill('SIGKILL'), timeoutMs);
@@ -381,6 +383,7 @@ export function filterImage(png: Buffer, vf: string, timeoutMs = 20_000): Promis
     const ff = spawn(process.env.FFMPEG_PATH || 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'png_pipe', '-i', 'pipe:0', '-vf', vf, '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    lowerPriority(ff);
     const chunks: Buffer[] = [];
     let settled = false;
     const timer = setTimeout(() => {
@@ -422,6 +425,7 @@ export function rawGray(png: Buffer, w: number, h: number, timeoutMs = 20_000, p
       ['-hide_banner', '-loglevel', 'error', '-f', 'png_pipe', '-i', 'pipe:0', '-vf', `${pre ? `${pre},` : ''}scale=${w}:${h}:flags=area,format=gray`, '-f', 'rawvideo', 'pipe:1'],
       { stdio: ['pipe', 'pipe', 'pipe'] },
     );
+    lowerPriority(ff);
     const chunks: Buffer[] = [];
     let settled = false;
     const done = (fn: () => void) => {

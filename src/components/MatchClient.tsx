@@ -21,6 +21,10 @@ interface Props {
 }
 
 const POLL_MS = 12_000;
+/** La traduction démarre quand le lecteur a autant d'avance chargée (s)… */
+const START_BUFFER_SEC = 15;
+/** …ou au plus tard après ce délai. */
+const START_MAX_WAIT_MS = 20_000;
 
 function sameSubtitles(a: Subtitle[], b: Subtitle[]): boolean {
   return a.length === b.length && a.every((s, i) => s.seq === b[i].seq && s.video_ts === b[i].video_ts && s.end_ts === b[i].end_ts && s.text === b[i].text);
@@ -75,21 +79,29 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
     [matchId],
   );
 
-  // Chargement initial ; une fiche ouverte passe en tête de file.
+  // Chargement initial. La traduction n'est PAS lancée tout de suite : la
+  // vidéo d'abord. Elle démarre dès que le lecteur a ~15 s d'avance en
+  // mémoire (ou au plus tard 20 s après l'ouverture), pour que l'extraction
+  // audio et le chargement des modèles ne volent pas la bande passante et le
+  // processeur du démarrage de la lecture.
   useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
     void loadSubtitles().then((c) => {
-      if (video.src && c && (c.status === 'none' || c.status === 'queued')) void command('start');
+      if (cancelled || !video.src || !c || (c.status !== 'none' && c.status !== 'queued')) return;
+      const t0 = Date.now();
+      timer = setInterval(() => {
+        if (playback.bufferedAhead() >= START_BUFFER_SEC || Date.now() - t0 >= START_MAX_WAIT_MS) {
+          clearInterval(timer);
+          if (!cancelled) void command('start');
+        }
+      }, 1000);
     });
-    // L'analyse du bandeau (positions des actions pour « Revoir l'action »)
-    // tourne aussi en tâche de fond ; on la priorise de la même façon.
-    if (video.src) {
-      fetch(`/api/matches/${matchId}/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'analyze' }),
-      }).catch(() => undefined);
-    }
-  }, [matchId, video.src, loadSubtitles, command]);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [matchId, video.src, loadSubtitles, command, playback]);
 
   // Suivi tant que la traduction est en file ou en cours.
   const status = commentary?.status;
