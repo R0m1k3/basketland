@@ -14,6 +14,7 @@ const MAX_WAITING = 4;
 const KIND_LABEL: Record<ActivityTask['kind'], string> = {
   traduction: 'Traduction des commentaires',
   analyse: 'Analyse vidéo',
+  doublage: 'Doublage en voix françaises',
 };
 
 /** Surnom (« Trail Blazers ») ; nom complet pour une équipe hors NBA (All-Star…). */
@@ -29,6 +30,7 @@ const ANALYSE_PREFIX = 'Analyse vidéo · ';
  */
 function stepOf(t: ActivityTask): string | null {
   if (t.kind === 'traduction') return t.label;
+  if (t.kind === 'doublage') return null; // le type de tâche suffit
   if (!t.label.startsWith(ANALYSE_PREFIX)) return null;
   const step = t.label.slice(ANALYSE_PREFIX.length);
   return step.charAt(0).toUpperCase() + step.slice(1);

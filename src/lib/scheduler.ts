@@ -14,6 +14,7 @@ import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
 import { enqueueRecentAnalyses } from './analysis';
 import { enqueueRecentCommentaries, inNightWindow } from './commentary';
+import { enqueueRecentDubs } from './dub';
 import { VIDEO_JOB_INTERVAL_MS } from './replayCadence';
 import { autoTranslateEnabled } from './settings';
 
@@ -85,5 +86,10 @@ export function startScheduler(): void {
   every(10 * MIN, async () => {
     const n = queueRecentWork({ commentaries: true }).commentaries;
     if (n) console.log(`[cron] pré-traduction : ${n} match(s) mis en file`);
+    // Doublage des matchs traduits (même règle : traduction automatique et fenêtre), quand le GPU est libre.
+    if (autoTranslateEnabled() && inNightWindow()) {
+      const d = await enqueueRecentDubs();
+      if (d) console.log(`[cron] doublage : ${d} match(s) mis en file`);
+    }
   }, 6 * MIN);
 }
