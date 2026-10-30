@@ -50,6 +50,7 @@ import {
   transcribeAudio,
   translateBatch,
   whisperPrompt,
+  CONTEXT_LINES,
   type CommentaryConfig,
   type TranslatedLine,
   type TranslateContext,
@@ -575,10 +576,11 @@ export function enqueueRecentCommentaries(days = 10, limit = 30): number {
   pruneWorkDirs(10 * 24 * 3600_000, st.running?.okId ? [workDir(st.running.okId)] : []);
   const since = addDays(new Date(), -days).toISOString();
   let n = 0;
-  for (const m of db.finalMatchesNeedingCommentary(since, limit)) {
+  for (const m of db.finalMatchesNeedingCommentary(since, limit, commentaryConfig().translateModel)) {
     if (st.running?.job.matchId === m.id || commentaryQueuePosition(m.id)) continue;
     if (!commentaryRetryAllowed(getCommentaryRecord(m.id), m.video_ok_id)) continue;
-    if (enqueueCommentary(m.id).queued) n++;
+    // Piste complète d'un autre modèle de traduction : à refaire (sinon « déjà prête »).
+    if (enqueueCommentary(m.id, { force: commentaryReady(m.id) }).queued) n++;
   }
   return n;
 }
@@ -762,16 +764,19 @@ export async function runCommentary(
   const plans = planChunks(duration, cfg.chunkSec);
   const total = plans.length;
   const headers = { userAgent: BROWSER_UA, referer: OK_REFERER };
-  const roster = [
-    ...new Set(
-      db
-        .getPlayerStats(job.matchId)
-        .map((p) => p.player_name)
-        .filter(Boolean),
-    ),
-  ];
-  const prompt = whisperPrompt(match.home_name, match.away_name, roster);
-  const names = [match.away_name, match.home_name, ...roster].join(', ');
+  // Prompt Whisper (équipes + effectifs) seulement sur demande : mesuré, il
+  // fait produire des segments de 30 s (voir `whisperPrompt`).
+  const prompt =
+    process.env.WHISPER_PROMPT === '1'
+      ? whisperPrompt(match.home_name, match.away_name, [
+          ...new Set(
+            db
+              .getPlayerStats(job.matchId)
+              .map((p) => p.player_name)
+              .filter(Boolean),
+          ),
+        ])
+      : undefined;
   const track: db.CommentaryTrackMeta = { ok_id: okId, transcribe_model: cfg.transcribeModel, translate_model: cfg.translateModel };
 
   const cacheFile = path.join(dir, 'translation.json');
@@ -866,26 +871,35 @@ export async function runCommentary(
     }
     if (fresh.length) report('traduction', plan.index);
     const all = [...frozen, ...fresh];
-    for (let k = 0; k < fresh.length; k += cfg.batch) {
-      checkAborted(signal);
-      const batch = fresh.slice(k, k + cfg.batch);
-      batches++;
-      const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
-      if (!todo.length) continue;
-      const first = frozen.length + k;
-      const context = all.slice(Math.max(0, first - 4), first).map((c) => c.text);
-      const res = await deps.translate(
-        todo.map((c) => ({ i: c.seq, en: c.text })),
-        context,
-        cfg,
-        { names, signal },
-      );
-      for (const r of res) {
-        const c = todo.find((x) => x.seq === r.i);
-        if (c) cache.lines[c.seq] = { en: c.text, fr: r.fr, untranslated: r.untranslated };
+    // Lots indépendants (le contexte est l'anglais des lignes précédentes) :
+    // `cfg.parallel` lots partent en même temps vers Ollama.
+    const starts: number[] = [];
+    for (let k = 0; k < fresh.length; k += cfg.batch) starts.push(k);
+    let nextBatch = 0;
+    const worker = async () => {
+      while (nextBatch < starts.length) {
+        const k = starts[nextBatch++];
+        checkAborted(signal);
+        const batch = fresh.slice(k, k + cfg.batch);
+        batches++;
+        const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
+        if (!todo.length) continue;
+        const first = frozen.length + k;
+        const context = all.slice(Math.max(0, first - CONTEXT_LINES), first).map((c) => c.text);
+        const res = await deps.translate(
+          todo.map((c) => ({ i: c.seq, en: c.text })),
+          context,
+          cfg,
+          { signal },
+        );
+        for (const r of res) {
+          const c = todo.find((x) => x.seq === r.i);
+          if (c) cache.lines[c.seq] = { en: c.text, fr: r.fr, untranslated: r.untranslated };
+        }
+        writeJson(cacheFile, cache);
       }
-      writeJson(cacheFile, cache);
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(cfg.parallel, starts.length) }, worker));
     if (fresh.length) {
       db.publishCommentaryCues(
         job.matchId,

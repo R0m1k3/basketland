@@ -13,7 +13,7 @@
  *
  * Par défaut les deux restent chargés ENSEMBLE pendant tout le travail
  * (traitement tronçon par tronçon, sous-titres publiés au fil de l'eau) :
- * distil-large-v3 en fp16 (~1,5-2 Go) et MiLMMT-46-4B en Q8 (~4,5 Go)
+ * large-v3-turbo en fp16 (~1,6 Go) et Gemma 4 E4B en Q4 (~6,6 Go)
  * tiennent dans une carte de 10-12 Go. `COMMENTARY_GPU_SEQUENTIAL=1` revient
  * à l'enchaînement « Whisper, puis arrêt, puis Ollama » pour un modèle de
  * traduction plus gros (voir commentary.ts). Les modèles sont rangés dans
@@ -107,7 +107,7 @@ interface Pending {
 /**
  * Une session de transcription : un processus Python, un modèle chargé.
  * `open` attend que le modèle soit prêt (le premier lancement le télécharge,
- * ~1,5 Go pour distil-large-v3).
+ * ~1,6 Go pour large-v3-turbo).
  */
 export class WhisperSession {
   private child: ChildProcess;
@@ -259,7 +259,10 @@ export class OllamaSession {
         ...process.env,
         OLLAMA_HOST: s.base.replace(/^https?:\/\//, ''),
         OLLAMA_MODELS: models,
+        // Requêtes simultanées = TRANSLATE_PARALLEL (2 par défaut, cf. commentaryAi.translateParallel).
         OLLAMA_NUM_PARALLEL: String(Math.max(1, Math.min(8, Math.trunc(Number(process.env.TRANSLATE_PARALLEL) || 2)))),
+        // Même contexte que les requêtes (/api/chat, num_ctx 4096) : pas de rechargement du modèle.
+        OLLAMA_CONTEXT_LENGTH: process.env.OLLAMA_CONTEXT_LENGTH || '4096',
         OLLAMA_KEEP_ALIVE: '10m',
       },
     });

@@ -7,10 +7,11 @@
  *   language=en, response_format=verbose_json, timestamp_granularities[]=
  *   segment et word). Réponse : `TranscriptionVerbose` d'OpenAI
  *   ({ text, duration, language, segments, words? }).
- * - Traduction : Ollama, API compatible OpenAI —
- *   POST {TRANSLATE_URL}/chat/completions. Le modèle (TRANSLATE_MODEL) et le
- *   prompt système (`TRANSLATE_SYSTEM_PROMPT`, ou un fichier désigné par
- *   TRANSLATE_PROMPT_FILE) se changent sans toucher au reste.
+ * - Traduction : Ollama — API native POST /api/chat pour l'Ollama embarqué
+ *   (num_ctx, schéma JSON), POST {TRANSLATE_URL}/chat/completions compatible
+ *   OpenAI pour un serveur externe. Le modèle (TRANSLATE_MODEL, Gemma 4 E4B
+ *   par défaut) et le prompt système (`TRANSLATE_SYSTEM_PROMPT`, ou un
+ *   fichier désigné par TRANSLATE_PROMPT_FILE) se changent sans toucher au reste.
  *
  * Deux natures d'échec, traitées différemment par la file :
  *  - `ServiceError` : serveur injoignable, HTTP 5xx, modèle absent… — le
@@ -26,13 +27,22 @@ import { embeddedOllamaAvailable, embeddedOllamaUrl, embeddedWhisperAvailable } 
 
 // ------------------------------------------------------------------ configuration
 
-export const DEFAULT_TRANSCRIBE_MODEL = 'Systran/faster-distil-whisper-large-v3';
 /**
- * MiLMMT-46-4B v1.0 (Xiaomi) : modèle SPÉCIALISÉ en traduction, entraîné sur
- * Gemma 3 4B (46 langues dont l'anglais et le français). Servi par Ollama à
- * partir du GGUF ; Q8_0 (~4 Go) laisse toute la marge sur une carte 12 Go.
+ * Whisper large-v3-turbo (CTranslate2) : meilleur compromis mesuré sur de
+ * vrais commentaires NBA — moins d'erreurs sur les noms que distil-large-v3,
+ * et large-v3 complet ne fait pas mieux pour un temps ×3,6. ~1,6 Go en fp16.
  */
-export const DEFAULT_TRANSLATE_MODEL = 'hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0';
+export const DEFAULT_TRANSCRIBE_MODEL = 'deepdml/faster-whisper-large-v3-turbo-ct2';
+/**
+ * Gemma 4 E4B instruct (Ollama, Q4_K_M, 6,6 Go) : 1er du banc d'essai
+ * (55 phrases de commentateurs NBA, 13 modèles) avec 97/110 — jargon basket
+ * juste, lignes jamais décalées. MiLMMT-46-4B, modèle de traduction pur,
+ * n'y fait que 66/110 (contresens sur le jargon) : il reste utilisable via
+ * TRANSLATE_MODEL (moteur 'mt').
+ */
+export const DEFAULT_TRANSLATE_MODEL = 'gemma4:e4b';
+/** Lignes précédentes données au modèle pour le sens (non traduites). */
+export const CONTEXT_LINES = 3;
 
 /**
  * Deux façons de piloter le modèle de traduction :
@@ -55,8 +65,10 @@ export interface CommentaryConfig {
   translateUrl: string;
   translateModel: string;
   translateEngine: TranslateEngine;
-  /** Sous-titres par requête de traduction. */
+  /** Sous-titres par requête de traduction (12-15 : au-delà, risque de lignes fusionnées ou décalées). */
   batch: number;
+  /** Lots traduits en même temps (Ollama embarqué : OLLAMA_NUM_PARALLEL réglé pareil). */
+  parallel: number;
   /** Durée d'un tronçon audio (s). */
   chunkSec: number;
   /**
@@ -76,6 +88,11 @@ const trimUrl = (s: string | undefined) => (s ?? '').trim().replace(/\/+$/, '');
 function intEnv(name: string, def: number, min: number, max: number): number {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && process.env[name] !== '' ? Math.min(max, Math.max(min, Math.trunc(n))) : def;
+}
+
+/** Requêtes de traduction simultanées (`TRANSLATE_PARALLEL`, 2 par défaut). */
+export function translateParallel(): number {
+  return intEnv('TRANSLATE_PARALLEL', 2, 1, 8);
 }
 
 export function engineFor(model: string, forced?: string): TranslateEngine {
@@ -106,7 +123,8 @@ export function commentaryConfig(): CommentaryConfig {
     translateUrl: remoteMt || `${embeddedOllamaUrl()}/v1`,
     translateModel,
     translateEngine: engineFor(translateModel, process.env.TRANSLATE_ENGINE),
-    batch: intEnv('TRANSLATE_BATCH', 20, 1, 60),
+    batch: intEnv('TRANSLATE_BATCH', 14, 1, 60),
+    parallel: translateParallel(),
     chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 600, 60, 3600),
     gpuSequential: process.env.COMMENTARY_GPU_SEQUENTIAL === '1',
     disabledReason,
@@ -212,9 +230,11 @@ export async function transcribeAudio(file: string, cfg: CommentaryConfig, o: Tr
 }
 
 /**
- * Prompt initial de Whisper : contexte et orthographe des noms propres
- * (Whisper écorche volontiers « Giannis Antetokounmpo »). Tronqué : Whisper
- * n'en lit que ~224 jetons.
+ * Prompt initial de Whisper : contexte et orthographe des noms propres.
+ * DÉSACTIVÉ par défaut (`WHISPER_PROMPT=1` pour l'activer) : mesuré sur de
+ * vrais commentaires, la liste des joueurs corrige quelques noms mais fait
+ * produire à Whisper des segments de 30 s, inutilisables en sous-titres.
+ * Tronqué : Whisper n'en lit que ~224 jetons.
  */
 export function whisperPrompt(home: string, away: string, players: string[]): string {
   const base = `NBA basketball game commentary: ${away} at ${home}.`;
@@ -230,21 +250,32 @@ export function whisperPrompt(home: string, away: string, players: string[]): st
 // ------------------------------------------------------------------ traduction
 
 /**
- * Prompt système par défaut de la traduction. À remplacer librement (ou via
- * TRANSLATE_PROMPT_FILE) : la seule contrainte est le format de sortie JSON
- * décrit à la fin, que `parseTranslation` sait lire.
+ * Prompt système par défaut de la traduction : le « prompt v1 » du banc
+ * d'essai, le meilleur mesuré (ajouter des règles déplaçait les erreurs sans
+ * améliorer le score). À remplacer librement (ou via TRANSLATE_PROMPT_FILE) :
+ * la seule contrainte est le format de sortie JSON décrit à la fin, que
+ * `parseTranslation` sait lire.
  */
-export const TRANSLATE_SYSTEM_PROMPT = `Tu traduis en français les sous-titres d'une retransmission de match NBA : ce sont les paroles des commentateurs américains, transcrites automatiquement.
+export const TRANSLATE_SYSTEM_PROMPT = `Tu traduis en sous-titres français les commentaires TV en anglais d'un match NBA. Le texte anglais vient d'une transcription automatique (Whisper) : il peut contenir des noms mal orthographiés ou des phrases coupées.
 
 Règles :
-- Français parlé et naturel, dans le registre d'un commentateur sportif français : vivant, direct, phrases courtes.
-- Noms propres inchangés (joueurs, entraîneurs, équipes, salles).
-- Jargon NBA adapté comme le disent les commentateurs français : « three » → « à trois points », « free throw » → « lancer franc », « rebound » → « rebond », « turnover » → « perte de balle », « steal » → « interception », « block » → « contre », « assist » → « passe décisive », « fast break » → « contre-attaque », « shot clock » → « les 24 secondes », « timeout » → « temps mort », « and-one » → « panier plus la faute » ; « dunk », « alley-oop », « pick-and-roll », « step-back » restent tels quels.
-- Ni ajout ni omission : traduis le sens de chaque ligne, sans commentaire ni explication. Une phrase coupée reste coupée.
-- Chaque ligne est traduite à sa place : ne fusionne pas, ne déplace pas de texte d'une ligne à l'autre. Le contexte précédent sert seulement à comprendre.
-- Chiffres en chiffres. Si un nom de joueur est manifestement mal transcrit et que tu reconnais le joueur, écris-le correctement.
+1. Écris un français parlé naturel, comme un commentateur de basket français à la télé (beIN Sports, Canal+), pas une traduction mot à mot. Les commentateurs se tutoient entre eux.
+2. Garde tous les noms de joueurs, d'entraîneurs, d'équipes et de salles exactement comme écrits. Ne traduis pas les noms d'équipes (Celtics, Knicks, Warriors…).
+3. Vocabulaire basket français :
+   - three / trey / from downtown / from deep / splash → « à trois points », « derrière l'arc », « de loin » ;
+   - and-one → « panier plus la faute » (ou « and one ») ; free throws → « lancers francs » ;
+   - block / swat / rejection → « contre » ; assist / dime → « passe décisive » (familier : « caviar ») ;
+   - screen → « écran » ; pick-and-roll / pick-and-pop → « pick-and-roll » / « pick-and-pop » ;
+   - the paint / the lane → « la raquette » ; off the glass → « avec la planche » ; rebound / board → « rebond » ;
+   - turnover → « balle perdue » ; steal → « interception » ; fast break / in transition → « contre-attaque », « en transition » ;
+   - layup → « lay-up » ; dunk / slam → « dunk » ; bucket → « panier » ; foul → « faute » ; timeout → « temps mort » ;
+   - shot clock → « les 24 secondes » ; run → « série » (« un 10-0 ») ; step-back, iso, alley-oop, 3-and-D → garder tel quel.
+4. Chiffres en chiffres : scores, statistiques et pourcentages (« 41 % à trois points », « 12-4 »).
+5. Chaque ligne est un sous-titre et peut n'être qu'un morceau de phrase qui continue à la ligne suivante : traduis-la comme un morceau, dans l'ordre, sans déplacer de mots d'une ligne à l'autre, sans fusionner ni découper de lignes.
+6. Phrases courtes et lisibles. N'ajoute rien, n'omets rien, n'explique rien. Si une ligne est confuse, traduis-la au plus près sans inventer.
+7. Les lignes de « context » servent seulement à comprendre le début : ne les traduis pas.
 
-Réponds UNIQUEMENT avec un objet JSON de la forme {"t":[{"i":<id>,"fr":"<traduction>"}]}, une entrée par ligne à traduire, avec les mêmes id.`;
+Réponds uniquement avec ce JSON, sans texte autour : {"t":[{"i":<id>,"fr":"<traduction>"}]} — exactement un objet par ligne de « lines », avec le même id.`;
 
 /** Prompt système effectif : fichier TRANSLATE_PROMPT_FILE s'il est lisible, sinon le prompt par défaut. */
 export function translateSystemPrompt(): string {
@@ -269,24 +300,16 @@ export interface TranslateLine {
 }
 
 export interface TranslateContext {
-  /** Équipes et joueurs (orthographe de référence). */
-  names?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
   /** Attente avant le nouvel essai après une erreur réseau ou 5xx (3 s). */
   retryDelayMs?: number;
 }
 
-/** Message utilisateur d'un lot : contexte (à ne pas traduire) puis lignes. */
-export function buildUserMessage(lines: TranslateLine[], context: string[], model: string, names?: string): string {
-  const parts: string[] = [];
-  if (names) parts.push(`Noms propres du match : ${names}`);
-  if (context.length) {
-    parts.push(`Contexte précédent (déjà traduit, NE PAS traduire) :\n${context.map((c) => `- ${c}`).join('\n')}`);
-  }
-  parts.push(`Lignes à traduire :\n${JSON.stringify({ lignes: lines.map((l) => ({ i: l.i, en: l.en })) })}`);
-  if (needsNoThink(model)) parts.push('/no_think');
-  return parts.join('\n\n');
+/** Message utilisateur d'un lot (format du banc d'essai) : contexte à ne pas traduire, puis lignes. */
+export function buildUserMessage(lines: TranslateLine[], context: string[], model: string): string {
+  const payload = JSON.stringify({ context, lines: lines.map((l) => ({ i: l.i, en: l.en })) });
+  return `Traduis ces lignes. Réponds uniquement avec le JSON demandé.\n${payload}${needsNoThink(model) ? '\n/no_think' : ''}`;
 }
 
 /**
@@ -334,29 +357,110 @@ export function parseTranslation(content: string): Map<number, string> {
   return out;
 }
 
+/** Minuscules sans accents ni ponctuation (comparaisons tolérantes). */
+const fold = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 /** Une traduction est-elle acceptable pour cette ligne ? */
 export function validTranslation(en: string, fr: string | undefined): fr is string {
   if (!fr || !/[\p{L}\p{N}]/u.test(fr)) return false;
   // Trop longue : le modèle a bavardé, recopié le contexte ou fusionné des lignes.
   if (fr.length > en.length * 2.2 + 30) return false;
   if (/"(i|fr|en)"\s*:/.test(fr)) return false;
+  // Recopie de l'anglais (une ligne courte — « Santos. », « Bang! » — peut rester telle quelle).
+  if (en.trim().split(/\s+/).length >= 4 && fold(fr) === fold(en)) return false;
   return true;
 }
 
-/** Appel brut à /chat/completions ; `ServiceError` si le serveur ne répond pas correctement. */
-export async function chatCompletion(system: string, user: string, cfg: CommentaryConfig, o: TranslateContext = {}): Promise<string> {
-  const url = `${cfg.translateUrl}/chat/completions`;
-  const timeoutMs = o.timeoutMs ?? intEnv('TRANSLATE_TIMEOUT_MS', 5 * 60_000, 5_000, 3600_000);
-  const body = JSON.stringify({
-    model: cfg.translateModel,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    temperature: 0.2,
-    stream: false,
-    response_format: { type: 'json_object' },
+/** Mots qu'un commentateur écrit avec une majuscule sans que ce soit un nom propre. */
+const NOT_NAMES = new Set(['i', "i'm", "i've", "i'll", "i'd", 'ok', 'okay', 'oh', 'mr', 'mrs', 'god', 'lord', 'game', 'coach']);
+
+/**
+ * Noms propres et chiffres d'une ligne anglaise, qui doivent se retrouver
+ * dans sa traduction : chaque nombre, et chaque mot à majuscule qui
+ * n'ouvre pas une phrase (comparé sur ses 5 premières lettres, sans accents :
+ * « Finals » ≈ « finales »).
+ */
+export function anchors(en: string): { numbers: string[]; names: string[] } {
+  const numbers = en.match(/\d+/g) ?? [];
+  const names: string[] = [];
+  const tokens = en.split(/\s+/).filter(Boolean);
+  tokens.forEach((tok, k) => {
+    const word = tok.replace(/^[^\p{L}]+|[^\p{L}']+$/gu, '').replace(/'s$/i, '');
+    if (!/^\p{Lu}/u.test(word) || word.length < 2) return;
+    const prev = tokens[k - 1];
+    if (!prev || /[.!?…:"“]$/.test(prev)) return; // début de phrase
+    if (NOT_NAMES.has(word.toLowerCase())) return;
+    names.push(fold(word).slice(0, 5));
   });
+  return { numbers, names };
+}
+
+/**
+ * La traduction garde-t-elle les chiffres et les noms de la ligne ? Une
+ * traduction décalée (le texte de la ligne voisine sous le mauvais id, avec
+ * un JSON pourtant valide) échoue presque toujours à ce test.
+ */
+export function consistentTranslation(en: string, fr: string): boolean {
+  const { numbers, names } = anchors(en);
+  const frDigits = new Set(fr.match(/\d+/g) ?? []);
+  if (numbers.some((n) => !frDigits.has(n))) return false;
+  const f = ` ${fold(fr)}`;
+  return names.every((n) => f.includes(` ${n}`) || f.includes(n));
+}
+
+/** Le modèle accepte-t-il un schéma JSON imposé sans décaler les lignes ? (mesuré : oui pour Gemma 4 E2B/E4B, non pour le 12B). */
+export function schemaSafe(model: string): boolean {
+  const forced = process.env.TRANSLATE_JSON_SCHEMA?.trim();
+  if (forced === '1') return true;
+  if (forced === '0') return false;
+  return /gemma4:e[24]b/i.test(model);
+}
+
+const TRANSLATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    t: {
+      type: 'array',
+      items: { type: 'object', properties: { i: { type: 'integer' }, fr: { type: 'string' } }, required: ['i', 'fr'] },
+    },
+  },
+  required: ['t'],
+};
+
+/**
+ * Appel brut au LLM ; `ServiceError` si le serveur ne répond pas correctement.
+ * - Ollama embarqué : API native `/api/chat`, qui seule accepte `num_ctx`
+ *   (4096 : un lot de 14 lignes ≈ 1 000 jetons d'entrée + 350 de sortie) et
+ *   un schéma JSON imposé ;
+ * - serveur externe : `/chat/completions` compatible OpenAI.
+ */
+export async function chatCompletion(system: string, user: string, cfg: CommentaryConfig, o: TranslateContext = {}, temperature = 0.2): Promise<string> {
+  const native = cfg.translateMode === 'embedded';
+  const url = native ? `${ollamaBase(cfg.translateUrl)}/api/chat` : `${cfg.translateUrl}/chat/completions`;
+  const timeoutMs = o.timeoutMs ?? intEnv('TRANSLATE_TIMEOUT_MS', 5 * 60_000, 5_000, 3600_000);
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+  const body = JSON.stringify(
+    native
+      ? {
+          model: cfg.translateModel,
+          messages,
+          stream: false,
+          keep_alive: '10m',
+          format: schemaSafe(cfg.translateModel) ? TRANSLATION_SCHEMA : undefined,
+          options: { temperature, top_p: 0.9, num_ctx: 4096, num_predict: 1200 },
+        }
+      : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, response_format: { type: 'json_object' } },
+  );
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     if (o.signal?.aborted) throw new ServiceError('traduction interrompue', 'traduction');
@@ -375,8 +479,11 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
       continue;
     }
     if (res.ok) {
-      const data = (await res.json().catch(() => null)) as { choices?: { message?: { content?: unknown } }[] } | null;
-      const content = data?.choices?.[0]?.message?.content;
+      const data = (await res.json().catch(() => null)) as {
+        choices?: { message?: { content?: unknown } }[];
+        message?: { content?: unknown };
+      } | null;
+      const content = native ? data?.message?.content : data?.choices?.[0]?.message?.content;
       // Réponse vide ou mal formée : c'est le CONTENU qui est en cause, le lot sera retenté.
       return typeof content === 'string' ? content : '';
     }
@@ -398,35 +505,73 @@ export interface TranslatedLine {
   untranslated: boolean;
 }
 
+/** Un essai de lot : traductions acceptables, et nombre de lignes manquantes ou suspectes. */
+async function chatAttempt(
+  system: string,
+  lines: TranslateLine[],
+  context: string[],
+  cfg: CommentaryConfig,
+  o: TranslateContext,
+  temperature: number,
+): Promise<{ got: Map<number, string>; missing: number; suspect: number }> {
+  const raw = parseTranslation(await chatCompletion(system, buildUserMessage(lines, context, cfg.translateModel), cfg, o, temperature));
+  // Ligne seule renvoyée sous un autre id : c'est bien elle.
+  if (lines.length === 1 && raw.size === 1 && !raw.has(lines[0].i)) {
+    const [[otherId, fr]] = [...raw.entries()];
+    raw.delete(otherId);
+    raw.set(lines[0].i, fr);
+  }
+  const got = new Map<number, string>();
+  let suspect = 0;
+  for (const l of lines) {
+    const fr = raw.get(l.i);
+    if (!validTranslation(l.en, fr)) continue;
+    got.set(l.i, fr);
+    if (!consistentTranslation(l.en, fr)) suspect++;
+  }
+  // Ids inventés : signe de lignes coupées ou décalées.
+  const ids = new Set(lines.map((l) => l.i));
+  const extra = [...raw.keys()].filter((i) => !ids.has(i)).length;
+  return { got, missing: lines.length - got.size + extra, suspect };
+}
+
+/** Lot douteux : une ligne manque (ou un id en trop), ou trop de lignes perdent leurs noms et chiffres. */
+const doubtful = (r: { missing: number; suspect: number }, n: number) => r.missing > 0 || r.suspect >= Math.max(2, Math.ceil(n / 4));
+const badness = (r: { missing: number; suspect: number }) => r.missing * 2 + r.suspect;
+
 /**
- * Traduit un lot : deux essais du lot entier, puis ligne par ligne pour ce
- * qui manque encore, puis l'anglais (marqué) en dernier recours.
+ * Traduit un lot (moteur 'chat') :
+ *  1. le lot entier (température 0,2), contrôlé : ids exacts, texte non vide
+ *     et différent de l'anglais, noms et chiffres conservés ;
+ *  2. lot douteux → nouvel essai à température 0, le meilleur des deux est gardé ;
+ *  3. toujours douteux → le lot est coupé en deux, chaque moitié reprend en 1 ;
+ *  4. une ligne seule sans traduction acceptable après deux essais → l'anglais (marqué).
  * `context` : quelques lignes précédentes, données pour le sens seulement.
  */
 export async function translateBatch(lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext = {}): Promise<TranslatedLine[]> {
   if (cfg.translateEngine === 'mt') return translateBatchMt(lines, cfg, o);
-  const system = translateSystemPrompt();
-  const done = new Map<number, string>();
-  const missing = () => lines.filter((l) => !done.has(l.i));
-  for (let attempt = 0; attempt < 2 && missing().length; attempt++) {
-    const todo = missing();
-    const got = parseTranslation(await chatCompletion(system, buildUserMessage(todo, context, cfg.translateModel, o.names), cfg, o));
-    for (const l of todo) {
-      const fr = got.get(l.i);
-      if (validTranslation(l.en, fr)) done.set(l.i, fr);
-    }
+  return translateChat(translateSystemPrompt(), lines, context, cfg, o);
+}
+
+async function translateChat(system: string, lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext): Promise<TranslatedLine[]> {
+  if (!lines.length) return [];
+  let best = await chatAttempt(system, lines, context, cfg, o, 0.2);
+  if (doubtful(best, lines.length)) {
+    const again = await chatAttempt(system, lines, context, cfg, o, 0);
+    if (badness(again) < badness(best)) best = again;
   }
-  // Repli ligne par ligne : le contexte inclut les lignes qui précèdent dans le lot.
-  for (const l of missing()) {
-    const idx = lines.indexOf(l);
-    const ctx = [...context, ...lines.slice(0, idx).map((x) => x.en)].slice(-4);
-    for (let attempt = 0; attempt < 2 && !done.has(l.i); attempt++) {
-      const got = parseTranslation(await chatCompletion(system, buildUserMessage([l], ctx, cfg.translateModel, o.names), cfg, o));
-      const fr = got.get(l.i) ?? (got.size === 1 ? [...got.values()][0] : undefined);
-      if (validTranslation(l.en, fr)) done.set(l.i, fr);
-    }
+  if (doubtful(best, lines.length) && lines.length > 1) {
+    const mid = Math.ceil(lines.length / 2);
+    const head = lines.slice(0, mid);
+    const tail = lines.slice(mid);
+    const a = await translateChat(system, head, context, cfg, o);
+    const b = await translateChat(system, tail, [...context, ...head.map((l) => l.en)].slice(-CONTEXT_LINES), cfg, o);
+    return [...a, ...b];
   }
-  return lines.map((l) => (done.has(l.i) ? { i: l.i, fr: done.get(l.i) as string, untranslated: false } : { i: l.i, fr: l.en, untranslated: true }));
+  return lines.map((l) => {
+    const fr = best.got.get(l.i);
+    return fr ? { i: l.i, fr, untranslated: false } : { i: l.i, fr: l.en, untranslated: true };
+  });
 }
 
 // ------------------------------------------------------------------ modèle de traduction pur (MiLMMT)
@@ -561,8 +706,6 @@ export function splitProportional(fr: string, weights: number[]): string[] | nul
   return out;
 }
 
-/** Concurrence des requêtes de traduction (Ollama sert plusieurs requêtes à la fois). */
-const MT_PARALLEL = Math.max(1, Math.min(8, Math.trunc(Number(process.env.TRANSLATE_PARALLEL) || 2)));
 
 async function mtTranslateOne(en: string, cfg: CommentaryConfig, o: TranslateContext): Promise<string | undefined> {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -598,6 +741,6 @@ export async function translateBatchMt(lines: TranslateLine[], cfg: CommentaryCo
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(MT_PARALLEL, groups.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(cfg.parallel, groups.length) }, worker));
   return lines.map((l) => (done.has(l.i) ? { i: l.i, fr: done.get(l.i) as string, untranslated: false } : { i: l.i, fr: l.en, untranslated: true }));
 }

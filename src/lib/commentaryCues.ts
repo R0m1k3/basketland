@@ -114,7 +114,7 @@ const ALWAYS_BOGUS = [
  * mais typiques d'une hallucination quand elles sont ISOLÉES : rien autour,
  * ou un segment jugé peu probablement parlé.
  */
-const SHORT_SUSPECT = /^(thank you( very much)?|thanks|you|bye( bye)?|okay|oh|so|yeah|hmm+|uh+|um+|music|applause|silence)$/;
+const SHORT_SUSPECT = /^(thank you( very much)?|thanks|you|bye( bye)?|okay|oh|so|yeah|hmm+|uh+|um+|music|applause|silence|i don't see you|i'm sorry)$/;
 
 /** Texte normalisé : minuscules, sans ponctuation ni espaces superflus. */
 export function normText(s: string): string {
@@ -204,7 +204,8 @@ export function filterTranscript(t: Transcript, opts: HallucinationOptions = {})
     const norm = normText(seg.text);
     sameRun = norm && norm === lastText ? sameRun + 1 : 0;
     lastText = norm;
-    if (!reason && sameRun >= 2) reason = 'segment répété';
+    // Une formule courte suspecte répétée (« Thank you. » ×28 dans un silence) est retirée dès la 2e.
+    if (!reason && (sameRun >= 2 || (sameRun >= 1 && SHORT_SUSPECT.test(norm)))) reason = 'segment répété';
     if (reason) dropped.push({ start: seg.start, end: seg.end, text: seg.text.trim(), reason });
     else kept.push(seg);
   });
