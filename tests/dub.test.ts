@@ -644,7 +644,8 @@ describe('API', () => {
 
 // ------------------------------------------------------------------ montage réel (ffmpeg)
 
-const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync('ffprobe', ['-version']).status === 0;
+// Même binaire que le code (FFMPEG_PATH) : sans ffmpeg (CI), le montage réel est sauté.
+const hasFfmpeg = spawnSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-version']).status === 0 && spawnSync('ffprobe', ['-version']).status === 0;
 
 describe('montage ffmpeg', () => {
   it.skipIf(!hasFfmpeg)('silence + répliques à leur place, accélérées ; AAC mono 24 kHz en MP4', async () => {
