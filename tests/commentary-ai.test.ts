@@ -21,6 +21,8 @@ import {
   splitProportional,
   translateBatchMt,
 } from '../src/lib/commentaryAi';
+import { setSetting } from '../src/lib/settings';
+import { freshDb } from './helpers/db';
 
 const ENV = ['TRANSCRIBE_URL', 'TRANSLATE_URL', 'TRANSCRIBE_MODEL', 'TRANSLATE_MODEL', 'TRANSLATE_BATCH', 'COMMENTARY_DISABLED', 'TRANSLATE_PROMPT_FILE'];
 
@@ -372,5 +374,55 @@ describe('traduction par un modèle pur (MiLMMT, faux serveur Ollama)', () => {
     fakeFetch(() => new Response(JSON.stringify({ response: '' }), { headers: { 'Content-Type': 'application/json' } }));
     const out = await translateBatchMt([{ i: 1, en: 'Timeout Portland.' }], commentaryConfig(), { retryDelayMs: 0 });
     expect(out).toEqual([{ i: 1, fr: 'Timeout Portland.', untranslated: true }]);
+  });
+});
+
+describe('API OpenAI (clé dans les paramètres ou OPENAI_API_KEY)', () => {
+  beforeEach(() => {
+    freshDb();
+    setEnv(); // un Ollama externe configuré : la clé OpenAI passe devant
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    [...ENV, 'OPENAI_API_KEY', 'OPENAI_MODEL'].forEach((k) => delete process.env[k]);
+  });
+
+  it('clé enregistrée dans les paramètres : traduction par OpenAI, modèle par défaut ou choisi', () => {
+    expect(commentaryConfig().translateProvider).toBe('ollama');
+    setSetting('openai_api_key', 'sk-test-0123456789abcd');
+    expect(commentaryConfig()).toMatchObject({
+      translateProvider: 'openai',
+      translateMode: 'remote',
+      translateUrl: 'https://api.openai.com/v1',
+      translateModel: 'gpt-5.4-mini',
+      translateEngine: 'chat',
+      translateApiKey: 'sk-test-0123456789abcd',
+      parallel: 4,
+    });
+    setSetting('openai_model', 'gpt-5.4-nano');
+    expect(commentaryConfig().translateModel).toBe('gpt-5.4-nano');
+    setSetting('openai_api_key', null);
+    process.env.OPENAI_API_KEY = 'sk-env';
+    expect(commentaryConfig()).toMatchObject({ translateProvider: 'openai', translateApiKey: 'sk-env' });
+  });
+
+  it('requête OpenAI : clé Bearer, JSON, raisonnement bref, sans temperature pour GPT-5', async () => {
+    setSetting('openai_api_key', 'sk-test-0123456789abcd');
+    const calls = fakeFetch((_u, init) => chatRes(JSON.stringify({ t: requestedLines(init).map((l) => ({ i: l.i, fr: 'Dedans !' })) })));
+    const out = await translateBatch([{ i: 1, en: 'Bang!' }], [], commentaryConfig());
+    expect(out).toEqual([{ i: 1, fr: 'Dedans !', untranslated: false }]);
+    expect(calls[0].url).toBe('https://api.openai.com/v1/chat/completions');
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test-0123456789abcd');
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body).toMatchObject({ model: 'gpt-5.4-mini', response_format: { type: 'json_object' }, reasoning_effort: 'low' });
+    expect(body.temperature).toBeUndefined();
+    expect(body.top_p).toBeUndefined();
+  });
+
+  it('clé refusée : message clair', async () => {
+    setSetting('openai_api_key', 'sk-test-0123456789abcd');
+    fakeFetch(() => new Response('{"error":{"message":"Incorrect API key"}}', { status: 401 }));
+    await expect(translateBatch([{ i: 1, en: 'Bang!' }], [], commentaryConfig())).rejects.toThrow('API OpenAI : clé refusée');
   });
 });

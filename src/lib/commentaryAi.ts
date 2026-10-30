@@ -24,6 +24,7 @@
 import fs from 'node:fs';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
 import { embeddedOllamaAvailable, embeddedOllamaUrl, embeddedWhisperAvailable } from './localAi';
+import { getSetting, SETTING_KEYS } from './settings';
 
 // ------------------------------------------------------------------ configuration
 
@@ -69,7 +70,8 @@ export const OPENAI_URL = 'https://api.openai.com/v1';
  * enregistrés dans la page Paramètres (prioritaires). Null : pas de clé.
  */
 export type OpenAiSettingsReader = () => { key: string | null; model: string | null };
-let openAiSettingsReader: OpenAiSettingsReader = () => ({ key: null, model: null });
+/** Par défaut : réglages enregistrés dans la page Paramètres (table `settings`). */
+let openAiSettingsReader: OpenAiSettingsReader = () => ({ key: getSetting(SETTING_KEYS.openaiApiKey), model: getSetting(SETTING_KEYS.openaiModel) });
 /** Branche la lecture des réglages enregistrés (page Paramètres). */
 export function setOpenAiSettingsReader(fn: OpenAiSettingsReader): void {
   openAiSettingsReader = fn;
