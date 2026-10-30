@@ -252,7 +252,11 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `ANALYSIS_TIMEOUT_MS` | `5400000` (90 min) | Durée maximale d'une analyse : au-delà, elle passe en échec et la file continue. |
 | `OCR_DISABLED` | — | `1` désactive la phase OCR. |
 | `OCR_STEP_SEC` | `105` | Pas du balayage grossier du chrono à l'écran (un affinage suit là où les ancres manquent). |
-| `SEGMENT_CACHE_MB` | `192` | Cache mémoire des segments vidéo préchargés (0 le désactive). |
+| `SEGMENT_CACHE_MB` | `512` | Cache mémoire des segments vidéo (0 le désactive). Les segments **à venir** de chaque lecture sont gardés en priorité, les segments déjà lus partent les premiers. 90 s de 1080p pèsent ~70 Mo. |
+| `PREFETCH_AHEAD_SEC` | `90` | Avance du préchargement côté serveur, en secondes de vidéo au-delà du dernier segment demandé par le lecteur (lui-même garde 90 à 180 s d'avance). Bornée à 30 segments et à 60 % du cache. Le préchargement suit la qualité réellement lue. 0 le désactive. |
+| `PREFETCH_CONCURRENCY` | `3` | Segments préchargés en parallèle depuis ok.ru (1 à 8), en plus de ceux que le lecteur demande. |
+| `SEGMENT_STALL_MS` | `5000` | Un téléchargement ok.ru qui ne reçoit plus un octet pendant ce délai (ou dont les en-têtes tardent 1,6 fois plus) est coupé et repris là où il s'était arrêté, sur une connexion neuve, sans que le lecteur voie la coupure. Avant, une connexion bloquée gelait la lecture jusqu'à 60 s. |
+| `SEGMENT_RETRIES` | `4` | Reprises au plus par segment (blocage, coupure, erreur réseau ou 5xx ; une signature expirée déclenche en plus une nouvelle résolution du flux). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
 

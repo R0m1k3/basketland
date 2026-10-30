@@ -41,53 +41,66 @@ const SPEEDS = [1, 1.25, 1.5, 2];
 
 /**
  * Réglages hls.js pour un VOD servi par notre proxy (et non un direct) :
- * - tampon généreux (60 s visés, jusqu'à 120 s / 120 Mo) pour absorber les
- *   à-coups du proxy, et 60 s conservés en arrière pour les retours rapides ;
+ * - tampon avant d'au moins 90 s, davantage pour les qualités légères
+ *   (jusqu'à 90 Mo, plafonné à 180 s) : de quoi traverser un passage à vide
+ *   d'ok.ru. Le proxy précharge en plus ~90 s au-delà de ce que le lecteur
+ *   a demandé, dans la RAM du NAS et non dans celle du navigateur ;
+ * - 30 s gardées en arrière pour revoir une action ; au-delà, le segment
+ *   revient du cache du proxy. Avant (jusqu'à 120 s devant + 60 s
+ *   derrière), le 1080p dépassait le quota MSE de Chrome (~150 Mo) et
+ *   déclenchait des purges du tampon en pleine lecture ;
  * - démarrage anticipé du premier segment (`startFragPrefetch`) ;
- * - ABR stable : estimation initiale élevée (5 Mb/s), montée en qualité
- *   prudente (`abrBandWidthUpFactor` 0,6) et moyennes lentes, pour éviter
- *   les changements de niveau intempestifs qui coupent le son ;
+ * - ABR stable : estimation initiale 5 Mb/s (départ en 720p), montée en
+ *   qualité seulement avec le double du débit visé (`abrBandWidthUpFactor`
+ *   0,5) et moyenne lente sur 25 s — les segments servis par le cache du
+ *   proxy arrivent à la vitesse du réseau local et gonflent l'estimation ;
+ *   la moyenne rapide (4 s) garde une descente vive quand ok.ru ralentit ;
  * - qualité plafonnée à la taille du lecteur (inutile de charger du 1080p
  *   dans une vignette de 390 px) ;
- * - nouvelles tentatives avec backoff exponentiel sur segments et playlists.
+ * - délais compatibles avec les reprises du proxy (il relance lui-même
+ *   ok.ru après ~8 s sans réponse ou 5 s sans données) ; nouvelles
+ *   tentatives avec backoff exponentiel — une nouvelle tentative rejoint le
+ *   téléchargement déjà en cours côté serveur, elle ne coûte rien.
  */
 const HLS_CONFIG: Partial<HlsConfig> = {
   enableWorker: true,
   lowLatencyMode: false,
   autoStartLoad: false,
   startFragPrefetch: true,
-  maxBufferLength: 60,
-  maxMaxBufferLength: 120,
-  maxBufferSize: 120 * 1000 * 1000,
-  backBufferLength: 60,
+  maxBufferLength: 90,
+  maxMaxBufferLength: 180,
+  maxBufferSize: 90 * 1000 * 1000,
+  backBufferLength: 30,
   maxBufferHole: 0.5,
   nudgeMaxRetry: 8,
   abrEwmaDefaultEstimate: 5_000_000,
   abrBandWidthFactor: 0.9,
-  abrBandWidthUpFactor: 0.6,
+  abrBandWidthUpFactor: 0.5,
   abrEwmaFastVoD: 4,
-  abrEwmaSlowVoD: 15,
+  abrEwmaSlowVoD: 25,
   capLevelToPlayerSize: true,
   testBandwidth: false,
   fragLoadPolicy: {
     default: {
-      maxTimeToFirstByteMs: 15_000,
+      maxTimeToFirstByteMs: 20_000,
       maxLoadTimeMs: 60_000,
-      timeoutRetry: { maxNumRetry: 4, retryDelayMs: 500, maxRetryDelayMs: 4_000, backoff: 'exponential' },
+      timeoutRetry: { maxNumRetry: 6, retryDelayMs: 500, maxRetryDelayMs: 4_000, backoff: 'exponential' },
       errorRetry: { maxNumRetry: 6, retryDelayMs: 1_000, maxRetryDelayMs: 8_000, backoff: 'exponential' },
     },
   },
   manifestLoadPolicy: {
     default: {
-      maxTimeToFirstByteMs: 15_000,
+      // Le master peut exiger une résolution complète de l'embed ok.ru, et
+      // une erreur de manifeste est fatale (le lecteur ne la relance pas).
+      maxTimeToFirstByteMs: 20_000,
       maxLoadTimeMs: 30_000,
       timeoutRetry: { maxNumRetry: 2, retryDelayMs: 500, maxRetryDelayMs: 2_000 },
-      errorRetry: { maxNumRetry: 2, retryDelayMs: 1_500, maxRetryDelayMs: 6_000, backoff: 'exponential' },
+      errorRetry: { maxNumRetry: 3, retryDelayMs: 1_500, maxRetryDelayMs: 6_000, backoff: 'exponential' },
     },
   },
   playlistLoadPolicy: {
     default: {
-      maxTimeToFirstByteMs: 15_000,
+      maxTimeToFirstByteMs: 20_000,
       maxLoadTimeMs: 30_000,
       timeoutRetry: { maxNumRetry: 2, retryDelayMs: 500, maxRetryDelayMs: 2_000 },
       errorRetry: { maxNumRetry: 3, retryDelayMs: 1_000, maxRetryDelayMs: 6_000, backoff: 'exponential' },
