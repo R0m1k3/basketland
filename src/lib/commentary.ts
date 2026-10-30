@@ -324,6 +324,11 @@ interface Job {
   matchId: number;
   /** Relance explicite (« retry ») : refait même une piste prête. */
   force: boolean;
+  /**
+   * Demandé par quelqu'un qui regarde la fiche (ouverture, « start », « retry ») :
+   * passe devant un travail de fond, quitte à l'interrompre.
+   */
+  viewer?: boolean;
 }
 
 export interface CommentaryProgress {
@@ -344,7 +349,15 @@ export type CommentaryRunner = (job: Job, progress: (p: CommentaryProgress) => v
 
 interface QueueState {
   queue: Job[];
-  running: { job: Job; progress: CommentaryProgress | null; okId: string | null } | null;
+  running: {
+    job: Job;
+    progress: CommentaryProgress | null;
+    okId: string | null;
+    /** Interrompt le travail (préemption par un match regardé). */
+    abort: () => void;
+    /** Interrompu pour laisser passer un match regardé : remis en file, sans compter d'échec. */
+    preempted: boolean;
+  } | null;
   runner: CommentaryRunner | null;
   idle: Promise<void>;
   idleResolve: (() => void) | null;
@@ -428,7 +441,11 @@ export function enqueueCommentary(matchId: number, opts: { priority?: boolean; f
   if (st.running?.job.matchId === matchId) return { queued: false, started: true, message: 'Traduction déjà en cours' };
   if (!opts.force && commentaryReady(matchId)) return { queued: false, started: false, message: 'Traduction des commentaires déjà prête' };
   const existing = st.queue.findIndex((j) => j.matchId === matchId);
-  const job: Job = { matchId, force: !!opts.force || (existing >= 0 && st.queue[existing].force) };
+  const job: Job = {
+    matchId,
+    force: !!opts.force || (existing >= 0 && st.queue[existing].force),
+    viewer: !!opts.priority || (existing >= 0 && !!st.queue[existing].viewer),
+  };
   if (existing >= 0) {
     if (opts.priority) {
       st.queue.splice(existing, 1);
@@ -436,6 +453,7 @@ export function enqueueCommentary(matchId: number, opts: { priority?: boolean; f
     } else st.queue[existing] = job;
   } else if (opts.priority) st.queue.unshift(job);
   else st.queue.push(job);
+  if (opts.priority) preemptBackground();
   pump();
   if (st.running?.job.matchId === matchId) return { queued: true, started: true, message: 'Traduction des commentaires lancée' };
   const position = commentaryQueuePosition(matchId) ?? undefined;
@@ -445,6 +463,20 @@ export function enqueueCommentary(matchId: number, opts: { priority?: boolean; f
     position,
     message: existing >= 0 && !opts.priority ? `Traduction déjà en file (position ${position})` : `Traduction en file (position ${position})`,
   };
+}
+
+/**
+ * Un match regardé passe devant un travail de FOND en cours : celui-ci est
+ * interrompu (ce qui est déjà transcrit ou traduit reste sur disque et en
+ * base), puis remis en file juste derrière, sans compter comme un échec.
+ * Un travail demandé par un autre spectateur n'est jamais interrompu.
+ */
+function preemptBackground(): void {
+  const r = st.running;
+  if (!r || r.job.viewer || r.preempted) return;
+  r.preempted = true;
+  console.log(`[commentaires] match ${r.job.matchId} mis en pause : le match ${st.queue[0]?.matchId} est regardé, il passe en premier`);
+  r.abort();
 }
 
 function pump(): void {
@@ -463,11 +495,12 @@ function pump(): void {
 function start(job: Job): void {
   if (!st.idleResolve) st.idle = new Promise((r) => (st.idleResolve = r));
   const okId = db.getMatch(job.matchId)?.video_ok_id ?? null;
-  const state: NonNullable<QueueState['running']> = { job, progress: null, okId };
+  const ctrl = new AbortController();
+  const state: NonNullable<QueueState['running']> = { job, progress: null, okId, abort: () => ctrl.abort(), preempted: false };
   st.running = state;
   const runner = st.runner ?? runCommentary;
   const logId = db.logIngestStart(`commentaires-${job.matchId}`);
-  const ctrl = new AbortController();
+  const t0 = Date.now();
   // Garde-fou : un travail qui ne rend jamais la main (serveur figé…) est
   // interrompu au lieu de bloquer la file pour toujours.
   let watchdog: NodeJS.Timeout | undefined;
@@ -488,6 +521,16 @@ function start(job: Job): void {
     )
     .finally(() => clearTimeout(watchdog))
     .then((res) => {
+      if (state.preempted) {
+        // Pas un échec : reprise derrière le match regardé (le cache sur disque évite de tout refaire).
+        try {
+          db.logIngestEnd(logId, false, 'interrompu : un match regardé est passé devant');
+        } catch {
+          /* journal facultatif */
+        }
+        if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.splice(Math.min(1, st.queue.length), 0, { ...job, viewer: false });
+        return;
+      }
       const prev = getCommentaryRecord(job.matchId);
       const sameVideo = !prev?.okId || prev.okId === okId;
       const kind = res.ok ? undefined : (res.kind ?? 'erreur');
@@ -508,6 +551,7 @@ function start(job: Job): void {
         console.error('[commentaires] journalisation impossible :', (e as Error).message);
       }
       if (!res.ok) console.error(`[commentaires] match ${job.matchId} : ${res.reason}`);
+      else console.log(`[commentaires] match ${job.matchId} traduit en ${Math.max(1, Math.round((Date.now() - t0) / 60_000))} min : ${res.reason}`);
     })
     .finally(() => {
       st.running = null;

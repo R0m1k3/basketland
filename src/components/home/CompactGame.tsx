@@ -19,9 +19,43 @@ function Mini({ abbr, dim }: { abbr: string; dim?: boolean }) {
  * Match en une ligne (listes denses : « Cette nuit », « À venir ») :
  * heure ou score, visiteur @ recevant.
  */
-export default function CompactGame({ game, highlight, note }: { game: GameView; highlight?: boolean; note?: string }) {
+export default function CompactGame({ game, highlight, note, dense }: { game: GameView; highlight?: boolean; note?: string; dense?: boolean }) {
   const { awayWin, homeWin } = outcome(game);
   const started = game.status !== 'scheduled';
+  if (dense) {
+    // Une seule ligne : heure (ou score) · visiteur @ recevant.
+    return (
+      <Link
+        href={`/matchs/${game.id}`}
+        aria-label={gameLabel(game)}
+        data-scope={game.id}
+        className={`grid grid-cols-[3.25rem_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-lg px-3 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame ${
+          highlight ? 'bg-flame/10 ring-1 ring-flame/40' : 'hover:bg-ink-800'
+        }`}
+      >
+        {game.status === 'live' ? (
+          <StatusPill status="live" />
+        ) : (
+          <span className={`num text-base font-bold ${highlight ? 'text-flame-hot' : 'text-paper'}`}>{game.time_paris}</span>
+        )}
+        <Mini abbr={game.away.abbr} dim={homeWin} />
+        {/* Une seule cellule : le score, ou « @ » (avant le match, ou scores masqués). */}
+        <span className="text-center">
+          {started ? (
+            <>
+              <span className="spoil-show num whitespace-nowrap text-sm font-bold">
+                {game.away.score}-{game.home.score}
+              </span>
+              <span className="spoil-only text-xs text-paper-faint">@</span>
+            </>
+          ) : (
+            <span className="text-xs text-paper-faint">@</span>
+          )}
+        </span>
+        <Mini abbr={game.home.abbr} dim={awayWin} />
+      </Link>
+    );
+  }
   return (
     <Link
       href={`/matchs/${game.id}`}
