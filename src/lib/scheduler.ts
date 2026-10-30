@@ -10,6 +10,7 @@ import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
 import { enqueueRecentAnalyses } from './analysis';
 import { enqueueRecentCommentaries, inNightWindow } from './commentary';
+import { enqueueRecentDubs } from './dub';
 import { VIDEO_JOB_INTERVAL_MS } from './replayCadence';
 
 const g = globalThis as unknown as { __basketlandCron?: boolean };
@@ -67,5 +68,7 @@ export function startScheduler(): void {
     if (!inNightWindow()) return;
     const n = enqueueRecentCommentaries();
     if (n) console.log(`[cron] pré-traduction de nuit : ${n} match(s) mis en file`);
+    const d = await enqueueRecentDubs(); // doublage des matchs traduits, quand le GPU est libre
+    if (d) console.log(`[cron] doublage : ${d} match(s) mis en file`);
   }, 6 * MIN);
 }
