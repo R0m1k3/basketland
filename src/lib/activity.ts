@@ -5,6 +5,7 @@
  */
 import { analysisActivity } from './analysis';
 import { commentaryActivity } from './commentary';
+import { dubActivity } from './dub';
 import * as db from './db';
 import { activeViewers } from './viewers';
 
@@ -17,7 +18,7 @@ export interface ActivityMatch {
 }
 
 export interface ActivityTask {
-  kind: 'traduction' | 'analyse';
+  kind: 'traduction' | 'analyse' | 'doublage';
   match: ActivityMatch;
   /** Étape en clair (« Transcription des commentateurs », « Analyse : balayage »…). */
   label: string;
@@ -31,7 +32,7 @@ export interface ActivityTask {
 
 export interface Activity {
   tasks: ActivityTask[];
-  queued: { kind: 'traduction' | 'analyse'; match: ActivityMatch }[];
+  queued: { kind: 'traduction' | 'analyse' | 'doublage'; match: ActivityMatch }[];
   /** Une vidéo est regardée : les tâches de fond attendent. */
   watching: boolean;
 }
@@ -80,6 +81,15 @@ export function currentActivity(): Activity {
       watched: false,
     });
   }
+  // Doublage français (voix de synthèse), quand le GPU est libre.
+  const d = dubActivity();
+  if (d.running) {
+    const match = matchOf(d.running.matchId);
+    if (match) {
+      const pct = d.running.total ? Math.round((d.running.done / d.running.total) * 100) : null;
+      tasks.push({ kind: 'doublage', match, label: 'Doublage en français', pct, paused: false, watched: d.running.watched });
+    }
+  }
   const queued: Activity['queued'] = [];
   for (const id of c.queued) {
     const match = matchOf(id);
@@ -88,6 +98,10 @@ export function currentActivity(): Activity {
   for (const id of a.queued) {
     const match = matchOf(id);
     if (match) queued.push({ kind: 'analyse', match });
+  }
+  for (const id of d.queued) {
+    const match = matchOf(id);
+    if (match) queued.push({ kind: 'doublage', match });
   }
   return { tasks, queued, watching };
 }

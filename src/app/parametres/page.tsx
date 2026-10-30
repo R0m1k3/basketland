@@ -1,11 +1,15 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import AccountPanel from '@/components/settings/AccountPanel';
+import AutoTranslateSettings from '@/components/settings/AutoTranslateSettings';
 import OpenAiSettings from '@/components/settings/OpenAiSettings';
+import SubtitleSettings from '@/components/settings/SubtitleSettings';
 import UsersAdmin from '@/components/settings/UsersAdmin';
+import VfModeSettings from '@/components/settings/VfModeSettings';
 import { currentSession } from '@/lib/authServer';
 import { listUsers } from '@/lib/db';
-import { OPENAI_MODEL_PLACEHOLDER, openAiSettingsView } from '@/lib/settings';
+import { dubDisabledReason } from '@/lib/dub';
+import { autoTranslateEnabled, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView, vfMode } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Paramètres' };
@@ -44,6 +48,13 @@ export default async function SettingsPage() {
         <AccountPanel username={user.username} role={user.role} />
       </section>
 
+      <section aria-labelledby="s-subtitles" className="space-y-5">
+        <SectionTitle id="s-subtitles" kicker="Lecteur">
+          Sous-titres
+        </SectionTitle>
+        <SubtitleSettings />
+      </section>
+
       {admin && (
         <section aria-labelledby="s-users" className="space-y-5">
           <SectionTitle id="s-users" kicker="Administration">
@@ -58,6 +69,8 @@ export default async function SettingsPage() {
           <SectionTitle id="s-openai" kicker="Administration">
             Traduction des commentaires
           </SectionTitle>
+          <AutoTranslateSettings initial={autoTranslateEnabled()} />
+          <VfModeSettings initial={vfMode()} voiceDisabledReason={await dubDisabledReason()} />
           <OpenAiSettings initial={openAiSettingsView()} placeholderModel={OPENAI_MODEL_PLACEHOLDER} />
         </section>
       )}

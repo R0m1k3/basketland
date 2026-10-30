@@ -9,6 +9,10 @@ import { settingGet, settingSet } from './db';
 export const SETTING_KEYS = {
   openaiApiKey: 'openai_api_key',
   openaiModel: 'openai_model',
+  /** « Traduction automatique » : '1' (activée) ou '0' (désactivée). */
+  autoTranslate: 'auto_translate',
+  /** « Version française » : 'sous-titres' (défaut) ou 'doublage'. */
+  vfMode: 'vf_mode',
 } as const;
 
 /** Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire). */
@@ -21,6 +25,58 @@ export function getSetting(key: string): string | null {
 /** Écrit un paramètre ; `null` le supprime. */
 export function setSetting(key: string, value: string | null): void {
   settingSet(key, value);
+}
+
+/**
+ * « Traduction automatique » (réglage administrateur, ACTIVÉE par défaut) :
+ * - activée : chaque replay est traduit (et analysé) dès qu'il est
+ *   disponible, en pause pendant qu'une vidéo est regardée ;
+ * - désactivée : rien ne part tout seul (ni jobs du cron, ni lancement à
+ *   l'ouverture de la fiche, ni replay tout juste trouvé) et les travaux de
+ *   fond déjà en file sont abandonnés (`inNightWindow`, nightWindow.ts) ;
+ *   un match n'est traduit que sur un clic « Sous-titrer ce match » (ou
+ *   « Doubler ce match »).
+ * Seule la valeur '0' désactive : clé absente ou autre valeur = activée.
+ */
+export function autoTranslateEnabled(): boolean {
+  return getSetting(SETTING_KEYS.autoTranslate) !== '0';
+}
+
+export function setAutoTranslate(enabled: boolean): void {
+  setSetting(SETTING_KEYS.autoTranslate, enabled ? '1' : '0');
+}
+
+/**
+ * « Version française » (réglage administrateur) :
+ * - 'sous-titres' (DÉFAUT, clé absente ou valeur inconnue) : les
+ *   commentaires sont traduits et affichés en sous-titres ; aucun doublage
+ *   de fond (un match se double seulement sur un clic « Doubler ce match ») ;
+ * - 'doublage' : les commentaires sont traduits puis dits par des voix
+ *   françaises — avec la traduction automatique, chaque replay traduit est
+ *   aussi doublé en tâche de fond, et le lecteur part en « VF doublée » tant
+ *   que l'utilisateur n'a rien choisi.
+ * Le doublage part toujours des sous-titres : la traduction est faite dans
+ * les deux modes.
+ */
+export type VfMode = 'sous-titres' | 'doublage';
+
+export const VF_MODES: readonly VfMode[] = ['sous-titres', 'doublage'];
+
+export function isVfMode(v: unknown): v is VfMode {
+  return typeof v === 'string' && (VF_MODES as readonly string[]).includes(v);
+}
+
+export function vfMode(): VfMode {
+  return getSetting(SETTING_KEYS.vfMode) === 'doublage' ? 'doublage' : 'sous-titres';
+}
+
+export function setVfMode(mode: VfMode): void {
+  setSetting(SETTING_KEYS.vfMode, mode);
+}
+
+/** Doublage AUTOMATIQUE (tâches de fond, match regardé) : traduction automatique activée ET mode « doublage ». */
+export function autoDubEnabled(): boolean {
+  return autoTranslateEnabled() && vfMode() === 'doublage';
 }
 
 /**

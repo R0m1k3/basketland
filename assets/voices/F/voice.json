@@ -1,0 +1,50 @@
+{
+ "id": "F",
+ "role": "voix_feminine",
+ "label_fr": "Voix féminine",
+ "gender": "f",
+ "voice": "F (F1_reporter) : reporter au bord du terrain, retenue à l'écoute (casting 17) le 30/10/2026",
+ "IMPORTANT": "Ne jamais régénérer cette voix depuis la description : cloner depuis le WAV de référence + sa transcription.",
+ "reference_wav": "reference.wav",
+ "reference_sha256": "89f84bb196226a6443d387785f34b93461f386a6b233c8b2864412716e8c7db1",
+ "reference_format": {
+  "samplerate": 24000,
+  "channels": 1,
+  "subtype": "PCM_16",
+  "duration_s": 4.72
+ },
+ "reference_transcript_file": "reference.txt",
+ "reference_transcript": "Bonsoir à tous, je suis au bord du terrain, avec les dernières nouvelles du vestiaire.",
+ "creation": {
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "method": "generate_voice_design",
+  "language": "French",
+  "instruct": "Female, around 35 years old, native speaker of metropolitan French with a standard Parisian accent, not Québécois, not Belgian, not Swiss. Clear, bright and dynamic voice of a TV sideline reporter at a basketball game: lively, crisp articulation, energetic and friendly.",
+  "text": "Bonsoir à tous, je suis au bord du terrain, avec les dernières nouvelles du vestiaire.",
+  "torch_manual_seed": 41,
+  "max_new_tokens_used": 120,
+  "generation_params": {
+   "do_sample": true,
+   "temperature": 0.9,
+   "top_k": 50,
+   "top_p": 1.0,
+   "repetition_penalty": 1.05,
+   "subtalker_dosample": true,
+   "subtalker_temperature": 0.9,
+   "subtalker_top_k": 50,
+   "subtalker_top_p": 1.0,
+   "max_new_tokens": 8192
+  },
+  "dtype": "float32",
+  "package": "qwen-tts==0.1.1, torch==2.8.0+cpu, transformers==4.57.3"
+ },
+ "usage_per_line": {
+  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "method": "generate_voice_clone(text, language='French', voice_clone_prompt=prompt)",
+  "mode": "ICL",
+  "generation_params": "defaults (= ci-dessus)",
+  "style_control": "aucun (Base)"
+ },
+ "licence": "Qwen3-TTS : Apache-2.0",
+ "voice_clone_prompt": "non livré (propre au modèle et à sa version) : recalculé par scripts/voice_worker.py au démarrage, depuis reference.wav + reference.txt"
+}

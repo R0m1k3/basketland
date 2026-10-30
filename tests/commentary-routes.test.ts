@@ -12,7 +12,9 @@ import { DEFAULT_TRANSLATE_MODEL } from '../src/lib/commentaryAi';
 import { GET as getSubtitles } from '../src/app/api/matches/[id]/subtitles/route';
 import { GET as getVtt } from '../src/app/api/matches/[id]/subtitles.vtt/route';
 import { GET as getCommentary, POST as postCommentary } from '../src/app/api/matches/[id]/commentary/route';
-import { __commentaryIdle, __setCommentaryRunnerForTests, commentaryQueuePosition, enqueueCommentary } from '../src/lib/commentary';
+import { __commentaryIdle, __setCommentaryRunnerForTests, commentaryQueuePosition, enqueueCommentary, type CommentaryRecord } from '../src/lib/commentary';
+import { createSession } from '../src/lib/auth';
+import { setAutoTranslate } from '../src/lib/settings';
 import { fixturePlays, freshDb, insertMatch } from './helpers/db';
 import { regenerateSubtitles } from '../src/lib/ingest';
 
@@ -32,6 +34,11 @@ function post(body: unknown, headers: Record<string, string> = {}, id = ID) {
     }),
     ctx(id),
   );
+}
+
+/** Cookie de session d'un compte créé pour le test. */
+function sessionCookie(username: string, role: 'admin' | 'user'): Record<string, string> {
+  return { cookie: `bl_session=${createSession(db.insertUser(username, 'x', role)).token}` };
 }
 
 function storeTrack(okId = db.getMatch(ID)!.video_ok_id!) {
@@ -190,7 +197,7 @@ describe('API POST /commentary', () => {
     expect((await post('{oops')).status).toBe(400);
   });
 
-  it('start : en tête de file (202) ; retry relance une piste prête', async () => {
+  it('start : en tête de file (202) ; retry (administrateur) relance une piste prête', async () => {
     enqueueCommentary(OTHER);
     const r = await post({ action: 'start' });
     expect(r.status).toBe(202);
@@ -204,9 +211,52 @@ describe('API POST /commentary', () => {
     const again = await post({ action: 'start' });
     expect(again.status).toBe(200);
     expect((await again.json()).message).toBe('Pas de lancement (ready)');
-    const retry = await post({ action: 'retry' });
+    const retry = await post({ action: 'retry' }, sessionCookie('admin', 'admin'));
     expect(retry.status).toBe(202);
     expect((await retry.json()).commentary.status).toBe('running');
+  });
+
+  it('retry réservé aux administrateurs : 401 sans session, 403 pour un utilisateur, piste intacte', async () => {
+    storeTrack();
+    const anon = await post({ action: 'retry' });
+    expect(anon.status).toBe(401);
+    expect(await anon.json()).toEqual({ error: 'non connecté' });
+    const user = await post({ action: 'retry' }, sessionCookie('bob', 'user'));
+    expect(user.status).toBe(403);
+    expect(await user.json()).toEqual({ error: 'réservé aux administrateurs' });
+    expect(commentaryQueuePosition(ID)).toBeNull();
+    expect(db.commentaryReadyIds([ID])).toEqual(new Set([ID]));
+  });
+
+  it('clic « Sous-titrer ce match » (manual) : mis en file même pendant le délai après un échec ; le lancement automatique, non', async () => {
+    enqueueCommentary(OTHER); // occupe la file : le match reste visible en « queued »
+    const okId = db.getMatch(ID)!.video_ok_id;
+    db.kvSet(`commentary:${ID}`, { at: new Date().toISOString(), ok: false, failures: 1, kind: 'erreur', reason: 'échec simulé', okId } satisfies CommentaryRecord);
+
+    const auto = await post({ action: 'start' });
+    expect(auto.status).toBe(200);
+    expect(await auto.json()).toMatchObject({ commentary: { status: 'failed', reason: 'échec simulé' }, message: 'Pas de lancement (failed)' });
+    expect(commentaryQueuePosition(ID)).toBeNull();
+
+    const manual = await post({ action: 'start', manual: true }); // simple utilisateur : pas besoin d'être administrateur
+    expect(manual.status).toBe(202);
+    expect(await manual.json()).toMatchObject({ commentary: { status: 'queued', position: 1 }, message: 'Traduction en file (position 1)' });
+  });
+
+  it('traduction automatique désactivée : le « start » automatique ne lance rien, le clic explicite oui', async () => {
+    setAutoTranslate(false);
+    const auto = await post({ action: 'start' });
+    expect(auto.status).toBe(200);
+    expect(await auto.json()).toEqual({
+      commentary: { status: 'none' },
+      autoTranslate: false,
+      message: 'Traduction automatique désactivée : lancez-la avec « Sous-titrer ce match ».',
+    });
+    expect(commentaryQueuePosition(ID)).toBeNull();
+
+    const manual = await post({ action: 'start', manual: true });
+    expect(manual.status).toBe(202);
+    expect((await manual.json()).commentary.status).toBe('running');
   });
 
   it('GET : statut seul', async () => {

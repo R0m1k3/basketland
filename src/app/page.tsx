@@ -23,9 +23,29 @@ import SpoilerToggle from '@/components/ui/SpoilerToggle';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { IconArrowRight, IconCalendar } from '@/components/ui/Icons';
 import { spoilerMode } from '@/components/ui/spoilers';
-import { nightWindowLabel } from '@/lib/nightWindow';
+import ActivityPanel from '@/components/home/ActivityPanel';
+import { currentActivity } from '@/lib/activity';
+import { commentaryDisabledReason } from '@/lib/commentary';
+import { inScheduleWindow, nightWindowLabel } from '@/lib/nightWindow';
+import { autoTranslateEnabled } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Ligne du panneau « En cours de traitement » quand rien ne tourne ni
+ * n'attend. `untranslated` : des replays récents n'ont pas (ou pas toute)
+ * leur VF — échecs en attente d'un nouvel essai, par exemple.
+ */
+function idleText(auto: boolean, untranslated: boolean): string {
+  const none = 'Aucun traitement en cours';
+  if (commentaryDisabledReason()) return `${none} — traduction des commentaires non configurée.`;
+  if (!auto) return `${none} — traduction à la demande : « Sous-titrer ce match » sur la fiche d’un match.`;
+  if (!inScheduleWindow()) {
+    const hours = nightWindowLabel();
+    return hours ? `${none} — traduction automatique ${hours}.` : `${none} — un match est traduit dès qu’on le regarde.`;
+  }
+  return untranslated ? `${none}.` : `${none} — tous les replays disponibles sont traités.`;
+}
 
 function nightTitle(night: string, today: string): string {
   if (night === today || night === shiftKey(today, -1)) return 'Cette nuit';
@@ -48,6 +68,9 @@ export default async function HomePage() {
   const lastNightDay = nightGames.reduce((m, g) => (g.day_paris > m ? g.day_paris : m), today);
   const days = upcomingDays(shiftKey(lastNightDay, 1), 4, now);
   const standings = cachedStandings();
+  // Traduction automatique (Paramètres) et travail du serveur en ce moment.
+  const autoTranslate = autoTranslateEnabled();
+  const activity = currentActivity();
   // Pré-traduction : où en est la VF des derniers replays.
   const vfCount = {
     ready: replays.filter((g) => g.vf.state === 'ready').length,
@@ -60,14 +83,17 @@ export default async function HomePage() {
     <div data-spoilers={spoilers} className="space-y-12 sm:space-y-16">
       {/* Nouveaux replays, scores et badges sans recharger (toutes les 5 min, onglet visible). */}
       <AutoRefresh />
-      {/* Bandeau de date, façon une de journal */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-700/70 pb-4">
-        <p className="kicker flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-paper">{longDate(today)}</span>
-          {season !== undefined && <span>Saison {seasonLabel(season)}</span>}
-          <span className="hidden sm:inline">Heures de Paris</span>
-        </p>
-        <SpoilerToggle initial={spoilers} />
+      {/* Bandeau de date, façon une de journal, puis ce que le serveur traite en ce moment. */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-700/70 pb-4">
+          <p className="kicker flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-paper">{longDate(today)}</span>
+            {season !== undefined && <span>Saison {seasonLabel(season)}</span>}
+            <span className="hidden sm:inline">Heures de Paris</span>
+          </p>
+          <SpoilerToggle initial={spoilers} />
+        </div>
+        <ActivityPanel initial={activity} idleText={idleText(autoTranslate, vfCount.todo + vfCount.partial > 0)} />
       </div>
 
       {live.length > 0 && (
@@ -160,7 +186,7 @@ export default async function HomePage() {
               <h2 id="replays-title" className="section-title mt-1">
                 Replays disponibles
               </h2>
-              <VfSummary {...vfCount} />
+              <VfSummary {...vfCount} auto={autoTranslate} />
             </div>
             <Link href="/matchs" className="link-more">
               Calendrier
@@ -276,9 +302,10 @@ export default async function HomePage() {
 
 /**
  * Où en est la VF des derniers replays : prêts, en cours, en partie traduits,
- * pas encore commencés (traduits la nuit de 2 h à 6 h, ou dès qu'on les ouvre).
+ * pas encore commencés (traduits dès que possible, la nuit, ou à la demande
+ * quand la traduction automatique est désactivée).
  */
-function VfSummary({ ready, running, partial, todo }: { ready: number; running: number; partial: number; todo: number }) {
+function VfSummary({ ready, running, partial, todo, auto }: { ready: number; running: number; partial: number; todo: number; auto: boolean }) {
   const night = nightWindowLabel();
   const item = (n: number, label: string, dot: string) =>
     n > 0 && (
@@ -294,9 +321,11 @@ function VfSummary({ ready, running, partial, todo }: { ready: number; running: 
       {item(partial, 'en partie traduit' + (partial > 1 ? 's' : ''), 'bg-flame/50')}
       {item(todo, 'à traduire', 'bg-ink-500')}
       <span className="text-paper-faint">
-        {night === 'en continu'
-          ? 'Traduits dès que le replay est disponible (en pause pendant la lecture).'
-          : `${night ? `Traduction automatique ${night} ; ` : ''}un match ouvert est traduit aussitôt.`}
+        {!auto
+          ? 'Traduction à la demande : « Sous-titrer ce match » sur la fiche.'
+          : night === 'en continu'
+            ? 'Traduits dès que le replay est disponible (en pause pendant la lecture).'
+            : `${night ? `Traduction automatique ${night} ; ` : ''}un match ouvert est traduit aussitôt.`}
       </span>
     </p>
   );

@@ -334,6 +334,13 @@ interface Job {
    * passe devant un travail de fond, quitte à l'interrompre.
    */
   viewer?: boolean;
+  /**
+   * Demande EXPLICITE (clic « Traduire ce match », « Réessayer », « Relancer
+   * la traduction ») : le match est traduit jusqu'au bout, même si plus
+   * personne ne regarde la fiche, même hors fenêtre ou traduction automatique
+   * désactivée. Il cède quand même la place à la lecture d'un AUTRE match.
+   */
+  explicit?: boolean;
 }
 
 export interface CommentaryProgress {
@@ -366,7 +373,8 @@ function controlFor(job: Job): CommentaryControl {
   return {
     // Un travail de fond cède la place dès que quelqu'un regarde un AUTRE
     // match : la lecture passe avant (il reprend quand la lecture s'arrête).
-    keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow() && !someoneWatching(job.matchId)),
+    keepGoing: () =>
+      viewerActive(job.matchId) || ((job.explicit || (!job.viewer && inNightWindow())) && !someoneWatching(job.matchId)),
     target: () => viewerPosition(job.matchId) ?? 0,
     watching: () => viewerActive(job.matchId),
   };
@@ -499,18 +507,27 @@ export interface CommentaryEnqueueResult {
  * Met un match en file. `priority` : en tête (demande de l'utilisateur) ;
  * `force` : refait même une piste déjà prête.
  */
-export function enqueueCommentary(matchId: number, opts: { priority?: boolean; force?: boolean } = {}): CommentaryEnqueueResult {
+export function enqueueCommentary(
+  matchId: number,
+  opts: { priority?: boolean; force?: boolean; explicit?: boolean } = {},
+): CommentaryEnqueueResult {
   const disabled = commentaryDisabledReason();
   if (disabled) return { queued: false, started: false, message: `Traduction des commentaires inactive : ${disabled}` };
   const unavailable = unavailableReason(matchId);
   if (unavailable) return { queued: false, started: false, message: `Traduction impossible : ${unavailable}` };
-  if (st.running?.job.matchId === matchId) return { queued: false, started: true, message: 'Traduction déjà en cours' };
+  if (st.running?.job.matchId === matchId) {
+    // Demande explicite pendant un travail déjà lancé (p. ex. à l'ouverture de
+    // la fiche) : il devient explicite et ira jusqu'au bout, fiche fermée.
+    if (opts.explicit) st.running.job.explicit = true;
+    return { queued: false, started: true, message: 'Traduction déjà en cours' };
+  }
   if (!opts.force && commentaryReady(matchId)) return { queued: false, started: false, message: 'Traduction des commentaires déjà prête' };
   const existing = st.queue.findIndex((j) => j.matchId === matchId);
   const job: Job = {
     matchId,
     force: !!opts.force || (existing >= 0 && st.queue[existing].force),
     viewer: !!opts.priority || (existing >= 0 && !!st.queue[existing].viewer),
+    explicit: !!opts.explicit || (existing >= 0 && !!st.queue[existing].explicit),
   };
   if (existing >= 0) {
     if (opts.priority) {
@@ -539,16 +556,17 @@ export function enqueueCommentary(matchId: number, opts: { priority?: boolean; f
  */
 function preemptBackground(): void {
   const r = st.running;
-  if (!r || r.job.viewer || r.preempted) return;
+  // Un travail explicite dont la fiche n'est plus regardée cède aussi la place.
+  if (!r || r.preempted || (r.job.viewer && !(r.job.explicit && !viewerActive(r.job.matchId)))) return;
   r.preempted = true;
   console.log(`[commentaires] match ${r.job.matchId} mis en pause : le match ${st.queue[0]?.matchId} est regardé, il passe en premier`);
   r.abort();
 }
 
 /** Travail de fond hors de la fenêtre autorisée (et personne ne regarde ce match) : abandonné. */
-const outsideWindow = (job: Job) => !job.viewer && !viewerActive(job.matchId) && !inNightWindow();
-/** Travail de fond qui doit attendre : quelqu'un regarde un autre match. */
-const mustWait = (job: Job) => !job.viewer && !viewerActive(job.matchId) && someoneWatching(job.matchId);
+const outsideWindow = (job: Job) => !job.viewer && !job.explicit && !viewerActive(job.matchId) && !inNightWindow();
+/** Travail de fond (ou explicite, fiche fermée) qui doit attendre : quelqu'un regarde un autre match. */
+const mustWait = (job: Job) => (!job.viewer || !!job.explicit) && !viewerActive(job.matchId) && someoneWatching(job.matchId);
 
 let repumpTimer: NodeJS.Timeout | undefined;
 
@@ -596,7 +614,13 @@ function start(job: Job): void {
     }, jobTimeoutMs());
     watchdog.unref?.();
   });
-  void Promise.race([runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job)), timeout])
+  // La carte graphique d'abord libérée par un doublage en cours (session de
+  // voix fermée), pour que Whisper et le traducteur ne se chargent pas par-dessus.
+  // Sans doublage en cours, le travail démarre aussitôt (synchrone, comme avant).
+  const gpuGate = (globalThis as { __commentaryGpuGate?: () => Promise<void> | null }).__commentaryGpuGate;
+  const gpuWait = gpuGate?.() ?? null;
+  const run = () => runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job));
+  void Promise.race([gpuWait ? gpuWait.catch(() => undefined).then(run) : run(), timeout])
     .then(
       (res) => res,
       (e: unknown): CommentaryOutcome =>
@@ -625,7 +649,7 @@ function start(job: Job): void {
         } catch {
           /* journal facultatif */
         }
-        if (!job.viewer && inNightWindow() && someoneWatching(job.matchId)) {
+        if ((job.explicit || (!job.viewer && inNightWindow())) && someoneWatching(job.matchId)) {
           if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.push({ ...job });
           console.log(`[commentaires] match ${job.matchId} en pause : une vidéo est regardée, la traduction reprendra après`);
         } else console.log(`[commentaires] match ${job.matchId} ${res.reason}`);
@@ -786,7 +810,8 @@ export interface CommentaryDeps {
 }
 
 export interface Transcriber {
-  transcribe(file: string, prompt: string | undefined, signal: AbortSignal): Promise<Transcript>;
+  /** `hotwords` : effectif du match (Whisper embarqué seulement ; ignoré par un serveur externe). */
+  transcribe(file: string, prompt: string | undefined, signal: AbortSignal, hotwords?: string): Promise<Transcript>;
   close(): Promise<void>;
 }
 
@@ -807,7 +832,7 @@ const defaultDeps: CommentaryDeps = {
     } catch (e) {
       throw asServiceError(e, 'transcription');
     }
-    return { transcribe: (file, prompt, signal) => s.transcribe(file, prompt, signal), close: () => s.close() };
+    return { transcribe: (file, prompt, signal, hotwords) => s.transcribe(file, prompt, signal, hotwords), close: () => s.close() };
   },
   openTranslator: async (cfg, signal, onProgress) => {
     if (cfg.translateMode !== 'embedded') return { close: async () => {} };
@@ -1005,7 +1030,11 @@ export async function runCommentary(
         ])
       : undefined;
   // Effectif du match (feuille de stats) : corrige les noms écorchés par Whisper.
-  const roster = rosterIndex(db.getPlayerStats(job.matchId).map((p) => p.player_name));
+  const rosterNamesList = [...new Set(db.getPlayerStats(job.matchId).map((p) => p.player_name).filter(Boolean))];
+  const roster = rosterIndex(rosterNamesList);
+  // Et le donne à Whisper (« hotwords ») : noms bien mieux reconnus, sans les
+  // segments de 30 s du prompt. Les sous-titres sont recoupés sur les mots.
+  const hotwords = process.env.WHISPER_HOTWORDS === '0' || !rosterNamesList.length ? undefined : rosterNamesList.join(', ');
   const track: db.CommentaryTrackMeta = {
     ok_id: okId,
     transcribe_model: cfg.transcribeModel,
@@ -1107,7 +1136,7 @@ export async function runCommentary(
       asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
     }
     report('transcription', done.size);
-    let transcript = await asr.transcribe(audio, prompt, signal);
+    let transcript = await asr.transcribe(audio, prompt, signal, hotwords);
     // Intensité de la voix mot par mot, tant que l'audio est là.
     const env = deps.envelope ? await deps.envelope(audio, signal).catch(() => null) : null;
     checkAborted(signal);

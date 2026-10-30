@@ -11,10 +11,12 @@ import TeamLogo from '@/components/ui/TeamLogo';
 import type { PlayItem } from '@/components/match/PlayByPlay';
 import { FICHE_ROOT_ID } from '@/components/match/format';
 import { spoilerMode } from '@/components/ui/spoilers';
+import { currentSession } from '@/lib/authServer';
 import { getMatch, getPlays, getSubtitles } from '@/lib/db';
 import { computeLinescore } from '@/lib/linescore';
 import { toDto } from '@/lib/present';
 import { teamInfo } from '@/lib/teams';
+import { autoTranslateEnabled, vfMode } from '@/lib/settings';
 import { parisDateLabel } from '@/lib/time';
 import { classifyPlay, translatePlay } from '@/lib/vf';
 import type { PlayRow } from '@/lib/types';
@@ -94,6 +96,10 @@ export default async function MatchPage({ params }: Params) {
   const home = teamInfo(match.home.abbr);
   // Mode « scores masqués » commun au site (cookie lu côté serveur : pas de clignotement).
   const spoilers = await spoilerMode();
+  // Traduction automatique et version française (Paramètres), droits : boutons du bandeau de traduction.
+  const autoTranslate = autoTranslateEnabled();
+  const vf = vfMode();
+  const isAdmin = (await currentSession())?.user.role === 'admin';
 
   return (
     <div data-spoilers={spoilers}>
@@ -127,6 +133,9 @@ export default async function MatchPage({ params }: Params) {
             homeAbbr={match.home.abbr}
             plays={lite}
             positions={positions}
+            autoTranslate={autoTranslate}
+            vfMode={vf}
+            isAdmin={isAdmin}
           />
         )}
 
@@ -136,7 +145,11 @@ export default async function MatchPage({ params }: Params) {
             home={match.home.abbr}
             kicker="Replay"
             title="Replay pas encore trouvé"
-            text="Les replays apparaissent en général quelques heures après la fin du match. Cette page se met à jour toute seule dès qu’il est en ligne ; les commentaires sont ensuite traduits en français automatiquement."
+            text={`Les replays apparaissent en général quelques heures après la fin du match. Cette page se met à jour toute seule dès qu’il est en ligne ; ${
+              autoTranslate
+                ? `les commentaires sont ensuite ${vf === 'doublage' ? 'traduits et doublés' : 'traduits'} en français automatiquement.`
+                : 'la traduction des commentaires se lance ensuite d’un clic.'
+            }`}
           >
             <ReplayWatcher matchId={match.id} dateUtc={match.date_utc} checkedAt={match.video.checked_at} />
           </Notice>

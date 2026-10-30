@@ -1,0 +1,51 @@
+{
+ "id": "B1",
+ "role": "troisieme_voix",
+ "label_fr": "Troisième voix",
+ "gender": "m",
+ "voice": "B1 (B1_chaleureux) : consultant, retenu à l'écoute (casting 15 / remix 16) le 30/10/2026",
+ "IMPORTANT": "Ne jamais régénérer cette voix depuis la description : cloner depuis le WAV de référence + sa transcription.",
+ "reference_wav": "reference.wav",
+ "reference_sha256": "452f2118be8141994f6c1e1a188c30bec42855837e6914fc566548677dc7bb5c",
+ "reference_format": {
+  "samplerate": 24000,
+  "channels": 1,
+  "subtype": "PCM_16",
+  "duration_s": 7.28
+ },
+ "reference_transcript_file": "reference.txt",
+ "reference_transcript": "Ce qu'il faut regarder, c'est la défense. Quand Oklahoma City resserre les lignes comme ça, Denver a beaucoup de mal à trouver des tirs ouverts.",
+ "voice_clone_prompt": "non livré (propre au modèle et à sa version) : recalculé par scripts/voice_worker.py au démarrage, depuis reference.wav + reference.txt",
+ "creation": {
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "method": "generate_voice_design",
+  "language": "French",
+  "instruct": "Male, around 45 years old, native speaker of metropolitan French with a standard Parisian accent, not Québécois, not Belgian, not Swiss. Warm, expressive voice of a TV basketball consultant: enthusiastic but composed, lively intonation with clear rises and falls, friendly and engaging, never monotone.",
+  "text": "Ce qu'il faut regarder, c'est la défense. Quand Oklahoma City resserre les lignes comme ça, Denver a beaucoup de mal à trouver des tirs ouverts.",
+  "torch_manual_seed": 21,
+  "generation_params": {
+   "do_sample": true,
+   "temperature": 0.9,
+   "top_k": 50,
+   "top_p": 1.0,
+   "repetition_penalty": 1.05,
+   "subtalker_dosample": true,
+   "subtalker_temperature": 0.9,
+   "subtalker_top_k": 50,
+   "subtalker_top_p": 1.0,
+   "max_new_tokens": 8192
+  },
+  "dtype": "float32",
+  "device": "cpu (4 vCPU Xeon, 3 threads)",
+  "package": "qwen-tts==0.1.1, torch==2.8.0+cpu, transformers==4.57.3"
+ },
+ "usage_per_line": {
+  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "method": "create_voice_clone_prompt(ref_audio, ref_text) puis generate_voice_clone(text, language='French', voice_clone_prompt=prompt)",
+  "mode": "ICL (audio + texte de référence)",
+  "seed_used_in_test": "torch.manual_seed(1000 + numéro de ligne)",
+  "generation_params": "valeurs par défaut du generation_config.json (identiques à ci-dessus)",
+  "style_control": "aucun (Base n'accepte pas d'instruction de style) : intonation via texte et ponctuation"
+ },
+ "licence": "Qwen3-TTS : Apache-2.0"
+}

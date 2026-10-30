@@ -41,10 +41,15 @@ jobs:
       - name: Build
         run: npm run build
 
-      # L'image embarque Whisper et Ollama (bibliothèques CUDA comprises) :
-      # plusieurs Go. On libère la place des outils préinstallés inutiles.
+      # L'image embarque Whisper, Ollama et Qwen3-TTS (torch et bibliothèques
+      # CUDA compris) : plusieurs Go. On libère la place des outils
+      # préinstallés inutiles (les étapes Node sont déjà passées).
       - name: Free disk space
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /usr/local/share/powershell
+          docker image prune --all --force
+          df -h /
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'

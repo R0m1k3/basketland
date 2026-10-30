@@ -1,0 +1,51 @@
+{
+ "id": "A",
+ "role": "commentateur",
+ "label_fr": "Commentateur",
+ "gender": "m",
+ "voice": "A (commentateur play-by-play), validée à l'écoute (fichiers 10/11) le 30/10/2026",
+ "IMPORTANT": "Ne jamais régénérer cette voix depuis la description : utiliser reference.wav (+ transcription) comme prompt de clonage.",
+ "reference_wav": "reference.wav",
+ "reference_sha256": "9790e19d246ae22323e575feb4ab1ec4066cedcbd8b57aa9c4413cf6ca527d73",
+ "reference_format": {
+  "samplerate": 24000,
+  "channels": 1,
+  "subtype": "PCM_16",
+  "duration_s": 8.08
+ },
+ "reference_transcript_file": "reference.txt",
+ "reference_transcript": "Bonsoir à tous et bienvenue pour ce choc de NBA ! Les deux équipes entrent sur le parquet, et l'ambiance est électrique ce soir.",
+ "voice_clone_prompt": "non livré (propre au modèle et à sa version) : recalculé par scripts/voice_worker.py au démarrage, depuis reference.wav + reference.txt",
+ "creation": {
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "method": "generate_voice_design",
+  "language": "French",
+  "instruct": "Male, around 40 years old, native speaker of metropolitan French with a standard Parisian accent, not Québécois, not Belgian. Clear, bright, energetic voice of a French TV sports play-by-play commentator: fast, articulate, enthusiastic delivery.",
+  "text": "Bonsoir à tous et bienvenue pour ce choc de NBA ! Les deux équipes entrent sur le parquet, et l'ambiance est électrique ce soir.",
+  "torch_manual_seed": 7,
+  "generation_params": {
+   "do_sample": true,
+   "temperature": 0.9,
+   "top_k": 50,
+   "top_p": 1.0,
+   "repetition_penalty": 1.05,
+   "subtalker_dosample": true,
+   "subtalker_temperature": 0.9,
+   "subtalker_top_k": 50,
+   "subtalker_top_p": 1.0,
+   "max_new_tokens": 8192
+  },
+  "dtype": "float32",
+  "device": "cpu (4 vCPU Xeon, 3 threads)",
+  "package": "qwen-tts==0.1.1, torch==2.8.0+cpu, transformers==4.57.3"
+ },
+ "usage_per_line": {
+  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "method": "create_voice_clone_prompt(ref_audio=reference.wav, ref_text=<transcription>) puis generate_voice_clone(text, language='French', voice_clone_prompt=prompt)",
+  "mode": "ICL (audio + texte de référence), pas x_vector_only",
+  "seed_used_in_test": "torch.manual_seed(1000 + numéro de ligne)",
+  "generation_params": "valeurs par défaut du generation_config.json du modèle (identiques à ci-dessus)",
+  "style_control": "aucun (le modèle Base n'accepte pas d'instruction de style) : l'intonation vient du texte et de la ponctuation"
+ },
+ "licence": "Qwen3-TTS : Apache-2.0"
+}

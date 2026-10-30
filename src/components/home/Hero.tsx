@@ -8,14 +8,29 @@ import { IconArrowRight, IconPlay } from '@/components/ui/Icons';
 import GameBadges from '@/components/schedule/GameBadges';
 import { outcome } from '@/components/schedule/GameRow';
 
+/**
+ * Taille du nom : le mot le plus long tient toujours dans la colonne (unités
+ * de conteneur `cqi`, ~0,5 em par lettre en Barlow Condensed, avec de la marge), sans dépasser
+ * la taille d'origine (2xl / 4xl / 5xl selon l'écran). Les noms en deux mots
+ * (« Trail Blazers ») passent sur deux lignes au lieu d'être coupés.
+ */
+function nameFit(nick: string): CSSProperties {
+  const longest = Math.max(4, ...nick.split(/\s+/).map((w) => w.length));
+  return { fontSize: `clamp(1.125rem, ${(200 / longest).toFixed(1)}cqi, var(--hero-name-max))` };
+}
+
 function HeroTeam({ team, dim, align }: { team: TeamInfo; dim: boolean; align: 'left' | 'right' }) {
   return (
     <div className={`flex min-w-0 flex-col items-center gap-3 text-center ${align === 'left' ? 'md:items-start md:text-left' : 'md:items-end md:text-right'}`}>
       <TeamLogo abbr={team.abbr} size={84} className="md:hidden" />
       <TeamLogo abbr={team.abbr} size={120} className="hidden md:inline-flex" />
-      <div className="min-w-0 max-w-full">
+      {/* Conteneur de taille : la colonne entière (w-full), pour les unités cqi du nom. */}
+      <div className="w-full min-w-0 [container-type:inline-size]">
         <div className="truncate text-xs font-semibold uppercase tracking-[0.2em] text-paper-dim">{team.city}</div>
-        <div className={`truncate font-display text-2xl font-extrabold uppercase leading-none tracking-tight sm:text-4xl lg:text-5xl ${dim ? 'tone-loss' : ''}`}>
+        <div
+          className={`font-display font-extrabold uppercase leading-[0.95] tracking-tight [overflow-wrap:anywhere] [text-wrap:balance] [--hero-name-max:1.5rem] sm:[--hero-name-max:2.25rem] lg:[--hero-name-max:3rem] ${dim ? 'tone-loss' : ''}`}
+          style={nameFit(team.nick)}
+        >
           {team.nick}
         </div>
       </div>

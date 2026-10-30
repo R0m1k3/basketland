@@ -290,6 +290,8 @@ function migrate(db: DatabaseSyncType): void {
     (db.prepare('PRAGMA table_info(commentary_cues)').all() as { name: string }[]).map((c) => c.name),
   );
   if (!cueCols.has('emphasis')) db.exec('ALTER TABLE commentary_cues ADD COLUMN emphasis INTEGER NOT NULL DEFAULT 0');
+  // Doublage français (tables nouvelles, voir DUB_SCHEMA_SQL).
+  db.exec(DUB_SCHEMA_SQL);
 }
 
 export function getDb(): DatabaseSyncType {
@@ -858,6 +860,9 @@ export function openCommentaryTrack(matchId: number, track: CommentaryTrackMeta,
       run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
       run('DELETE FROM commentary_chunks WHERE match_id = $id', { id: matchId });
       run('DELETE FROM commentary_tracks WHERE match_id = $id', { id: matchId });
+      // Sous-titres refaits de zéro : le doublage qui les disait n'est plus valable.
+      run('DELETE FROM dub_chunks WHERE match_id = $id', { id: matchId });
+      run('UPDATE dub_tracks SET complete = 0 WHERE match_id = $id', { id: matchId });
       return new Set<number>();
     }
     return new Set(all<{ idx: number }>('SELECT idx FROM commentary_chunks WHERE match_id = $id', { id: matchId }).map((r) => r.idx));
@@ -879,6 +884,9 @@ export function publishCommentaryChunk(
     const base = chunkSeqBase(chunk.idx);
     run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $a AND seq < $b', { id: matchId, a: base, b: base + 100_000 });
     insertCues(matchId, cues);
+    // Tronçon (re)traduit : son doublage éventuel disait les anciens sous-titres, il sera refait.
+    run('DELETE FROM dub_chunks WHERE match_id = $id AND idx = $i', { id: matchId, i: chunk.idx });
+    run('UPDATE dub_tracks SET complete = 0 WHERE match_id = $id', { id: matchId });
     run('INSERT OR REPLACE INTO commentary_chunks (match_id, idx, keep_from, keep_to) VALUES ($id, $i, $f, $t)', {
       id: matchId,
       i: chunk.idx,
@@ -996,6 +1004,194 @@ export function finalMatchesNeedingCommentary(sinceIso: string, limit = 30, tran
                          AND ($model IS NULL OR t.translate_model = $model))
      ORDER BY m.date_utc DESC LIMIT $limit`,
     { since: sinceIso, limit, model: translateModel ?? null },
+  );
+}
+
+// ---------------------------------------------------------------- doublage français (voix de synthèse)
+
+/**
+ * Doublage : une piste par match, produite pour UNE piste traduite précise
+ * (`commentary_key` : vidéo, modèles, découpage — voir `commentaryKey`). Si
+ * la piste traduite change, le doublage est effacé et refait. Les tronçons
+ * sont ceux de la traduction (`commentary_chunks.idx`), chacun un fichier
+ * audio `chunk-<idx>.m4a` dans `${dataDir()}/dub/<match>/`.
+ */
+export const DUB_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS dub_tracks (
+  match_id INTEGER PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
+  ok_id TEXT NOT NULL,
+  commentary_key TEXT NOT NULL,
+  -- Rôles de voix utilisés (JSON : ["A","B4",…]).
+  voices TEXT NOT NULL DEFAULT '[]',
+  -- Locuteurs reconnus et leur voix (JSON, voir dub.ts : SpeakerState).
+  speakers TEXT NOT NULL DEFAULT '{}',
+  complete INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dub_chunks (
+  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,
+  start_ts REAL NOT NULL,
+  end_ts REAL NOT NULL,
+  file TEXT NOT NULL,
+  -- Plages de parole française, en temps absolu de la vidéo (JSON [[s, e], …]).
+  speech TEXT NOT NULL DEFAULT '[]',
+  -- Empreinte des sous-titres doublés : un tronçon retraduit est redoublé.
+  cues_sig TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (match_id, idx)
+);
+`;
+
+export interface DubTrackRow {
+  match_id: number;
+  ok_id: string;
+  commentary_key: string;
+  voices: string;
+  speakers: string;
+  complete: number;
+  updated_at: string;
+}
+
+export interface DubChunkRow {
+  match_id: number;
+  idx: number;
+  start_ts: number;
+  end_ts: number;
+  file: string;
+  speech: string;
+  cues_sig: string;
+  created_at: string;
+}
+
+/** Tronçon publié de la traduction (keep_to = 1e9 pour le dernier tronçon). */
+export interface CommentaryChunkRow {
+  idx: number;
+  keep_from: number;
+  keep_to: number;
+}
+
+// Même clé en TypeScript et en SQL (finalMatchesNeedingDub) : garder les deux en phase.
+const COMMENTARY_KEY_SQL = `t.ok_id || '|' || t.transcribe_model || '|' || t.translate_model || '|' || COALESCE(t.chunk_sec, '')`;
+
+/** Identité d'une piste traduite : un doublage fait pour une autre clé est à refaire. */
+export function commentaryKey(t: Pick<CommentaryTrackRow, 'ok_id' | 'transcribe_model' | 'translate_model' | 'chunk_sec'>): string {
+  return `${t.ok_id}|${t.transcribe_model}|${t.translate_model}|${t.chunk_sec ?? ''}`;
+}
+
+export function getCommentaryChunks(matchId: number): CommentaryChunkRow[] {
+  return all<CommentaryChunkRow>('SELECT idx, keep_from, keep_to FROM commentary_chunks WHERE match_id = $id ORDER BY keep_from', { id: matchId });
+}
+
+export function getDubTrack(matchId: number): DubTrackRow | undefined {
+  return one<DubTrackRow>('SELECT * FROM dub_tracks WHERE match_id = $id', { id: matchId });
+}
+
+export function getDubChunks(matchId: number): DubChunkRow[] {
+  return all<DubChunkRow>('SELECT * FROM dub_chunks WHERE match_id = $id ORDER BY start_ts', { id: matchId });
+}
+
+export function getDubChunk(matchId: number, idx: number): DubChunkRow | undefined {
+  return one<DubChunkRow>('SELECT * FROM dub_chunks WHERE match_id = $id AND idx = $idx', { id: matchId, idx });
+}
+
+/**
+ * Ouvre (ou reprend) le doublage d'un match pour la piste traduite `key`.
+ * Un doublage fait pour une autre piste (autre vidéo, autres modèles) est
+ * effacé : `reset` vaut alors true (l'appelant supprime les fichiers).
+ */
+export function openDubTrack(matchId: number, okId: string, key: string): { reset: boolean; track: DubTrackRow } {
+  return tx(() => {
+    const prev = getDubTrack(matchId);
+    if (prev && prev.commentary_key === key && prev.ok_id === okId) return { reset: false, track: prev };
+    run('DELETE FROM dub_chunks WHERE match_id = $id', { id: matchId });
+    run(
+      `INSERT OR REPLACE INTO dub_tracks (match_id, ok_id, commentary_key, voices, speakers, complete, updated_at)
+       VALUES ($id, $ok, $key, '[]', '{}', 0, $now)`,
+      { id: matchId, ok: okId, key, now: nowIso() },
+    );
+    return { reset: !!prev, track: getDubTrack(matchId) as DubTrackRow };
+  });
+}
+
+/** Publie un tronçon doublé (remplace le précédent) et l'état des voix du match, d'un bloc. */
+export function publishDubChunk(
+  matchId: number,
+  chunk: { idx: number; start: number; end: number; file: string; speech: [number, number][]; cuesSig: string },
+  state: { voices: string[]; speakers: unknown },
+): void {
+  tx(() => {
+    run(
+      `INSERT OR REPLACE INTO dub_chunks (match_id, idx, start_ts, end_ts, file, speech, cues_sig, created_at)
+       VALUES ($id, $idx, $s, $e, $f, $sp, $sig, $now)`,
+      {
+        id: matchId,
+        idx: chunk.idx,
+        s: chunk.start,
+        e: chunk.end,
+        f: chunk.file,
+        sp: JSON.stringify(chunk.speech),
+        sig: chunk.cuesSig,
+        now: nowIso(),
+      },
+    );
+    run('UPDATE dub_tracks SET voices = $v, speakers = $sp, updated_at = $now WHERE match_id = $id', {
+      id: matchId,
+      v: JSON.stringify(state.voices),
+      sp: JSON.stringify(state.speakers),
+      now: nowIso(),
+    });
+  });
+}
+
+export function setDubComplete(matchId: number, complete: boolean): void {
+  run('UPDATE dub_tracks SET complete = $c, updated_at = $now WHERE match_id = $id', { id: matchId, c: complete ? 1 : 0, now: nowIso() });
+}
+
+/** Efface le doublage d'un match (lignes seulement : les fichiers sont supprimés par dub.ts). */
+export function deleteDub(matchId: number): void {
+  tx(() => {
+    run('DELETE FROM dub_chunks WHERE match_id = $id', { id: matchId });
+    run('DELETE FROM dub_tracks WHERE match_id = $id', { id: matchId });
+  });
+}
+
+/**
+ * Nombre de tronçons traduits pas encore doublés pour la piste traduite
+ * actuelle `key` (tous si le doublage en base a été fait pour une autre).
+ */
+export function dubPendingChunks(matchId: number, key: string): number {
+  const d = getDubTrack(matchId);
+  const total = one<{ n: number }>('SELECT COUNT(*) AS n FROM commentary_chunks WHERE match_id = $id', { id: matchId })?.n ?? 0;
+  if (!d || d.commentary_key !== key) return total;
+  return (
+    one<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM commentary_chunks c
+        WHERE c.match_id = $id AND NOT EXISTS (SELECT 1 FROM dub_chunks x WHERE x.match_id = c.match_id AND x.idx = c.idx)`,
+      { id: matchId },
+    )?.n ?? 0
+  );
+}
+
+/**
+ * Matchs terminés depuis `sinceIso`, avec replay et une piste traduite
+ * (complète ou partielle) pour la vidéo actuelle, dont le doublage est à
+ * faire : absent, fait pour une autre piste traduite, ou avec des tronçons
+ * traduits pas encore doublés.
+ */
+export function finalMatchesNeedingDub(sinceIso: string, limit = 30): MatchRow[] {
+  return all<MatchRow>(
+    `SELECT m.* FROM matches m JOIN commentary_tracks t ON t.match_id = m.id
+      WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL AND m.date_utc >= $since
+        AND t.ok_id = m.video_ok_id AND t.cues > 0
+        AND (
+          NOT EXISTS (SELECT 1 FROM dub_tracks d WHERE d.match_id = m.id AND d.commentary_key = ${COMMENTARY_KEY_SQL})
+          OR EXISTS (SELECT 1 FROM commentary_chunks c WHERE c.match_id = m.id
+                       AND NOT EXISTS (SELECT 1 FROM dub_chunks x WHERE x.match_id = m.id AND x.idx = c.idx))
+        )
+      ORDER BY m.date_utc DESC LIMIT $limit`,
+    { since: sinceIso, limit },
   );
 }
 

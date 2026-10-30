@@ -86,7 +86,7 @@ export function whisperLibraryPath(python: string): string {
 const short = (e: unknown) => ((e as Error)?.message || String(e)).replace(/\s+/g, ' ').slice(0, 200);
 
 /** Arrêt propre d'un processus enfant : SIGTERM, puis SIGKILL au bout de `graceMs`. */
-function stopChild(child: ChildProcess, graceMs = 10_000): Promise<void> {
+export function stopChild(child: ChildProcess, graceMs = 10_000): Promise<void> {
   return new Promise((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
     const timer = setTimeout(() => child.kill('SIGKILL'), graceMs);
@@ -197,7 +197,8 @@ export class WhisperSession {
     }
   }
 
-  transcribe(file: string, prompt: string | undefined, signal?: AbortSignal): Promise<Transcript> {
+  /** `hotwords` : noms à privilégier (effectif du match), séparés par des virgules. */
+  transcribe(file: string, prompt: string | undefined, signal?: AbortSignal, hotwords?: string): Promise<Transcript> {
     if (this.closed) return Promise.reject(new Error('session Whisper fermée'));
     const id = this.nextId++;
     return new Promise<Transcript>((resolve, reject) => {
@@ -218,7 +219,7 @@ export class WhisperSession {
           reject(e);
         },
       });
-      this.child.stdin?.write(`${JSON.stringify({ id, file, language: 'en', prompt })}\n`);
+      this.child.stdin?.write(`${JSON.stringify({ id, file, language: 'en', prompt, ...(hotwords ? { hotwords } : {}) })}\n`);
     });
   }
 

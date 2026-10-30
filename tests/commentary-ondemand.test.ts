@@ -188,6 +188,34 @@ describe('fenêtre de nuit (heures de Paris)', () => {
 // ------------------------------------------------------------------ travail complet
 
 describe('runCommentary à la demande', () => {
+  it('donne l’effectif du match à Whisper (« hotwords »)', async () => {
+    db.replaceStats(
+      A,
+      [],
+      ['Derrick White', 'Mike Conley', 'Derrick White'].map((name, i) => ({
+        match_id: A,
+        team_abbr: i ? 'MIN' : 'BOS',
+        player_id: String(i),
+        player_name: name,
+        position: 'G',
+        jersey: String(i),
+        starter: 1,
+        stats: {},
+      })),
+      [],
+    );
+    const { deps } = fakeDeps();
+    const seen: (string | undefined)[] = [];
+    const base = deps.openTranscriber!;
+    deps.openTranscriber = async (cfg, sig) => {
+      const t = await base(cfg, sig);
+      return { transcribe: (file, prompt, s2, hotwords) => (seen.push(hotwords), t.transcribe(file, prompt, s2)), close: t.close };
+    };
+    await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, ctl(() => 0));
+    expect(seen.length).toBeGreaterThan(0);
+    expect(new Set(seen)).toEqual(new Set(['Derrick White, Mike Conley']));
+  });
+
   it('jusqu’au bout depuis le début : tronçon par tronçon, piste complète, modèles déchargés', async () => {
     const { deps, calls } = fakeDeps();
     const events: CommentaryProgress[] = [];
@@ -329,6 +357,35 @@ describe('file : spectateur et nuit', () => {
     await vi.waitFor(() => expect(commentaryStatus(A).status).toBe('queued'));
     expect(getCommentaryRecord(A)).toBeUndefined();
     // La lecture s'arrête (plus de signe de vie) : le travail reprend là où il s'était arrêté.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await __commentaryIdle();
+    vi.useRealTimers();
+    expect(calls.transcribe).toEqual([0, 1, 2]);
+    expect(commentaryStatus(A).status).toBe('ready');
+  });
+
+  it('demande explicite (« Traduire ce match ») : tout le match même fiche fermée et hors fenêtre, en pause pendant la lecture d’un autre match', async () => {
+    process.env.COMMENTARY_NIGHT_WINDOW = 'off'; // ni fenêtre ni traduction automatique ne la limitent
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    process.env.COMMENTARY_REPUMP_MS = '20';
+    process.env.COMMENTARY_MAX_LEAD_SEC = '99999';
+    insertMatch(402000002);
+    let watched = false;
+    const { deps, calls } = fakeDeps({
+      afterChunk: (idx) => {
+        // Après le 1er tronçon, quelqu'un regarde un AUTRE match.
+        if (idx === 0 && !watched) {
+          watched = true;
+          touchViewer(402000002, 10);
+        }
+      },
+    });
+    viaQueue(deps);
+    enqueueCommentary(A, { priority: true, explicit: true }); // personne ne regarde la fiche de A
+    await vi.waitFor(() => expect(calls.transcribe).toEqual([0]));
+    // Cède la place à la lecture de l'autre match : remis en file, pas abandonné.
+    await vi.waitFor(() => expect(commentaryStatus(A).status).toBe('queued'));
+    // La lecture s'arrête : reprise et fin du match, sans spectateur sur A.
     vi.setSystemTime(Date.now() + 10 * 60_000);
     await __commentaryIdle();
     vi.useRealTimers();
