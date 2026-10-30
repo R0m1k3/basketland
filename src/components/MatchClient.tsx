@@ -43,7 +43,10 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   const reqSeq = useRef(0);
   const loadSubtitles = useCallback(() => {
     const my = ++reqSeq.current;
-    return fetch(`/api/matches/${matchId}/subtitles`, { cache: 'no-store' })
+    // La position de lecture accompagne chaque interrogation : le serveur
+    // traduit en priorité à partir de là (et sait que quelqu'un regarde).
+    const t = Math.max(0, Math.floor(playback.currentTime));
+    return fetch(`/api/matches/${matchId}/subtitles?t=${t}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: { subtitles?: Subtitle[]; commentary?: CommentaryState }) => {
         if (my !== reqSeq.current) return null;
@@ -57,7 +60,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
         return d.commentary ?? null;
       })
       .catch(() => null);
-  }, [matchId]);
+  }, [matchId, playback]);
 
   const command = useCallback(
     (action: 'start' | 'retry') =>
@@ -93,7 +96,20 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   useEffect(() => {
     if (status !== 'running' && status !== 'queued') return;
     const timer = setInterval(() => void loadSubtitles(), POLL_MS);
-    return () => clearInterval(timer);
+    // Saut dans la vidéo : la nouvelle position part tout de suite (le
+    // serveur réoriente la traduction), sans attendre l'interrogation suivante.
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    const onSeeked = (e: Event) => {
+      if (!(e.target instanceof HTMLVideoElement)) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => void loadSubtitles(), 800);
+    };
+    document.addEventListener('seeked', onSeeked, true); // « seeked » ne remonte pas : capture
+    return () => {
+      clearInterval(timer);
+      clearTimeout(debounce);
+      document.removeEventListener('seeked', onSeeked, true);
+    };
   }, [status, loadSubtitles]);
 
   const retry = useCallback(() => void command('retry'), [command]);
@@ -153,7 +169,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
             durationHint={video.duration}
           />
         </div>
-        <CommentaryStatus state={commentary} hasReplay={!!video.src} onRetry={retry} />
+        <CommentaryStatus state={commentary} hasReplay={!!video.src} onRetry={retry} position={playback.currentTime} />
         {commentary?.status === 'ready' && subtitles.length > 0 && (
           <p className="text-right text-xs text-paper-faint">
             <a href={`/api/matches/${matchId}/subtitles.vtt`} className="underline decoration-ink-500 underline-offset-2 hover:text-paper">

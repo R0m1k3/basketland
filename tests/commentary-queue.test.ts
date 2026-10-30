@@ -215,7 +215,7 @@ function fakeDeps(o: { failExtract?: boolean; failTranslate?: boolean } = {}) {
     transcribe: async (file) => {
       calls.transcribe.push(path.basename(file));
       // Chaque tronçon : une phrase 10 s après son début d'extraction.
-      const idx = Number(/chunk-(\d+)/.exec(file)![1]);
+      const idx = [0, 597, 1197].indexOf(Number(/chunk-(\d+)-/.exec(file)![1])); // fichier chunk-<début>-<durée>
       const text = `Play number ${idx + 1} is good.`;
       const words = text.split(' ').map((w, i) => ({ word: ` ${w}`, start: 10 + i * 0.3, end: 10.25 + i * 0.3 }));
       return { segments: [{ start: 10, end: 12, text: ` ${text}`, avg_logprob: -0.2, no_speech_prob: 0.02, compression_ratio: 1.1 }], words };
@@ -231,6 +231,11 @@ function fakeDeps(o: { failExtract?: boolean; failTranslate?: boolean } = {}) {
 
 describe('runCommentary', () => {
   const ctrl = () => new AbortController().signal;
+  // Tronçons de 10 min ici (3 tronçons) : le découpage fin d'1 min est testé dans commentary-ondemand.
+  beforeEach(() => void (process.env.COMMENTARY_CHUNK_SEC = '600'));
+  afterEach(() => void delete process.env.COMMENTARY_CHUNK_SEC);
+  /** Début (s) du tronçon d'après le nom du fichier audio (chunk-<début>-<durée>.ogg). */
+  const startOf = (f: string) => Number(/chunk-(\d+)-/.exec(f)![1]);
 
   it('extrait, transcrit, décale, traduit et stocke ; le dossier de travail est supprimé', async () => {
     const { deps, calls } = fakeDeps();
@@ -268,13 +273,13 @@ describe('runCommentary', () => {
     const first = fakeDeps({ failTranslate: true });
     await expect(runCommentary({ matchId: A, force: false }, () => {}, ctrl(), first.deps)).rejects.toBeInstanceOf(ServiceError);
     // Le tronçon 1 a été transcrit, sa traduction a échoué : rien n'est publié.
-    expect(first.calls.transcribe).toEqual(['chunk-000.ogg']);
+    expect(first.calls.transcribe.map(startOf)).toEqual([0]);
     expect(db.getCommentaryCues(A)).toHaveLength(0);
     const second = fakeDeps();
     const res = await runCommentary({ matchId: A, force: false }, () => {}, ctrl(), second.deps);
     expect(res.ok).toBe(true);
     expect(second.calls.extract).toEqual([597, 1197]);
-    expect(second.calls.transcribe).toEqual(['chunk-001.ogg', 'chunk-002.ogg']);
+    expect(second.calls.transcribe.map(startOf)).toEqual([597, 1197]);
     expect(db.getCommentaryCues(A)).toHaveLength(3);
   });
 

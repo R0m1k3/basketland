@@ -31,6 +31,7 @@ import { findBreaks, toTimedPlays, type ResolvedAnchor } from './sync';
 import { addDays } from './time';
 import type { AnchorRow } from './types';
 import { scanVideo, type ScanPhase } from './videoScan';
+import { inNightWindow } from './nightWindow';
 
 // ------------------------------------------------------------------ choix de la source média
 
@@ -213,6 +214,8 @@ interface Job {
   matchId: number;
   withAudio: boolean;
   manual: boolean;
+  /** Mise en file par le job de nuit : abandonnée si elle n'a pas démarré avant la fin de la fenêtre. */
+  background?: boolean;
 }
 
 interface RunState extends AnalysisProgress {
@@ -293,7 +296,10 @@ export interface EnqueueResult {
  * Met un match en file. `priority` le place en tête (demande explicite de
  * l'utilisateur) ; un match déjà en file est alors remonté.
  */
-export function enqueueAnalysis(matchId: number, opts: { priority?: boolean; withAudio?: boolean; manual?: boolean } = {}): EnqueueResult {
+export function enqueueAnalysis(
+  matchId: number,
+  opts: { priority?: boolean; withAudio?: boolean; manual?: boolean; background?: boolean } = {},
+): EnqueueResult {
   const reason = unavailableReason(matchId);
   if (reason) return { queued: false, started: false, reason, message: `Analyse impossible : ${reason}` };
   if (st.running.has(matchId)) return { queued: false, started: false, reason: 'déjà en cours', message: 'Analyse déjà en cours' };
@@ -307,11 +313,12 @@ export function enqueueAnalysis(matchId: number, opts: { priority?: boolean; wit
     }
   }
   const existing = st.queue.findIndex((j) => j.matchId === matchId);
-  const job: Job = { matchId, withAudio: !!opts.withAudio, manual: !!opts.manual };
+  const job: Job = { matchId, withAudio: !!opts.withAudio, manual: !!opts.manual, background: !!opts.background && !opts.priority };
   if (existing >= 0) {
     const prev = st.queue[existing];
     job.withAudio ||= prev.withAudio;
     job.manual ||= prev.manual;
+    job.background = job.background && !!prev.background;
     if (opts.priority) {
       st.queue.splice(existing, 1);
       st.queue.unshift(job);
@@ -334,6 +341,8 @@ function pump(): void {
   while (st.running.size < maxParallel() && st.queue.length) {
     const job = st.queue.shift() as Job;
     if (st.running.has(job.matchId) || unavailableReason(job.matchId)) continue;
+    // Analyse de fond pas encore démarrée à la fin de la fenêtre de nuit : abandonnée.
+    if (job.background && !inNightWindow()) continue;
     start(job);
   }
   if (!st.running.size && !st.queue.length && st.idleResolve) {
@@ -432,7 +441,7 @@ export function enqueueRecentAnalyses(days = 10, limit = 30): number {
     if (st.running.has(m.id) || queuePosition(m.id)) continue;
     if (db.getAnchors(m.id).filter((a) => a.method === 'manual').length >= 2) continue;
     if (!autoRetryAllowed(getAnalysisRecord(m.id), m.video_ok_id)) continue;
-    const r = enqueueAnalysis(m.id);
+    const r = enqueueAnalysis(m.id, { background: true });
     if (r.queued) n++;
   }
   return n;

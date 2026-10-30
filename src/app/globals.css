@@ -331,3 +331,29 @@ body {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
+
+/* ==========================================================================
+   Formulaires (connexion, premier démarrage, paramètres)
+   Dans @layer components : les utilitaires (w-auto, px-3…) doivent pouvoir
+   les surcharger.
+   ========================================================================== */
+@layer components {
+  .field-label {
+    @apply mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.14em] text-paper-mute;
+  }
+  .field {
+    @apply block w-full rounded-xl border border-ink-600 bg-ink-950/70 px-3.5 py-2.5 text-[15px] text-paper transition placeholder:text-paper-faint hover:border-ink-500 focus:border-flame/70 focus:outline-none focus:ring-2 focus:ring-flame/25 disabled:opacity-60;
+  }
+  .field-hint {
+    @apply mt-1.5 text-xs text-paper-faint;
+  }
+  .form-error {
+    @apply rounded-xl border border-loss/30 bg-loss/10 px-3.5 py-2.5 text-sm text-loss;
+  }
+  .form-ok {
+    @apply rounded-xl border border-win/30 bg-win/10 px-3.5 py-2.5 text-sm text-win;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-loss/40 bg-loss/10 px-4 py-2 text-sm font-medium text-loss transition hover:bg-loss/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-loss/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+}

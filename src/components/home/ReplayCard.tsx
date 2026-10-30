@@ -5,6 +5,7 @@ import { teamInfo, type TeamInfo } from '@/lib/teams';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { RevealButton } from '@/components/ui/Score';
 import { IconPlay } from '@/components/ui/Icons';
+import VfBadge from '@/components/ui/VfBadge';
 import { gameLabel, outcome } from '@/components/schedule/GameRow';
 
 function Line({ team, score, win, lose }: { team: TeamInfo; score: number | null; win: boolean; lose: boolean }) {
@@ -59,7 +60,7 @@ export default function ReplayCard({ game, when, className = '' }: { game: GameV
         </div>
         <div className="mt-auto flex items-center justify-between gap-2 border-t border-ink-700/60 pt-3">
           <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider">
-            {game.hasVf && <span className="rounded bg-flame/15 px-1.5 py-0.5 text-flame-hot">VF</span>}
+            <VfBadge vf={game.vf} size="sm" />
             {game.hasStats && <span className="rounded bg-ink-700 px-1.5 py-0.5 text-paper-dim">Stats</span>}
           </span>
           <span className="pointer-events-auto">

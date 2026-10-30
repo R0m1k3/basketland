@@ -7,7 +7,8 @@
  * un match à 01:30 le 30/10 appartient à la nuit du 29 au 30.
  */
 import type { SQLInputValue } from 'node:sqlite';
-import { commentaryReadyIds, getDb, kvGet, listMatches } from './db';
+import { commentaryProgressByIds, getDb, kvGet, listMatches } from './db';
+import { commentaryRunningMatchId } from './commentary';
 import type { StandingRow } from './espn';
 import { toDto, type MatchDto } from './present';
 import { addDays, parisDateKey, parisDayStartUtc } from './time';
@@ -68,7 +69,14 @@ export interface GameView extends MatchDto {
   hasReplay: boolean;
   /** Commentaires traduits en français disponibles (piste prête pour la vidéo actuelle). */
   hasVf: boolean;
+  /**
+   * État de la VF (replays seulement) : prête, en cours de traduction, en
+   * partie traduite (`pct` = part du match), ou pas encore commencée.
+   */
+  vf: VfState;
 }
+
+export type VfState = { state: 'ready' } | { state: 'running'; pct: number } | { state: 'partial'; pct: number } | { state: 'none' };
 
 /** Ensemble des identifiants de matchs qui ont des stats joueurs en base. */
 function idsWithStats(ids: number[]): Set<number> {
@@ -83,14 +91,27 @@ function idsWithStats(ids: number[]): Set<number> {
 export function toViews(rows: MatchRow[]): GameView[] {
   const finals = rows.filter((r) => r.status === 'final').map((r) => r.id);
   const stats = idsWithStats(finals);
-  const vf = commentaryReadyIds(finals);
+  const progress = commentaryProgressByIds(finals);
+  const running = commentaryRunningMatchId();
   return rows.map((r) => {
     const dto = toDto(r);
+    const p = dto.video.available ? progress.get(r.id) : undefined;
+    const pct = p && p.total ? Math.min(99, Math.round((p.done / p.total) * 100)) : 0;
+    const vf: VfState = !dto.video.available
+      ? { state: 'none' }
+      : p?.complete
+        ? { state: 'ready' }
+        : running === r.id
+          ? { state: 'running', pct }
+          : p && p.done > 0
+            ? { state: 'partial', pct }
+            : { state: 'none' };
     return {
       ...dto,
       hasStats: stats.has(r.id),
       hasReplay: dto.video.available,
-      hasVf: dto.video.available && vf.has(r.id),
+      hasVf: vf.state === 'ready',
+      vf,
     };
   });
 }

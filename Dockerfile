@@ -80,6 +80,8 @@ COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --chown=node:node scripts/whisper_worker.py ./scripts/whisper_worker.py
+# Récupération d'accès : docker exec -it basketland node scripts/reset-password.mjs <identifiant> <mot-de-passe>
+COPY --chown=node:node scripts/reset-password.mjs ./scripts/reset-password.mjs
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]

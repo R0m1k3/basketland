@@ -1,42 +1,33 @@
 /**
- * Traduction française des commentaires des replays, 100 % locale.
+ * Traduction française des commentaires des replays (Whisper local + Ollama
+ * local, ou l'API OpenAI si une clé est configurée).
  *
- * Chaîne d'un match, TRONÇON PAR TRONÇON (10 min de vidéo) :
- *   audio du tronçon (ffmpeg, mono 16 kHz, Opus 24 kb/s)
- *   → transcription Whisper horodatée (GPU du NAS)
- *   → filtre des hallucinations, découpage en sous-titres lisibles
- *   → traduction EN→FR des sous-titres devenus STABLES (Ollama)
- *   → publication dans `commentary_cues` (+ `commentary_tracks`, complete=0)
- *   → tronçon suivant… ; à la fin, la piste est marquée complète.
- * Les sous-titres arrivent ainsi par tranches de 10 min : on peut regarder
- * le début du match pendant que la suite est traduite. Whisper et le modèle
- * de traduction restent chargés ensemble pendant tout le travail ;
- * `COMMENTARY_GPU_SEQUENTIAL=1` revient à « tout transcrire, arrêter
- * Whisper, puis traduire » (publication progressive pendant la traduction).
+ * TRADUCTION À LA DEMANDE, devant la tête de lecture :
+ *   ouvrir un match → travail lancé tout de suite (un travail de fond est
+ *   mis en pause) → tronçons d'1 min À PARTIR DE LA POSITION DU SPECTATEUR :
+ *   audio (ffmpeg) → Whisper → filtre des hallucinations, sous-titres →
+ *   traduction → publication du tronçon (`commentary_cues` +
+ *   `commentary_chunks`) → tronçon suivant. Les premiers sous-titres
+ *   arrivent ~20-30 s après l'ouverture, puis la traduction prend de
+ *   l'avance sur la lecture. Un saut dans la vidéo réoriente le travail
+ *   (la fiche envoie sa position à chaque interrogation, `touchViewer`).
+ *   Quand tout le match est fait, la piste est marquée complète.
  *
- * Stabilité des sous-titres publiés : un sous-titre publié n'est plus jamais
- * modifié ni renuméroté (voir `nextStableCues`) ; le cache de traduction
- * (clé seq + texte anglais) reste donc valable d'un tronçon à l'autre et
- * d'un essai à l'autre.
+ * Rien ne tourne pour rien : sans signe de vie du spectateur pendant 3 min,
+ * le travail se met en pause et les modèles sont DÉCHARGÉS (sessions
+ * fermées dès la fin d'un travail). En tâche de fond, seule la
+ * PRÉ-TRADUCTION DE NUIT (2 h-6 h, heure de Paris, `inNightWindow`) traduit
+ * les matchs récents ; elle se met en pause à la fin de la fenêtre.
  *
  * Les fichiers intermédiaires (tronçons audio, transcriptions, traductions
  * déjà faites) vivent dans `${dataDir()}/commentary/<okId>/` : un travail
- * interrompu (serveur éteint, flux coupé, redémarrage) reprend là où il
- * s'était arrêté, et ce qui était déjà publié reste affiché. Le dossier est
- * supprimé après succès.
+ * interrompu reprend là où il s'était arrêté, et ce qui est publié reste
+ * affiché. Le dossier est supprimé quand la piste est complète.
  *
- * File : un seul travail à la fois (le GPU est partagé entre Whisper et le
- * LLM, et avec le reste du NAS). Alimentation :
- *  - le planificateur met en file, toutes les 10 min, les matchs terminés
- *    depuis ≤ 10 jours qui ont un replay et pas de piste traduite pour la
- *    vidéo actuelle (`enqueueRecentCommentaries`) ;
- *  - ouvrir la fiche d'un match (GET des sous-titres) ou l'action « start »
- *    de l'API le met en TÊTE de file ; « retry » relance même après abandon.
- *
- * Backoff (même modèle que `analysis.ts`, état dans `kv_cache`) : flux vidéo
- * ou service local injoignable → nouvel essai rapide (15 min → 6 h), sans
- * compter dans l'abandon ; autre échec → 1 h, 4 h, 16 h, 24 h, puis abandon
- * tant que la vidéo ne change pas.
+ * File : un seul travail à la fois (GPU partagé). Backoff (même modèle que
+ * `analysis.ts`, état dans `kv_cache`) : flux vidéo ou service injoignable →
+ * nouvel essai rapide (15 min → 6 h), sans compter dans l'abandon ; autre
+ * échec → 1 h, 4 h, 16 h, 24 h, puis abandon tant que la vidéo ne change pas.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -61,6 +52,9 @@ import { BROWSER_UA } from './http';
 import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
 import { addDays } from './time';
 import { OllamaSession, WhisperSession } from './localAi';
+import { inNightWindow } from './nightWindow';
+
+export { inNightWindow };
 
 // ------------------------------------------------------------------ contrat de l'API
 
@@ -72,17 +66,19 @@ export interface CommentaryStatus {
   phase?: CommentaryPhase;
   /**
    * Avancement de la phase. Extraction, transcription, traduction : en
-   * tronçons de 10 min (`done` = tronçons dont les sous-titres sont publiés) ;
+   * tronçons d'1 min (`done` = tronçons dont les sous-titres sont publiés) ;
    * préparation : téléchargement d'un modèle, en Mo (0/0 sinon).
    */
   progress?: { done: number; total: number };
   /**
-   * Piste pas encore complète : secondes de vidéo couvertes par les
-   * sous-titres déjà publiés (« disponibles jusqu'à 34:10 »).
+   * Piste pas encore complète : fin des sous-titres prêts d'un seul tenant
+   * à partir de la position du spectateur (« disponibles jusqu'à 34:10 »).
    */
   available_until?: number;
   /** Rang dans la file (1 = prochain travail). */
   position?: number;
+  /** Piste partielle : plages de vidéo déjà traduites, [[début, fin], …] (s). */
+  covered?: [number, number][];
   reason?: string;
   models?: { transcribe: string; translate: string };
 }
@@ -238,8 +234,11 @@ function writeJson(file: string, value: unknown): void {
   fs.renameSync(tmp, file);
 }
 
-const chunkAudio = (dir: string, i: number) => path.join(dir, `chunk-${String(i).padStart(3, '0')}.ogg`);
-const chunkJson = (dir: string, i: number) => path.join(dir, `chunk-${String(i).padStart(3, '0')}.json`);
+// Fichiers nommés par position dans la vidéo : un changement de découpage
+// (COMMENTARY_CHUNK_SEC) n'en réutilise jamais un qui ne correspond pas.
+const chunkName = (p: ChunkPlan) => `chunk-${String(Math.round(p.start)).padStart(5, '0')}-${p.length}`;
+const chunkAudio = (dir: string, p: ChunkPlan) => path.join(dir, `${chunkName(p)}.ogg`);
+const chunkJson = (dir: string, p: ChunkPlan) => path.join(dir, `${chunkName(p)}.json`);
 
 interface ChunkCache {
   model: string;
@@ -343,9 +342,56 @@ export interface CommentaryOutcome {
   ok: boolean;
   reason: string;
   kind?: CommentaryFailureKind;
+  /** Mis en pause (plus de spectateur, fin de la fenêtre de nuit) : ni succès ni échec. */
+  paused?: boolean;
 }
 
-export type CommentaryRunner = (job: Job, progress: (p: CommentaryProgress) => void, signal: AbortSignal) => Promise<CommentaryOutcome>;
+export type CommentaryRunner = (
+  job: Job,
+  progress: (p: CommentaryProgress) => void,
+  signal: AbortSignal,
+  ctl: CommentaryControl,
+) => Promise<CommentaryOutcome>;
+
+// ------------------------------------------------------------------ spectateurs et fenêtre de nuit
+
+/**
+ * Spectateurs : chaque GET des sous-titres (la fiche ouverte les interroge
+ * toutes les 12 s pendant la traduction) signale qu'un match est regardé,
+ * et à quelle position. Sans signe de vie depuis `viewerIdleMs`, le travail
+ * se met en pause et décharge les modèles.
+ */
+const viewers = ((globalThis as unknown as { __commentaryViewers?: Map<number, { at: number; t: number }> }).__commentaryViewers ??= new Map());
+
+function viewerIdleMs(): number {
+  const n = Number(process.env.COMMENTARY_VIEWER_IDLE_MS);
+  return Number.isFinite(n) && n > 0 ? n : 3 * 60_000;
+}
+
+/** Signe de vie d'un spectateur (position de lecture en secondes, si connue). */
+export function touchViewer(matchId: number, t?: number | null): void {
+  const prev = viewers.get(matchId);
+  const pos = typeof t === 'number' && Number.isFinite(t) && t >= 0 ? t : (prev?.t ?? 0);
+  viewers.set(matchId, { at: Date.now(), t: pos });
+}
+
+export function viewerActive(matchId: number, now = Date.now()): boolean {
+  const v = viewers.get(matchId);
+  return !!v && now - v.at < viewerIdleMs();
+}
+
+/** Position du spectateur actif, sinon null. */
+export function viewerPosition(matchId: number): number | null {
+  return viewerActive(matchId) ? (viewers.get(matchId)?.t ?? 0) : null;
+}
+
+/** Pilotage d'un travail : continuer tant qu'on regarde le match (ou, pour un travail de fond, la nuit). */
+function controlFor(job: Job): CommentaryControl {
+  return {
+    keepGoing: () => viewerActive(job.matchId) || (!job.viewer && inNightWindow()),
+    target: () => viewerPosition(job.matchId) ?? 0,
+  };
+}
 
 interface QueueState {
   queue: Job[];
@@ -409,12 +455,33 @@ export function servedCommentaryCues(matchId: number): db.CommentaryCueRow[] {
   return currentTrack(matchId) ? db.getCommentaryCues(matchId) : [];
 }
 
-/** Couverture d'une piste partielle (s), d'après l'avancement ou, à défaut, la base. */
+/**
+ * Piste partielle : fin (s) des sous-titres prêts d'un seul tenant à partir
+ * de la position du spectateur (ou du début), d'après l'avancement du
+ * travail ou, à défaut, les tronçons publiés en base.
+ */
 function availableUntil(matchId: number, progress: CommentaryProgress | null): number | undefined {
   if (progress?.availableUntil) return progress.availableUntil;
   const t = currentTrack(matchId);
   if (!t || t.complete) return undefined;
-  return db.commentaryPublishedUntil(matchId) || undefined;
+  const pos = viewerPosition(matchId) ?? 0;
+  const ranges = db.commentaryCoverage(matchId);
+  if (!ranges.length) return db.commentaryPublishedUntil(matchId) || undefined; // piste antérieure, en préfixe continu
+  const r = ranges.find(([a, b]) => pos >= a - 0.5 && pos < b);
+  return r ? r[1] : undefined;
+}
+
+/** Plages déjà traduites d'une piste partielle (la fiche les affiche sur la barre de lecture). */
+function coveredRanges(matchId: number): [number, number][] | undefined {
+  const t = currentTrack(matchId);
+  if (!t || t.complete) return undefined;
+  const r = db.commentaryCoverage(matchId);
+  return r.length ? r : undefined;
+}
+
+/** Match en cours de traduction (badge « VF en cours » des listes), sinon null. */
+export function commentaryRunningMatchId(): number | null {
+  return st.running?.job.matchId ?? null;
 }
 
 export function commentaryQueuePosition(matchId: number): number | null {
@@ -498,7 +565,7 @@ function start(job: Job): void {
   const ctrl = new AbortController();
   const state: NonNullable<QueueState['running']> = { job, progress: null, okId, abort: () => ctrl.abort(), preempted: false };
   st.running = state;
-  const runner = st.runner ?? runCommentary;
+  const runner: CommentaryRunner = st.runner ?? ((j, p, sig, c) => runCommentary(j, p, sig, defaultDeps, c));
   const logId = db.logIngestStart(`commentaires-${job.matchId}`);
   const t0 = Date.now();
   // Garde-fou : un travail qui ne rend jamais la main (serveur figé…) est
@@ -511,7 +578,7 @@ function start(job: Job): void {
     }, jobTimeoutMs());
     watchdog.unref?.();
   });
-  void Promise.race([runner(job, (p) => (state.progress = { ...p }), ctrl.signal), timeout])
+  void Promise.race([runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job)), timeout])
     .then(
       (res) => res,
       (e: unknown): CommentaryOutcome =>
@@ -529,6 +596,16 @@ function start(job: Job): void {
           /* journal facultatif */
         }
         if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.splice(Math.min(1, st.queue.length), 0, { ...job, viewer: false });
+        return;
+      }
+      if (res.paused) {
+        // Ni succès ni échec : reprise à la prochaine ouverture du match (ou la nuit suivante).
+        try {
+          db.logIngestEnd(logId, true, res.reason);
+        } catch {
+          /* journal facultatif */
+        }
+        console.log(`[commentaires] match ${job.matchId} ${res.reason}`);
         return;
       }
       const prev = getCommentaryRecord(job.matchId);
@@ -569,17 +646,20 @@ export function commentaryStatus(matchId: number): CommentaryStatus {
   if (st.running?.job.matchId === matchId) {
     const p = st.running.progress;
     const until = availableUntil(matchId, p);
+    const covered = coveredRanges(matchId);
     return {
       status: 'running',
       ...(p ? { phase: p.phase, progress: { done: p.done, total: p.total } } : {}),
       ...(until ? { available_until: until } : {}),
+      ...(covered ? { covered } : {}),
       models: currentModels(),
     };
   }
   const position = commentaryQueuePosition(matchId);
   if (position) {
     const until = availableUntil(matchId, null);
-    return { status: 'queued', position, ...(until ? { available_until: until } : {}), models: currentModels() };
+    const covered = coveredRanges(matchId);
+    return { status: 'queued', position, ...(until ? { available_until: until } : {}), ...(covered ? { covered } : {}), models: currentModels() };
   }
   if (commentaryReady(matchId)) {
     const t = db.getCommentaryTrack(matchId) as db.CommentaryTrackRow;
@@ -596,8 +676,9 @@ export function commentaryStatus(matchId: number): CommentaryStatus {
   const rec = getCommentaryRecord(matchId);
   const okId = db.getMatch(matchId)?.video_ok_id ?? null;
   const until = availableUntil(matchId, null);
-  if (rec && !rec.ok && (!rec.okId || rec.okId === okId)) return { status: 'failed', reason: rec.reason, ...(until ? { available_until: until } : {}) };
-  return { status: 'none', ...(until ? { available_until: until } : {}) };
+  const extra = { ...(until ? { available_until: until } : {}), ...(coveredRanges(matchId) ? { covered: coveredRanges(matchId) } : {}) };
+  if (rec && !rec.ok && (!rec.okId || rec.okId === okId)) return { status: 'failed', reason: rec.reason, ...extra };
+  return { status: 'none', ...extra };
 }
 
 /**
@@ -634,6 +715,7 @@ export function enqueueRecentCommentaries(days = 10, limit = 30): number {
 /** Tests : remplace l'exécuteur, vide la file. */
 export function __setCommentaryRunnerForTests(runner: CommentaryRunner | null): void {
   st.runner = runner;
+  viewers.clear();
   st.queue.length = 0;
   st.running = null;
   st.idleResolve?.();
@@ -749,61 +831,72 @@ export function cuesFromChunks(chunks: { plan: ChunkPlan; transcript: Transcript
 }
 
 /**
- * Marge (s) avant la fin de la zone gardée d'un tronçon : un sous-titre qui
- * se termine avant `keepTo - marge` ne bougera plus quand le tronçon suivant
- * arrivera. Les mots du tronçon suivant ont leur milieu après `keepTo` : le
- * premier commence au plus tôt ~0,5 s avant, soit plus de 1,5 s (la pause
- * qui coupe TOUJOURS un sous-titre dans `buildCues`) après le dernier mot
- * d'un sous-titre stable — qui finit au moins 0,5 s avant sa fin affichée.
+ * Sous-titres d'UN tronçon, numérotés dans sa plage de seq
+ * (`db.chunkSeqBase`) : les tronçons sont traduits et publiés dans le
+ * désordre (position du spectateur d'abord), indépendamment les uns des
+ * autres.
  */
-export const STABLE_MARGIN_SEC = 2;
+export function chunkCues(plan: ChunkPlan, transcript: Transcript, prompt?: string): Cue[] {
+  const base = db.chunkSeqBase(plan.index);
+  return buildCues(chunkWords({ plan, transcript }, prompt)).map((c, k) => ({ ...c, seq: base + k + 1 }));
+}
 
-/** Limite de stabilité après le tronçon `plan` (tout est stable après le dernier). */
-export function stableCutoff(plan: ChunkPlan): number {
-  return Number.isFinite(plan.keepTo) ? plan.keepTo - STABLE_MARGIN_SEC : Number.POSITIVE_INFINITY;
+/** Index du tronçon qui contient la seconde `t`. */
+export function chunkAt(plans: ChunkPlan[], t: number): number {
+  const i = plans.findIndex((p) => t < p.keepTo);
+  return i < 0 ? plans.length - 1 : i;
 }
 
 /**
- * Sous-titres à FIGER après un nouveau tronçon.
- *
- * `frozen` : sous-titres déjà publiés (seq 1..n), jamais modifiés. Seuls les
- * mots qui suivent le dernier d'entre eux sont regroupés à nouveau ; les
- * sous-titres obtenus qui se terminent avant `cutoff` sont stables et rendus
- * avec les seq n+1, n+2… Comme le regroupement de `buildCues` avance mot à
- * mot et repart d'un groupe vide après chaque sous-titre, le résultat est
- * celui d'un découpage complet du match (la marge de `STABLE_MARGIN_SEC`
- * l'assure) ; et si un tronçon suivant venait malgré tout perturber la
- * frontière (mot anormalement long, horodatage décalé), seuls les
- * sous-titres non encore publiés en tiendraient compte : la numérotation
- * publiée, et donc le cache de traduction (seq + anglais), ne change pas.
+ * Prochain tronçon à traduire : le premier pas encore fait à partir de la
+ * position visée (celle du spectateur), puis, une fois la fin atteinte,
+ * ceux d'avant. Undefined : tout est fait.
  */
-export function nextStableCues(words: AsrWord[], frozen: Cue[], cutoff: number): Cue[] {
-  const last = frozen[frozen.length - 1];
-  const rest = last ? words.filter((w) => (w.start + w.end) / 2 > last.end) : words;
-  const out: Cue[] = [];
-  for (const c of buildCues(rest)) {
-    if (c.end > cutoff) break; // fins croissantes : les suivants ne sont pas stables non plus
-    // Jamais de chevauchement avec le dernier sous-titre publié.
-    const start = last && !out.length ? Math.max(c.start, last.end) : c.start;
-    out.push({ seq: frozen.length + out.length + 1, start, end: Math.max(c.end, Math.round((start + 0.01) * 100) / 100), text: c.text });
-  }
-  return out;
+export function nextChunk(plans: ChunkPlan[], done: Set<number>, target: number): ChunkPlan | undefined {
+  if (!plans.length) return undefined;
+  const at = Math.max(0, chunkAt(plans, Math.max(0, target)));
+  for (let i = at; i < plans.length; i++) if (!done.has(i)) return plans[i];
+  for (let i = 0; i < at; i++) if (!done.has(i)) return plans[i];
+  return undefined;
+}
+
+/** Fin (s) des sous-titres prêts d'un seul tenant à partir de `t` (0 si le passage de `t` n'est pas traduit). */
+export function coveredFrom(plans: ChunkPlan[], done: Set<number>, t: number, duration: number): number {
+  let i = chunkAt(plans, Math.max(0, t));
+  if (i < 0 || !done.has(i)) return 0;
+  while (i + 1 < plans.length && done.has(i + 1)) i++;
+  return Number.isFinite(plans[i].keepTo) ? plans[i].keepTo : duration;
 }
 
 /** Flux vidéo inaccessible pendant l'extraction d'un tronçon (échec « reseau »). */
 class StreamUnavailable extends Error {}
 
 /**
- * Un travail complet, tronçon par tronçon (voir l'en-tête). Les tronçons,
+ * Pilotage d'un travail par la file :
+ * - `keepGoing` : continuer ? (quelqu'un regarde le match, ou fenêtre de
+ *   pré-traduction de nuit) — sinon le travail se met en pause après le
+ *   tronçon en cours, et les modèles sont déchargés ;
+ * - `target` : position (s) à traduire en priorité (celle du spectateur).
+ */
+export interface CommentaryControl {
+  keepGoing(): boolean;
+  target(): number;
+}
+
+const RUN_TO_END: CommentaryControl = { keepGoing: () => true, target: () => 0 };
+
+/**
+ * Un travail : tronçon par tronçon (1 min), en commençant à la position du
+ * spectateur, chaque tronçon publié dès qu'il est traduit. Les tronçons,
  * transcriptions et traductions déjà présents dans le dossier de travail
- * sont réutilisés (reprise après échec) ; les sous-titres déjà publiés
- * restent en base si le travail échoue en route.
+ * sont réutilisés ; les tronçons déjà publiés en base ne sont pas refaits.
  */
 export async function runCommentary(
   job: Job,
   progress: (p: CommentaryProgress) => void,
   signal: AbortSignal,
   deps: CommentaryDeps = defaultDeps,
+  ctl: CommentaryControl = RUN_TO_END,
 ): Promise<CommentaryOutcome> {
   const t0 = Date.now();
   const cfg = commentaryConfig();
@@ -838,19 +931,28 @@ export async function runCommentary(
           ),
         ])
       : undefined;
-  const track: db.CommentaryTrackMeta = { ok_id: okId, transcribe_model: cfg.transcribeModel, translate_model: cfg.translateModel };
+  const track: db.CommentaryTrackMeta = {
+    ok_id: okId,
+    transcribe_model: cfg.transcribeModel,
+    translate_model: cfg.translateModel,
+    chunk_sec: cfg.chunkSec,
+    chunks_total: total,
+  };
+  // Relance explicite d'une piste complète : on repart de zéro ; sinon reprise.
+  const done = db.openCommentaryTrack(job.matchId, track, job.force && db.getCommentaryTrack(job.matchId)?.complete === 1);
 
   const cacheFile = path.join(dir, 'translation.json');
   const cache: TranslationCache = readJson<TranslationCache>(cacheFile) ?? { model: cfg.translateModel, lines: {} };
   if (cache.model !== cfg.translateModel) Object.assign(cache, { model: cfg.translateModel, lines: {} });
 
-  /** Secondes de vidéo couvertes par les sous-titres publiés. */
-  let coveredUntil = 0;
-  const report = (phase: CommentaryPhase, done: number, tot = total) =>
-    progress({ phase, done, total: tot, ...(coveredUntil > 0 ? { availableUntil: coveredUntil } : {}) });
+  const report = (phase: CommentaryPhase, d: number, tot = total) => {
+    const until = coveredFrom(plans, done, ctl.target(), duration);
+    progress({ phase, done: d, total: tot, ...(until > 0 ? { availableUntil: until } : {}) });
+  };
 
   // Sessions ouvertes au premier besoin (une reprise dont tout est en cache
-  // ne charge aucun modèle), fermées en fin de travail, sur erreur ou abandon.
+  // ne charge aucun modèle), fermées — modèles déchargés — dès la fin du
+  // travail, sur erreur, pause ou abandon.
   let asr: Transcriber | null = null;
   let mt: { close(): Promise<void> } | null = null;
   let mtOpen = false;
@@ -898,12 +1000,12 @@ export async function runCommentary(
 
   /** Transcription d'un tronçon : cache, sinon extraction (si besoin) puis Whisper. */
   const transcribeChunk = async (plan: ChunkPlan): Promise<Transcript> => {
-    const cacheJson = chunkJson(dir, plan.index);
+    const cacheJson = chunkJson(dir, plan);
     const cached = readJson<ChunkCache>(cacheJson);
     if (cached && cached.model === cfg.transcribeModel && cached.transcript) return cached.transcript;
-    const audio = chunkAudio(dir, plan.index);
+    const audio = chunkAudio(dir, plan);
     if (!fs.existsSync(audio)) {
-      report('extraction', plan.index);
+      report('extraction', done.size);
       await extract(plan, audio);
     }
     checkAborted(signal);
@@ -911,42 +1013,40 @@ export async function runCommentary(
       report('preparation', 0, 0);
       asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
     }
-    report('transcription', plan.index);
+    report('transcription', done.size);
     const transcript = await asr.transcribe(audio, prompt, signal);
     writeJson(cacheJson, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
+    fs.rmSync(audio, { force: true }); // transcrit : l'audio ne sert plus
     return transcript;
   };
 
-  const words: AsrWord[] = [];
-  const frozen: Cue[] = [];
   let batches = 0;
 
-  /** Fige, traduit et publie les sous-titres devenus stables après le tronçon `plan`. */
-  const translateAndPublish = async (plan: ChunkPlan) => {
-    const fresh = nextStableCues(words, frozen, stableCutoff(plan));
-    const todoAll = fresh.filter((c) => cache.lines[c.seq]?.en !== c.text);
+  /** Traduit et publie les sous-titres d'un tronçon. */
+  const translateAndPublish = async (plan: ChunkPlan, cues: Cue[]) => {
+    const todoAll = cues.filter((c) => cache.lines[c.seq]?.en !== c.text);
     if (todoAll.length && !mtOpen) {
       report('preparation', 0, 0);
-      mt = deps.openTranslator ? await deps.openTranslator(cfg, signal, (done, tot) => report('preparation', done, tot)) : null;
+      mt = deps.openTranslator ? await deps.openTranslator(cfg, signal, (d, tot) => report('preparation', d, tot)) : null;
       mtOpen = true;
     }
-    if (fresh.length) report('traduction', plan.index);
-    const all = [...frozen, ...fresh];
-    // Lots indépendants (le contexte est l'anglais des lignes précédentes) :
-    // `cfg.parallel` lots partent en même temps vers Ollama.
+    if (cues.length) report('traduction', done.size);
+    // Contexte du premier lot : les sous-titres déjà publiés juste avant ce tronçon.
+    const before = db.commentaryCuesBefore(job.matchId, plan.keepFrom, CONTEXT_LINES);
     const starts: number[] = [];
-    for (let k = 0; k < fresh.length; k += cfg.batch) starts.push(k);
+    for (let k = 0; k < cues.length; k += cfg.batch) starts.push(k);
     let nextBatch = 0;
+    // Lots indépendants (le contexte est l'anglais des lignes précédentes) :
+    // `cfg.parallel` lots partent en même temps.
     const worker = async () => {
       while (nextBatch < starts.length) {
         const k = starts[nextBatch++];
         checkAborted(signal);
-        const batch = fresh.slice(k, k + cfg.batch);
+        const batch = cues.slice(k, k + cfg.batch);
         batches++;
         const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
         if (!todo.length) continue;
-        const first = frozen.length + k;
-        const context = all.slice(Math.max(0, first - CONTEXT_LINES), first).map((c) => c.text);
+        const context = [...before, ...cues.slice(0, k).map((c) => c.text)].slice(-CONTEXT_LINES);
         const res = await deps.translate(
           todo.map((c) => ({ i: c.seq, en: c.text })),
           context,
@@ -961,47 +1061,32 @@ export async function runCommentary(
       }
     };
     await Promise.all(Array.from({ length: Math.min(cfg.parallel, starts.length) }, worker));
-    if (fresh.length) {
-      db.publishCommentaryCues(
-        job.matchId,
-        track,
-        fresh.map((c) => {
-          const t = cache.lines[c.seq];
-          const translated = t && t.en === c.text && !t.untranslated;
-          return { seq: c.seq, start_ts: c.start, end_ts: c.end, text_en: c.text, text_fr: translated ? t.fr : c.text, untranslated: translated ? 0 : 1 };
-        }),
-      );
-      frozen.push(...fresh);
-    }
-    const cutoff = stableCutoff(plan);
-    coveredUntil = Number.isFinite(cutoff) ? cutoff : Math.max(duration, frozen[frozen.length - 1]?.end ?? 0);
-    report('traduction', plan.index + 1);
+    db.publishCommentaryChunk(
+      job.matchId,
+      track,
+      { idx: plan.index, keepFrom: plan.keepFrom, keepTo: plan.keepTo },
+      cues.map((c) => {
+        const t = cache.lines[c.seq];
+        const translated = t && t.en === c.text && !t.untranslated;
+        return { seq: c.seq, start_ts: c.start, end_ts: c.end, text_en: c.text, text_fr: translated ? t.fr : c.text, untranslated: translated ? 0 : 1 };
+      }),
+    );
+    done.add(plan.index);
+    report('traduction', done.size);
   };
 
+  let paused = false;
   try {
-    if (cfg.gpuSequential) {
-      // Ancien enchaînement : tout transcrire, libérer le GPU, puis traduire.
-      const transcripts: Transcript[] = [];
-      for (const plan of plans) {
-        checkAborted(signal);
-        transcripts.push(await transcribeChunk(plan));
-        report('transcription', plan.index + 1);
+    for (;;) {
+      checkAborted(signal);
+      const plan = nextChunk(plans, done, ctl.target());
+      if (!plan) break;
+      if (!ctl.keepGoing()) {
+        paused = true;
+        break;
       }
-      await closeAsr();
-      for (const plan of plans) {
-        checkAborted(signal);
-        words.push(...chunkWords({ plan, transcript: transcripts[plan.index] }, prompt));
-        words.sort((a, b) => a.start - b.start);
-        await translateAndPublish(plan);
-      }
-    } else {
-      for (const plan of plans) {
-        checkAborted(signal);
-        const transcript = await transcribeChunk(plan);
-        words.push(...chunkWords({ plan, transcript }, prompt));
-        words.sort((a, b) => a.start - b.start);
-        await translateAndPublish(plan);
-      }
+      const transcript = await transcribeChunk(plan);
+      await translateAndPublish(plan, chunkCues(plan, transcript, prompt));
     }
   } catch (e) {
     if (e instanceof StreamUnavailable) return networkOutcome(e.message, job.matchId);
@@ -1011,20 +1096,23 @@ export async function runCommentary(
     await closeMt();
   }
 
-  if (!frozen.length) {
+  const minutes = Math.max(1, Math.round((Date.now() - t0) / 60_000));
+  if (paused) {
+    return {
+      ok: false,
+      paused: true,
+      reason: `en pause (${done.size}/${total} tronçons traduits) : plus personne ne regarde, ou hors de la fenêtre de pré-traduction`,
+    };
+  }
+  const t = db.getCommentaryTrack(job.matchId);
+  if (!t || !t.cues) {
     return { ok: false, kind: 'contenu', reason: 'Aucune parole détectée dans le replay (transcription vide après filtrage)' };
   }
-  db.completeCommentary(job.matchId, track, frozen.length);
   fs.rmSync(dir, { recursive: true, force: true });
-  const untranslated = frozen.filter((c) => {
-    const t = cache.lines[c.seq];
-    return !(t && t.en === c.text && !t.untranslated);
-  }).length;
   return {
     ok: true,
     reason:
-      `${frozen.length} sous-titres traduits${untranslated ? ` (${untranslated} laissés en anglais)` : ''} ; ` +
-      `${plans.length} tronçon(s), ${batches} lot(s)${cfg.gpuSequential ? ', GPU séquentiel' : ''} ; ` +
-      `${cfg.transcribeModel} + ${cfg.translateModel} ; ${Math.round((Date.now() - t0) / 1000)} s`,
+      `${t.cues} sous-titres traduits${t.untranslated ? ` (${t.untranslated} laissés en anglais)` : ''} ; ` +
+      `${total} tronçon(s), ${batches} lot(s) ; ${cfg.transcribeModel} + ${cfg.translateModel} ; ${minutes} min`,
   };
 }

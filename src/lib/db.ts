@@ -186,6 +186,16 @@ CREATE TABLE IF NOT EXISTS commentary_tracks (
   created_at TEXT NOT NULL
 );
 
+-- Tronçons de la vidéo dont les sous-titres traduits sont publiés (traduction
+-- à la demande : les tronçons ne sont pas faits dans l'ordre).
+CREATE TABLE IF NOT EXISTS commentary_chunks (
+  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,
+  keep_from REAL NOT NULL,
+  keep_to REAL NOT NULL,
+  PRIMARY KEY (match_id, idx)
+);
+
 CREATE TABLE IF NOT EXISTS kv_cache (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -241,6 +251,7 @@ export function openDatabase(file: string): DatabaseSyncType {
   }
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA_SQL);
+  db.exec(AUTH_SCHEMA_SQL); // utilisateurs, sessions, paramètres : bloc « authentification » en fin de fichier
   migrate(db);
   return db;
 }
@@ -268,6 +279,11 @@ function migrate(db: DatabaseSyncType): void {
     db.exec('ALTER TABLE commentary_tracks ADD COLUMN complete INTEGER NOT NULL DEFAULT 0');
     db.exec('UPDATE commentary_tracks SET complete = 1');
   }
+  // Découpage de la piste (traduction à la demande, tronçons publiés dans le
+  // désordre) : durée d'un tronçon et nombre total. NULL : piste antérieure,
+  // publiée d'un bloc ou en préfixe continu.
+  if (!trackCols.has('chunk_sec')) db.exec('ALTER TABLE commentary_tracks ADD COLUMN chunk_sec INTEGER');
+  if (!trackCols.has('chunks_total')) db.exec('ALTER TABLE commentary_tracks ADD COLUMN chunks_total INTEGER');
 }
 
 export function getDb(): DatabaseSyncType {
@@ -758,12 +774,17 @@ export interface CommentaryTrackRow {
   created_at: string;
   /** 1 : tout le match est traduit ; 0 : publication partielle (travail en cours ou interrompu). */
   complete: number;
+  /** Durée d'un tronçon (s) ; null pour une piste antérieure à la traduction à la demande. */
+  chunk_sec: number | null;
+  chunks_total: number | null;
 }
 
 export interface CommentaryTrackMeta {
   ok_id: string;
   transcribe_model: string;
   translate_model: string;
+  chunk_sec?: number | null;
+  chunks_total?: number | null;
 }
 
 type CueInput = Omit<CommentaryCueRow, 'match_id'>;
@@ -780,48 +801,134 @@ function insertCues(matchId: number, cues: CueInput[]): void {
 /** Métadonnées de la piste ; compteurs recalculés sur les sous-titres en base. */
 function writeTrack(matchId: number, track: CommentaryTrackMeta, complete: boolean): void {
   run(
-    `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at, complete)
-     SELECT $m, $ok, $tm, $lm, COUNT(*), COALESCE(SUM(untranslated != 0), 0), $now, $c FROM commentary_cues WHERE match_id = $m`,
-    { m: matchId, ok: track.ok_id, tm: track.transcribe_model, lm: track.translate_model, now: nowIso(), c: complete ? 1 : 0 },
+    `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at, complete, chunk_sec, chunks_total)
+     SELECT $m, $ok, $tm, $lm, COUNT(*), COALESCE(SUM(untranslated != 0), 0), $now, $c, $cs, $ct FROM commentary_cues WHERE match_id = $m`,
+    {
+      m: matchId,
+      ok: track.ok_id,
+      tm: track.transcribe_model,
+      lm: track.translate_model,
+      now: nowIso(),
+      c: complete ? 1 : 0,
+      cs: track.chunk_sec ?? null,
+      ct: track.chunks_total ?? null,
+    },
   );
+}
+
+// ---------------------------------------------------------------- traduction à la demande (tronçons)
+
+/** Premier seq des sous-titres du tronçon `idx` (les tronçons sont publiés dans le désordre). */
+export const chunkSeqBase = (idx: number) => (idx + 1) * 100_000;
+
+/**
+ * Ouvre (ou reprend) la piste d'un match pour un travail. Si la piste en
+ * base vient d'une autre vidéo, d'autres modèles ou d'un autre découpage —
+ * ou si `fresh` (relance explicite d'une piste complète) — elle est effacée :
+ * on repart de zéro. Rend les index des tronçons déjà publiés.
+ */
+export function openCommentaryTrack(matchId: number, track: CommentaryTrackMeta, fresh = false): Set<number> {
+  return tx(() => {
+    const prev = getCommentaryTrack(matchId);
+    const same =
+      !!prev &&
+      prev.ok_id === track.ok_id &&
+      prev.transcribe_model === track.transcribe_model &&
+      prev.translate_model === track.translate_model &&
+      prev.chunk_sec === (track.chunk_sec ?? null) &&
+      prev.chunks_total === (track.chunks_total ?? null);
+    if (!same || fresh) {
+      run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
+      run('DELETE FROM commentary_chunks WHERE match_id = $id', { id: matchId });
+      run('DELETE FROM commentary_tracks WHERE match_id = $id', { id: matchId });
+      return new Set<number>();
+    }
+    return new Set(all<{ idx: number }>('SELECT idx FROM commentary_chunks WHERE match_id = $id', { id: matchId }).map((r) => r.idx));
+  });
+}
+
+/**
+ * Publie les sous-titres traduits d'UN tronçon (remplace ceux qu'il avait
+ * déjà), le marque fait, et marque la piste complète quand tous les
+ * tronçons le sont.
+ */
+export function publishCommentaryChunk(
+  matchId: number,
+  track: CommentaryTrackMeta,
+  chunk: { idx: number; keepFrom: number; keepTo: number },
+  cues: CueInput[],
+): { done: number; complete: boolean } {
+  return tx(() => {
+    const base = chunkSeqBase(chunk.idx);
+    run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $a AND seq < $b', { id: matchId, a: base, b: base + 100_000 });
+    insertCues(matchId, cues);
+    run('INSERT OR REPLACE INTO commentary_chunks (match_id, idx, keep_from, keep_to) VALUES ($id, $i, $f, $t)', {
+      id: matchId,
+      i: chunk.idx,
+      f: chunk.keepFrom,
+      t: Number.isFinite(chunk.keepTo) ? chunk.keepTo : 1e9,
+    });
+    const done = one<{ n: number }>('SELECT COUNT(*) AS n FROM commentary_chunks WHERE match_id = $id', { id: matchId })?.n ?? 0;
+    const complete = !!track.chunks_total && done >= track.chunks_total;
+    writeTrack(matchId, track, complete);
+    return { done, complete };
+  });
+}
+
+/** Plages de vidéo couvertes par des tronçons publiés, fusionnées : [[début, fin], …]. */
+export function commentaryCoverage(matchId: number): [number, number][] {
+  const rows = all<{ keep_from: number; keep_to: number }>('SELECT keep_from, keep_to FROM commentary_chunks WHERE match_id = $id ORDER BY keep_from', {
+    id: matchId,
+  });
+  const out: [number, number][] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && r.keep_from <= last[1] + 0.5) last[1] = Math.max(last[1], r.keep_to);
+    else out.push([r.keep_from, r.keep_to]);
+  }
+  return out;
+}
+
+/**
+ * Sous-titres anglais qui précèdent `t` de moins de `window` secondes
+ * (contexte de traduction d'un tronçon : seulement si le tronçon d'avant est
+ * déjà traduit, pas un passage lointain).
+ */
+export function commentaryCuesBefore(matchId: number, t: number, limit: number, window = 30): string[] {
+  return all<{ text_en: string }>(
+    'SELECT text_en FROM commentary_cues WHERE match_id = $id AND start_ts < $t AND start_ts >= $from ORDER BY start_ts DESC LIMIT $n',
+    { id: matchId, t, from: t - window, n: limit },
+  )
+    .map((r) => r.text_en)
+    .reverse();
+}
+
+/**
+ * État de la VF des matchs `ids` pour les badges des listes : complète, ou
+ * part traduite (tronçons publiés / total) d'une piste partielle — pour le
+ * replay ACTUEL seulement.
+ */
+export function commentaryProgressByIds(ids: number[]): Map<number, { complete: boolean; done: number; total: number }> {
+  const list = [...new Set(ids.filter((n) => Number.isInteger(n)))];
+  const out = new Map<number, { complete: boolean; done: number; total: number }>();
+  if (!list.length) return out;
+  for (const r of all<{ match_id: number; complete: number; chunks_total: number | null; done: number }>(
+    `SELECT t.match_id, t.complete, t.chunks_total, (SELECT COUNT(*) FROM commentary_chunks c WHERE c.match_id = t.match_id) AS done
+       FROM commentary_tracks t JOIN matches m ON m.id = t.match_id
+      WHERE t.ok_id = m.video_ok_id AND t.cues > 0 AND t.match_id IN (SELECT value FROM json_each($ids))`,
+    { ids: JSON.stringify(list) },
+  )) {
+    out.set(r.match_id, { complete: r.complete === 1, done: r.done, total: r.chunks_total ?? 0 });
+  }
+  return out;
 }
 
 /** Remplace d'un bloc la piste traduite d'un match (sous-titres + métadonnées), marquée complète. */
 export function replaceCommentary(matchId: number, track: CommentaryTrackMeta, cues: CueInput[]): void {
   tx(() => {
     run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
+    run('DELETE FROM commentary_chunks WHERE match_id = $id', { id: matchId });
     insertCues(matchId, cues);
-    writeTrack(matchId, track, true);
-  });
-}
-
-/**
- * Publication PARTIELLE (sous-titres progressifs) : les sous-titres `cues`
- * (seq consécutifs) remplacent tout ce qui était publié à partir du premier
- * d'entre eux, si bien que la piste publiée reste un préfixe continu du
- * match. Une piste d'une autre vidéo (ok_id) est d'abord effacée. La piste
- * reste incomplète jusqu'à `completeCommentary`.
- */
-export function publishCommentaryCues(matchId: number, track: CommentaryTrackMeta, cues: CueInput[]): void {
-  tx(() => {
-    const prev = getCommentaryTrack(matchId);
-    if (!prev || prev.ok_id !== track.ok_id) run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
-    else if (cues.length) {
-      const from = cues.reduce((m, c) => Math.min(m, c.seq), Number.POSITIVE_INFINITY);
-      run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $from', { id: matchId, from });
-    }
-    insertCues(matchId, cues);
-    writeTrack(matchId, track, false);
-  });
-}
-
-/**
- * Fin du travail : la piste compte exactement les seq 1 à `total` (un
- * reliquat d'un essai précédent est retiré) et devient complète.
- */
-export function completeCommentary(matchId: number, track: CommentaryTrackMeta, total: number): void {
-  tx(() => {
-    run('DELETE FROM commentary_cues WHERE match_id = $id AND seq > $n', { id: matchId, n: total });
     writeTrack(matchId, track, true);
   });
 }
@@ -941,3 +1048,174 @@ export function dbHealth(): { ok: boolean; matches: number; error?: string } {
     return { ok: false, matches: 0, error: (e as Error).message };
   }
 }
+
+// ==================================================================
+// AUTHENTIFICATION, UTILISATEURS ET PARAMÈTRES
+// Bloc autonome (tables + accès SQL). La logique (hachage, règles, limitation
+// des tentatives) est dans src/lib/auth.ts, les paramètres dans
+// src/lib/settings.ts. Le script scripts/reset-password.mjs recrée les
+// tables `users` et `sessions` à l'identique : garder les deux en phase.
+// ==================================================================
+
+export const AUTH_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+-- Seul le SHA-256 du jeton de session est stocké : une copie de la base ne
+-- donne aucune session utilisable.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+export type UserRole = 'admin' | 'user';
+
+export interface UserRow {
+  id: number;
+  username: string;
+  password_hash: string;
+  role: UserRole;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+/** Utilisateur sans son empreinte de mot de passe : seule forme qui sort du serveur. */
+export type PublicUser = Omit<UserRow, 'password_hash'>;
+
+export function countUsers(): number {
+  return one<{ n: number }>('SELECT COUNT(*) AS n FROM users')?.n ?? 0;
+}
+
+export function countAdmins(): number {
+  return one<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'")?.n ?? 0;
+}
+
+export function listUsers(): PublicUser[] {
+  // Copie en objets ordinaires : les lignes de node:sqlite ont un prototype
+  // nul, que React refuse de transmettre à un composant client.
+  return all<PublicUser>('SELECT id, username, role, created_at, last_login_at FROM users ORDER BY username').map((u) => ({ ...u }));
+}
+
+export function getUserById(id: number): UserRow | undefined {
+  return one<UserRow>('SELECT * FROM users WHERE id = $id', { id });
+}
+
+export function getUserByUsername(username: string): UserRow | undefined {
+  return one<UserRow>('SELECT * FROM users WHERE username = $username', { username });
+}
+
+export function insertUser(username: string, passwordHash: string, role: UserRole): number {
+  const r = run('INSERT INTO users (username, password_hash, role, created_at) VALUES ($username, $hash, $role, $now)', {
+    username,
+    hash: passwordHash,
+    role,
+    now: nowIso(),
+  });
+  return Number(r.lastInsertRowid);
+}
+
+/**
+ * Crée le premier compte administrateur, seulement si aucun utilisateur
+ * n'existe : vérification et insertion dans la même transaction.
+ * Renvoie l'id créé, ou null si un compte existe déjà.
+ */
+export function insertFirstAdmin(username: string, passwordHash: string): number | null {
+  return tx(() => (countUsers() > 0 ? null : insertUser(username, passwordHash, 'admin')));
+}
+
+export function updateUserPassword(id: number, passwordHash: string): void {
+  run('UPDATE users SET password_hash = $hash WHERE id = $id', { id, hash: passwordHash });
+}
+
+export function updateUserRole(id: number, role: UserRole): void {
+  run('UPDATE users SET role = $role WHERE id = $id', { id, role });
+}
+
+export function touchUserLogin(id: number): void {
+  run('UPDATE users SET last_login_at = $now WHERE id = $id', { id, now: nowIso() });
+}
+
+/** Supprime un utilisateur et toutes ses sessions. */
+export function deleteUserRow(id: number): void {
+  tx(() => {
+    run('DELETE FROM sessions WHERE user_id = $id', { id });
+    run('DELETE FROM users WHERE id = $id', { id });
+  });
+}
+
+export interface SessionRow {
+  token_hash: string;
+  user_id: number;
+  created_at: string;
+  expires_at: string;
+}
+
+export function insertSession(tokenHash: string, userId: number, expiresAt: string): void {
+  const now = nowIso();
+  // Ménage opportuniste des sessions expirées à chaque nouvelle session.
+  run('DELETE FROM sessions WHERE expires_at <= $now', { now });
+  run('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES ($h, $u, $now, $exp)', {
+    h: tokenHash,
+    u: userId,
+    now,
+    exp: expiresAt,
+  });
+}
+
+/** Session et son utilisateur (jointure), ou undefined si le jeton est inconnu. */
+export function getSessionWithUser(tokenHash: string): (SessionRow & { username: string; role: UserRole }) | undefined {
+  return one(
+    `SELECT s.token_hash, s.user_id, s.created_at, s.expires_at, u.username, u.role
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = $h`,
+    { h: tokenHash },
+  );
+}
+
+export function extendSession(tokenHash: string, expiresAt: string): void {
+  run('UPDATE sessions SET expires_at = $exp WHERE token_hash = $h', { h: tokenHash, exp: expiresAt });
+}
+
+export function deleteSession(tokenHash: string): void {
+  run('DELETE FROM sessions WHERE token_hash = $h', { h: tokenHash });
+}
+
+/** Révoque toutes les sessions d'un utilisateur, sauf éventuellement une (la session courante). */
+export function deleteUserSessions(userId: number, exceptTokenHash?: string): void {
+  run('DELETE FROM sessions WHERE user_id = $u AND token_hash <> $keep', { u: userId, keep: exceptTokenHash ?? '' });
+}
+
+export function settingGet(key: string): string | null {
+  return one<{ value: string }>('SELECT value FROM settings WHERE key = $key', { key })?.value ?? null;
+}
+
+/** Écrit un paramètre ; null le supprime. */
+export function settingSet(key: string, value: string | null): void {
+  if (value === null) {
+    run('DELETE FROM settings WHERE key = $key', { key });
+    return;
+  }
+  run(
+    `INSERT INTO settings (key, value, updated_at) VALUES ($key, $value, $now)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    { key, value, now: nowIso() },
+  );
+}
+
+// ============================================================ fin du bloc authentification

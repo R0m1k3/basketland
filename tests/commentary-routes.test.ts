@@ -102,16 +102,17 @@ describe('API sous-titres = traduction des commentaires', () => {
 
   it('running : les sous-titres déjà publiés sont servis, avec available_until ; ready seulement une fois complète', async () => {
     const okId = db.getMatch(ID)!.video_ok_id!;
-    const meta = { ok_id: okId, transcribe_model: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate_model: DEFAULT_TRANSLATE_MODEL };
+    const meta = { ok_id: okId, transcribe_model: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate_model: DEFAULT_TRANSLATE_MODEL, chunk_sec: 60, chunks_total: 2 };
     let finish!: () => void;
     __setCommentaryRunnerForTests(async (_job, progress) => {
-      db.publishCommentaryCues(ID, meta, [
+      db.openCommentaryTrack(ID, meta);
+      db.publishCommentaryChunk(ID, meta, { idx: 0, keepFrom: 0, keepTo: 60 }, [
         { seq: 1, start_ts: 12.5, end_ts: 15, text_en: 'He pulls up from deep.', text_fr: 'Il déclenche de loin.', untranslated: 0 },
         { seq: 2, start_ts: 15.2, end_ts: 17, text_en: 'Bang!', text_fr: 'Dedans !', untranslated: 0 },
       ]);
-      progress({ phase: 'transcription', done: 4, total: 10, availableUntil: 2050 });
+      progress({ phase: 'transcription', done: 1, total: 2, availableUntil: 60 });
       await new Promise<void>((r) => (finish = r));
-      db.completeCommentary(ID, meta, 2);
+      db.publishCommentaryChunk(ID, meta, { idx: 1, keepFrom: 60, keepTo: Number.POSITIVE_INFINITY }, []);
       return { ok: true, reason: 'ok' };
     });
     const d = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
@@ -125,8 +126,9 @@ describe('API sous-titres = traduction des commentaires', () => {
       commentary: {
         status: 'running',
         phase: 'transcription',
-        progress: { done: 4, total: 10 },
-        available_until: 2050,
+        progress: { done: 1, total: 2 },
+        available_until: 60,
+        covered: [[0, 60]],
         models: { transcribe: 'deepdml/faster-whisper-large-v3-turbo-ct2', translate: DEFAULT_TRANSLATE_MODEL },
       },
     });
@@ -141,7 +143,7 @@ describe('API sous-titres = traduction des commentaires', () => {
   });
 
   it('piste partielle d’une autre vidéo : ignorée', async () => {
-    db.publishCommentaryCues(ID, { ok_id: '111222333', transcribe_model: 'w', translate_model: 'l' }, [
+    db.publishCommentaryChunk(ID, { ok_id: '111222333', transcribe_model: 'w', translate_model: 'l', chunk_sec: 60, chunks_total: 3 }, { idx: 0, keepFrom: 0, keepTo: 60 }, [
       { seq: 1, start_ts: 1, end_ts: 2, text_en: 'a', text_fr: 'b', untranslated: 0 },
     ]);
     const d = await (await getSubtitles(new Request(url('subtitles')), ctx())).json();
@@ -230,36 +232,45 @@ describe('commentaryReadyIds (badges « VF »)', () => {
     expect(db.commentaryReadyIds([])).toEqual(new Set());
   });
 
-  it('publication partielle : jamais comptée avant complete=1 ; plages remplacées, reliquat retiré', () => {
-    const meta = { ok_id: db.getMatch(ID)!.video_ok_id!, transcribe_model: 'w', translate_model: 'l' };
-    const cue = (seq: number, fr = `fr${seq}`) => ({ seq, start_ts: seq * 10, end_ts: seq * 10 + 2, text_en: `en${seq}`, text_fr: fr, untranslated: fr === `en${seq}` ? 1 : 0 });
-    db.publishCommentaryCues(ID, meta, [cue(1), cue(2)]);
-    expect(db.getCommentaryTrack(ID)).toMatchObject({ complete: 0, cues: 2, untranslated: 0 });
+  it('publication par tronçons, dans le désordre : jamais comptée avant le dernier ; tronçon republié remplacé', () => {
+    const meta = { ok_id: db.getMatch(ID)!.video_ok_id!, transcribe_model: 'w', translate_model: 'l', chunk_sec: 60, chunks_total: 3 };
+    const cue = (idx: number, k: number, fr = `fr${idx}.${k}`) => ({
+      seq: db.chunkSeqBase(idx) + k,
+      start_ts: idx * 60 + k * 10,
+      end_ts: idx * 60 + k * 10 + 2,
+      text_en: `en${idx}.${k}`,
+      text_fr: fr,
+      untranslated: fr.startsWith('en') ? 1 : 0,
+    });
+    expect(db.openCommentaryTrack(ID, meta)).toEqual(new Set());
+    // Le spectateur a commencé au milieu : tronçon 1 d'abord.
+    expect(db.publishCommentaryChunk(ID, meta, { idx: 1, keepFrom: 60, keepTo: 120 }, [cue(1, 1), cue(1, 2)])).toEqual({ done: 1, complete: false });
+    expect(db.getCommentaryTrack(ID)).toMatchObject({ complete: 0, cues: 2, chunk_sec: 60, chunks_total: 3 });
     expect(db.commentaryReadyIds([ID])).toEqual(new Set());
+    expect(db.commentaryProgressByIds([ID]).get(ID)).toEqual({ complete: false, done: 1, total: 3 });
     expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z').map((m) => m.id)).toContain(ID);
-    db.publishCommentaryCues(ID, meta, [cue(3), cue(4, 'en4')]);
-    expect(db.getCommentaryTrack(ID)).toMatchObject({ complete: 0, cues: 4, untranslated: 1 });
-    // Une plage republiée remplace tout ce qui suit (la piste reste un préfixe continu).
-    db.publishCommentaryCues(ID, meta, [cue(2, 'deux'), cue(3, 'trois')]);
-    expect(db.getCommentaryCues(ID).map((c) => [c.seq, c.text_fr])).toEqual([
-      [1, 'fr1'],
-      [2, 'deux'],
-      [3, 'trois'],
-    ]);
-    db.publishCommentaryCues(ID, meta, [cue(4), cue(5)]);
-    db.completeCommentary(ID, meta, 4);
-    expect(db.getCommentaryCues(ID).map((c) => c.seq)).toEqual([1, 2, 3, 4]);
-    expect(db.getCommentaryTrack(ID)).toMatchObject({ complete: 1, cues: 4 });
+    db.publishCommentaryChunk(ID, meta, { idx: 2, keepFrom: 120, keepTo: Number.POSITIVE_INFINITY }, [cue(2, 1, 'en2.1')]);
+    expect(db.commentaryCoverage(ID)).toEqual([[60, 1e9]]);
+    expect(db.commentaryCuesBefore(ID, 120, 3, 60)).toEqual(['en1.1', 'en1.2']);
+    expect(db.commentaryCuesBefore(ID, 120, 3)).toEqual([]); // passage trop ancien : pas de contexte
+    // Republier un tronçon remplace ses seuls sous-titres.
+    db.publishCommentaryChunk(ID, meta, { idx: 1, keepFrom: 60, keepTo: 120 }, [cue(1, 1, 'un')]);
+    expect(db.getCommentaryCues(ID).map((c) => c.text_fr)).toEqual(['un', 'en2.1']);
+    // Reprise : les tronçons faits sont rendus.
+    expect(db.openCommentaryTrack(ID, meta)).toEqual(new Set([1, 2]));
+    expect(db.publishCommentaryChunk(ID, meta, { idx: 0, keepFrom: 0, keepTo: 60 }, [cue(0, 1)])).toEqual({ done: 3, complete: true });
+    expect(db.getCommentaryTrack(ID)).toMatchObject({ complete: 1, cues: 3, untranslated: 1 });
     expect(db.commentaryReadyIds([ID])).toEqual(new Set([ID]));
+    expect(db.commentaryProgressByIds([ID]).get(ID)).toEqual({ complete: true, done: 3, total: 3 });
     expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z').map((m) => m.id)).not.toContain(ID);
-    expect(db.commentaryPublishedUntil(ID)).toBe(42);
+    expect(db.commentaryCoverage(ID)).toEqual([[0, 1e9]]);
     // Changement de modèle de traduction : la piste faite par l'ancien est à refaire.
     expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z', 30, 'l').map((m) => m.id)).not.toContain(ID);
     expect(db.finalMatchesNeedingCommentary('2000-01-01T00:00:00Z', 30, 'gemma4:e4b').map((m) => m.id)).toContain(ID);
-    // Nouvelle vidéo : l'ancienne piste est effacée à la première publication.
-    db.publishCommentaryCues(ID, { ...meta, ok_id: 'nouvelle' }, [cue(7)]);
-    expect(db.getCommentaryCues(ID).map((c) => c.seq)).toEqual([7]);
-    expect(db.getCommentaryTrack(ID)).toMatchObject({ ok_id: 'nouvelle', complete: 0, cues: 1 });
+    // Autres modèles (ou relance explicite) : on repart de zéro.
+    expect(db.openCommentaryTrack(ID, { ...meta, translate_model: 'autre' })).toEqual(new Set());
+    expect(db.getCommentaryCues(ID)).toEqual([]);
+    expect(db.getCommentaryTrack(ID)).toBeUndefined();
   });
 });
 
