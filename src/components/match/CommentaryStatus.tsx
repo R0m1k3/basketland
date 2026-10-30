@@ -9,12 +9,14 @@ export interface CommentaryState {
   progress?: { done: number; total: number };
   position?: number;
   reason?: string;
-  /** Piste en cours : secondes de vidéo déjà couvertes par les sous-titres publiés. */
+  /** Piste en cours : fin des sous-titres prêts d'un seul tenant depuis la position de lecture. */
   available_until?: number;
+  /** Plages de vidéo déjà traduites (piste partielle). */
+  covered?: [number, number][];
 }
 
 const PHASE_LABEL: Record<NonNullable<CommentaryState['phase']>, string> = {
-  extraction: 'Extraction de l’audio',
+  extraction: 'Lecture de l’audio',
   preparation: 'Chargement des modèles (le premier lancement les télécharge)',
   transcription: 'Transcription des commentateurs',
   traduction: 'Traduction en français',
@@ -24,7 +26,12 @@ function pct(p?: { done: number; total: number }, phase?: CommentaryState['phase
   if (!p || !p.total) return '';
   // Téléchargement d'un modèle : progression en Mo.
   if (phase === 'preparation') return ` · ${p.done} / ${p.total} Mo`;
-  return ` · ${Math.min(100, Math.round((p.done / p.total) * 100))} %`;
+  return ` · ${Math.min(100, Math.round((p.done / p.total) * 100))} % du match`;
+}
+
+/** Plage traduite qui contient la position de lecture. */
+function rangeAt(covered: [number, number][] | undefined, t: number): [number, number] | undefined {
+  return covered?.find(([a, b]) => t >= a - 0.5 && t < b);
 }
 
 /**
@@ -35,10 +42,13 @@ export default function CommentaryStatus({
   state,
   hasReplay,
   onRetry,
+  position = 0,
 }: {
   state: CommentaryState | null;
   hasReplay: boolean;
   onRetry: () => void;
+  /** Position de lecture (s), lue à chaque mise à jour du statut. */
+  position?: number;
 }) {
   if (!hasReplay || !state) return null;
   const { status } = state;
@@ -58,10 +68,12 @@ export default function CommentaryStatus({
     tone = 'text-flame-hot';
     spinning = true;
     title = `${state.phase ? PHASE_LABEL[state.phase] : 'Traduction des commentaires'}${pct(state.progress, state.phase)}`;
+    const here = rangeAt(state.covered, position);
+    const until = here?.[1] ?? state.available_until;
     detail =
-      state.available_until && state.available_until > 0
-        ? `Sous-titres disponibles jusqu’à ${fmtTime(state.available_until)} — la suite arrive.`
-        : 'Le replay se regarde déjà ; les sous-titres arrivent par tranches de 10 minutes.';
+      until && until > position
+        ? `Sous-titres prêts jusqu’à ${fmtTime(until)} — la traduction garde de l’avance sur la lecture.`
+        : 'Les sous-titres de ce passage arrivent dans quelques secondes (traduction minute par minute, à partir d’ici).';
   } else if (status === 'queued') {
     tone = 'text-flame-hot';
     dot = 'bg-flame';

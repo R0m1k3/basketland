@@ -186,6 +186,16 @@ CREATE TABLE IF NOT EXISTS commentary_tracks (
   created_at TEXT NOT NULL
 );
 
+-- Tronçons de la vidéo dont les sous-titres traduits sont publiés (traduction
+-- à la demande : les tronçons ne sont pas faits dans l'ordre).
+CREATE TABLE IF NOT EXISTS commentary_chunks (
+  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,
+  keep_from REAL NOT NULL,
+  keep_to REAL NOT NULL,
+  PRIMARY KEY (match_id, idx)
+);
+
 CREATE TABLE IF NOT EXISTS kv_cache (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -268,6 +278,11 @@ function migrate(db: DatabaseSyncType): void {
     db.exec('ALTER TABLE commentary_tracks ADD COLUMN complete INTEGER NOT NULL DEFAULT 0');
     db.exec('UPDATE commentary_tracks SET complete = 1');
   }
+  // Découpage de la piste (traduction à la demande, tronçons publiés dans le
+  // désordre) : durée d'un tronçon et nombre total. NULL : piste antérieure,
+  // publiée d'un bloc ou en préfixe continu.
+  if (!trackCols.has('chunk_sec')) db.exec('ALTER TABLE commentary_tracks ADD COLUMN chunk_sec INTEGER');
+  if (!trackCols.has('chunks_total')) db.exec('ALTER TABLE commentary_tracks ADD COLUMN chunks_total INTEGER');
 }
 
 export function getDb(): DatabaseSyncType {
@@ -758,12 +773,17 @@ export interface CommentaryTrackRow {
   created_at: string;
   /** 1 : tout le match est traduit ; 0 : publication partielle (travail en cours ou interrompu). */
   complete: number;
+  /** Durée d'un tronçon (s) ; null pour une piste antérieure à la traduction à la demande. */
+  chunk_sec: number | null;
+  chunks_total: number | null;
 }
 
 export interface CommentaryTrackMeta {
   ok_id: string;
   transcribe_model: string;
   translate_model: string;
+  chunk_sec?: number | null;
+  chunks_total?: number | null;
 }
 
 type CueInput = Omit<CommentaryCueRow, 'match_id'>;
@@ -780,48 +800,134 @@ function insertCues(matchId: number, cues: CueInput[]): void {
 /** Métadonnées de la piste ; compteurs recalculés sur les sous-titres en base. */
 function writeTrack(matchId: number, track: CommentaryTrackMeta, complete: boolean): void {
   run(
-    `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at, complete)
-     SELECT $m, $ok, $tm, $lm, COUNT(*), COALESCE(SUM(untranslated != 0), 0), $now, $c FROM commentary_cues WHERE match_id = $m`,
-    { m: matchId, ok: track.ok_id, tm: track.transcribe_model, lm: track.translate_model, now: nowIso(), c: complete ? 1 : 0 },
+    `INSERT OR REPLACE INTO commentary_tracks (match_id, ok_id, transcribe_model, translate_model, cues, untranslated, created_at, complete, chunk_sec, chunks_total)
+     SELECT $m, $ok, $tm, $lm, COUNT(*), COALESCE(SUM(untranslated != 0), 0), $now, $c, $cs, $ct FROM commentary_cues WHERE match_id = $m`,
+    {
+      m: matchId,
+      ok: track.ok_id,
+      tm: track.transcribe_model,
+      lm: track.translate_model,
+      now: nowIso(),
+      c: complete ? 1 : 0,
+      cs: track.chunk_sec ?? null,
+      ct: track.chunks_total ?? null,
+    },
   );
+}
+
+// ---------------------------------------------------------------- traduction à la demande (tronçons)
+
+/** Premier seq des sous-titres du tronçon `idx` (les tronçons sont publiés dans le désordre). */
+export const chunkSeqBase = (idx: number) => (idx + 1) * 100_000;
+
+/**
+ * Ouvre (ou reprend) la piste d'un match pour un travail. Si la piste en
+ * base vient d'une autre vidéo, d'autres modèles ou d'un autre découpage —
+ * ou si `fresh` (relance explicite d'une piste complète) — elle est effacée :
+ * on repart de zéro. Rend les index des tronçons déjà publiés.
+ */
+export function openCommentaryTrack(matchId: number, track: CommentaryTrackMeta, fresh = false): Set<number> {
+  return tx(() => {
+    const prev = getCommentaryTrack(matchId);
+    const same =
+      !!prev &&
+      prev.ok_id === track.ok_id &&
+      prev.transcribe_model === track.transcribe_model &&
+      prev.translate_model === track.translate_model &&
+      prev.chunk_sec === (track.chunk_sec ?? null) &&
+      prev.chunks_total === (track.chunks_total ?? null);
+    if (!same || fresh) {
+      run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
+      run('DELETE FROM commentary_chunks WHERE match_id = $id', { id: matchId });
+      run('DELETE FROM commentary_tracks WHERE match_id = $id', { id: matchId });
+      return new Set<number>();
+    }
+    return new Set(all<{ idx: number }>('SELECT idx FROM commentary_chunks WHERE match_id = $id', { id: matchId }).map((r) => r.idx));
+  });
+}
+
+/**
+ * Publie les sous-titres traduits d'UN tronçon (remplace ceux qu'il avait
+ * déjà), le marque fait, et marque la piste complète quand tous les
+ * tronçons le sont.
+ */
+export function publishCommentaryChunk(
+  matchId: number,
+  track: CommentaryTrackMeta,
+  chunk: { idx: number; keepFrom: number; keepTo: number },
+  cues: CueInput[],
+): { done: number; complete: boolean } {
+  return tx(() => {
+    const base = chunkSeqBase(chunk.idx);
+    run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $a AND seq < $b', { id: matchId, a: base, b: base + 100_000 });
+    insertCues(matchId, cues);
+    run('INSERT OR REPLACE INTO commentary_chunks (match_id, idx, keep_from, keep_to) VALUES ($id, $i, $f, $t)', {
+      id: matchId,
+      i: chunk.idx,
+      f: chunk.keepFrom,
+      t: Number.isFinite(chunk.keepTo) ? chunk.keepTo : 1e9,
+    });
+    const done = one<{ n: number }>('SELECT COUNT(*) AS n FROM commentary_chunks WHERE match_id = $id', { id: matchId })?.n ?? 0;
+    const complete = !!track.chunks_total && done >= track.chunks_total;
+    writeTrack(matchId, track, complete);
+    return { done, complete };
+  });
+}
+
+/** Plages de vidéo couvertes par des tronçons publiés, fusionnées : [[début, fin], …]. */
+export function commentaryCoverage(matchId: number): [number, number][] {
+  const rows = all<{ keep_from: number; keep_to: number }>('SELECT keep_from, keep_to FROM commentary_chunks WHERE match_id = $id ORDER BY keep_from', {
+    id: matchId,
+  });
+  const out: [number, number][] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && r.keep_from <= last[1] + 0.5) last[1] = Math.max(last[1], r.keep_to);
+    else out.push([r.keep_from, r.keep_to]);
+  }
+  return out;
+}
+
+/**
+ * Sous-titres anglais qui précèdent `t` de moins de `window` secondes
+ * (contexte de traduction d'un tronçon : seulement si le tronçon d'avant est
+ * déjà traduit, pas un passage lointain).
+ */
+export function commentaryCuesBefore(matchId: number, t: number, limit: number, window = 30): string[] {
+  return all<{ text_en: string }>(
+    'SELECT text_en FROM commentary_cues WHERE match_id = $id AND start_ts < $t AND start_ts >= $from ORDER BY start_ts DESC LIMIT $n',
+    { id: matchId, t, from: t - window, n: limit },
+  )
+    .map((r) => r.text_en)
+    .reverse();
+}
+
+/**
+ * État de la VF des matchs `ids` pour les badges des listes : complète, ou
+ * part traduite (tronçons publiés / total) d'une piste partielle — pour le
+ * replay ACTUEL seulement.
+ */
+export function commentaryProgressByIds(ids: number[]): Map<number, { complete: boolean; done: number; total: number }> {
+  const list = [...new Set(ids.filter((n) => Number.isInteger(n)))];
+  const out = new Map<number, { complete: boolean; done: number; total: number }>();
+  if (!list.length) return out;
+  for (const r of all<{ match_id: number; complete: number; chunks_total: number | null; done: number }>(
+    `SELECT t.match_id, t.complete, t.chunks_total, (SELECT COUNT(*) FROM commentary_chunks c WHERE c.match_id = t.match_id) AS done
+       FROM commentary_tracks t JOIN matches m ON m.id = t.match_id
+      WHERE t.ok_id = m.video_ok_id AND t.cues > 0 AND t.match_id IN (SELECT value FROM json_each($ids))`,
+    { ids: JSON.stringify(list) },
+  )) {
+    out.set(r.match_id, { complete: r.complete === 1, done: r.done, total: r.chunks_total ?? 0 });
+  }
+  return out;
 }
 
 /** Remplace d'un bloc la piste traduite d'un match (sous-titres + métadonnées), marquée complète. */
 export function replaceCommentary(matchId: number, track: CommentaryTrackMeta, cues: CueInput[]): void {
   tx(() => {
     run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
+    run('DELETE FROM commentary_chunks WHERE match_id = $id', { id: matchId });
     insertCues(matchId, cues);
-    writeTrack(matchId, track, true);
-  });
-}
-
-/**
- * Publication PARTIELLE (sous-titres progressifs) : les sous-titres `cues`
- * (seq consécutifs) remplacent tout ce qui était publié à partir du premier
- * d'entre eux, si bien que la piste publiée reste un préfixe continu du
- * match. Une piste d'une autre vidéo (ok_id) est d'abord effacée. La piste
- * reste incomplète jusqu'à `completeCommentary`.
- */
-export function publishCommentaryCues(matchId: number, track: CommentaryTrackMeta, cues: CueInput[]): void {
-  tx(() => {
-    const prev = getCommentaryTrack(matchId);
-    if (!prev || prev.ok_id !== track.ok_id) run('DELETE FROM commentary_cues WHERE match_id = $id', { id: matchId });
-    else if (cues.length) {
-      const from = cues.reduce((m, c) => Math.min(m, c.seq), Number.POSITIVE_INFINITY);
-      run('DELETE FROM commentary_cues WHERE match_id = $id AND seq >= $from', { id: matchId, from });
-    }
-    insertCues(matchId, cues);
-    writeTrack(matchId, track, false);
-  });
-}
-
-/**
- * Fin du travail : la piste compte exactement les seq 1 à `total` (un
- * reliquat d'un essai précédent est retiré) et devient complète.
- */
-export function completeCommentary(matchId: number, track: CommentaryTrackMeta, total: number): void {
-  tx(() => {
-    run('DELETE FROM commentary_cues WHERE match_id = $id AND seq > $n', { id: matchId, n: total });
     writeTrack(matchId, track, true);
   });
 }

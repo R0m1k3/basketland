@@ -23,6 +23,7 @@ import SpoilerToggle from '@/components/ui/SpoilerToggle';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { IconArrowRight, IconCalendar } from '@/components/ui/Icons';
 import { spoilerMode } from '@/components/ui/spoilers';
+import { nightWindowLabel } from '@/lib/nightWindow';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,6 +48,13 @@ export default async function HomePage() {
   const lastNightDay = nightGames.reduce((m, g) => (g.day_paris > m ? g.day_paris : m), today);
   const days = upcomingDays(shiftKey(lastNightDay, 1), 4, now);
   const standings = cachedStandings();
+  // Pré-traduction : où en est la VF des derniers replays.
+  const vfCount = {
+    ready: replays.filter((g) => g.vf.state === 'ready').length,
+    running: replays.filter((g) => g.vf.state === 'running').length,
+    partial: replays.filter((g) => g.vf.state === 'partial').length,
+    todo: replays.filter((g) => g.vf.state === 'none').length,
+  };
 
   return (
     <div data-spoilers={spoilers} className="space-y-12 sm:space-y-16">
@@ -152,6 +160,7 @@ export default async function HomePage() {
               <h2 id="replays-title" className="section-title mt-1">
                 Replays disponibles
               </h2>
+              <VfSummary {...vfCount} />
             </div>
             <Link href="/matchs" className="link-more">
               Calendrier
@@ -262,5 +271,31 @@ export default async function HomePage() {
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * Où en est la VF des derniers replays : prêts, en cours, en partie traduits,
+ * pas encore commencés (traduits la nuit de 2 h à 6 h, ou dès qu'on les ouvre).
+ */
+function VfSummary({ ready, running, partial, todo }: { ready: number; running: number; partial: number; todo: number }) {
+  const night = nightWindowLabel();
+  const item = (n: number, label: string, dot: string) =>
+    n > 0 && (
+      <span className="inline-flex items-center gap-1.5">
+        <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden="true" />
+        <span className="num font-semibold text-paper">{n}</span> {label}
+      </span>
+    );
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-paper-mute" aria-label="État de la traduction des commentaires">
+      {item(ready, 'en VF', 'bg-win')}
+      {item(running, 'en cours', 'animate-pulse bg-flame')}
+      {item(partial, 'en partie traduit' + (partial > 1 ? 's' : ''), 'bg-flame/50')}
+      {item(todo, 'à traduire', 'bg-ink-500')}
+      <span className="text-paper-faint">
+        {night ? `Pré-traduction ${night} ; ` : ''}un match ouvert est traduit aussitôt.
+      </span>
+    </p>
   );
 }

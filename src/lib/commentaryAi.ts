@@ -57,6 +57,36 @@ export type TranslateEngine = 'mt' | 'chat';
 /** 'embedded' : service embarqué dans le conteneur (localAi.ts) ; 'remote' : serveur externe. */
 export type ServiceMode = 'embedded' | 'remote';
 
+/** Qui traduit : Ollama (embarqué ou externe), ou l'API OpenAI si une clé est configurée. */
+export type TranslateProvider = 'ollama' | 'openai';
+
+/** Modèle OpenAI par défaut (rapide et peu coûteux ; remplaçable dans les paramètres ou par OPENAI_MODEL). */
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
+export const OPENAI_URL = 'https://api.openai.com/v1';
+
+/**
+ * Clé et modèle OpenAI : variables OPENAI_API_KEY / OPENAI_MODEL, ou réglages
+ * enregistrés dans la page Paramètres (prioritaires). Null : pas de clé.
+ */
+export type OpenAiSettingsReader = () => { key: string | null; model: string | null };
+let openAiSettingsReader: OpenAiSettingsReader = () => ({ key: null, model: null });
+/** Branche la lecture des réglages enregistrés (page Paramètres). */
+export function setOpenAiSettingsReader(fn: OpenAiSettingsReader): void {
+  openAiSettingsReader = fn;
+}
+
+export function openAiConfig(): { key: string; model: string } | null {
+  let saved: { key: string | null; model: string | null } = { key: null, model: null };
+  try {
+    saved = openAiSettingsReader();
+  } catch {
+    /* réglages illisibles : on retombe sur les variables d'environnement */
+  }
+  const key = saved.key?.trim() || process.env.OPENAI_API_KEY?.trim() || '';
+  if (!key) return null;
+  return { key, model: saved.model?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL };
+}
+
 export interface CommentaryConfig {
   transcribeMode: ServiceMode;
   translateMode: ServiceMode;
@@ -65,20 +95,18 @@ export interface CommentaryConfig {
   translateUrl: string;
   translateModel: string;
   translateEngine: TranslateEngine;
+  translateProvider: TranslateProvider;
+  /** Jeton `Bearer` du serveur de traduction (clé OpenAI, ou TRANSLATE_API_KEY). */
+  translateApiKey: string;
   /** Sous-titres par requête de traduction (12-15 : au-delà, risque de lignes fusionnées ou décalées). */
   batch: number;
   /** Lots traduits en même temps (Ollama embarqué : OLLAMA_NUM_PARALLEL réglé pareil). */
   parallel: number;
-  /** Durée d'un tronçon audio (s). */
-  chunkSec: number;
   /**
-   * `COMMENTARY_GPU_SEQUENTIAL=1` : ancien enchaînement — tout transcrire,
-   * fermer Whisper, puis traduire (un seul modèle à la fois en mémoire GPU,
-   * pour un gros modèle de traduction). Par défaut, Whisper et le modèle de
-   * traduction restent chargés ensemble et le match est traité tronçon par
-   * tronçon.
+   * Durée d'un tronçon audio (s, 60 par défaut) : les premiers sous-titres
+   * arrivent ~20-30 s après l'ouverture du match (traduction à la demande).
    */
-  gpuSequential: boolean;
+  chunkSec: number;
   /** Raison de l'inactivité de la fonctionnalité, ou null si elle est active. */
   disabledReason: string | null;
 }
@@ -102,10 +130,12 @@ export function engineFor(model: string, forced?: string): TranslateEngine {
 }
 
 export function commentaryConfig(): CommentaryConfig {
-  const translateModel = process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL;
+  // Clé OpenAI configurée : la traduction passe par l'API OpenAI (Ollama n'est pas démarré).
+  const openai = openAiConfig();
+  const translateModel = openai ? openai.model : process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL;
   // Sans URL externe, les services embarqués dans l'image Docker sont utilisés.
   const remoteAsr = trimUrl(process.env.TRANSCRIBE_URL);
-  const remoteMt = trimUrl(process.env.TRANSLATE_URL);
+  const remoteMt = openai ? OPENAI_URL : trimUrl(process.env.TRANSLATE_URL);
   const transcribeMode: ServiceMode = remoteAsr ? 'remote' : 'embedded';
   const translateMode: ServiceMode = remoteMt ? 'remote' : 'embedded';
   const asrOk = !!remoteAsr || embeddedWhisperAvailable();
@@ -122,11 +152,13 @@ export function commentaryConfig(): CommentaryConfig {
     transcribeModel: process.env.TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIBE_MODEL,
     translateUrl: remoteMt || `${embeddedOllamaUrl()}/v1`,
     translateModel,
-    translateEngine: engineFor(translateModel, process.env.TRANSLATE_ENGINE),
+    translateEngine: openai ? 'chat' : engineFor(translateModel, process.env.TRANSLATE_ENGINE),
+    translateProvider: openai ? 'openai' : 'ollama',
+    translateApiKey: openai ? openai.key : process.env.TRANSLATE_API_KEY?.trim() || '',
     batch: intEnv('TRANSLATE_BATCH', 14, 1, 60),
-    parallel: translateParallel(),
-    chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 600, 60, 3600),
-    gpuSequential: process.env.COMMENTARY_GPU_SEQUENTIAL === '1',
+    // L'API OpenAI encaisse plus de requêtes simultanées qu'un GPU de NAS.
+    parallel: openai ? intEnv('TRANSLATE_PARALLEL', 4, 1, 16) : translateParallel(),
+    chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 60, 30, 3600),
     disabledReason,
   };
 }
@@ -459,7 +491,17 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
           format: schemaSafe(cfg.translateModel) ? TRANSLATION_SCHEMA : undefined,
           options: { temperature, top_p: 0.9, num_ctx: 4096, num_predict: 1200 },
         }
-      : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, response_format: { type: 'json_object' } },
+      : cfg.translateProvider === 'openai'
+        ? // API OpenAI : les modèles GPT-5 refusent temperature/top_p (valeurs par défaut
+          // seulement) ; un raisonnement bref suffit pour traduire des sous-titres.
+          {
+            model: cfg.translateModel,
+            messages,
+            stream: false,
+            response_format: { type: 'json_object' },
+            ...(/^(gpt-5|o\d)/i.test(cfg.translateModel) ? { reasoning_effort: 'low' } : { temperature }),
+          }
+        : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, response_format: { type: 'json_object' } },
   );
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -469,7 +511,7 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
       res = await fetch(url, {
         method: 'POST',
         body,
-        headers: { 'Content-Type': 'application/json', ...authHeaders(process.env.TRANSLATE_API_KEY) },
+        headers: { 'Content-Type': 'application/json', ...authHeaders(cfg.translateApiKey) },
         signal: timeoutSignal(timeoutMs, o.signal),
       });
     } catch (e) {
@@ -489,11 +531,18 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
     }
     const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
     last =
-      res.status === 404 && /model/i.test(detail)
-        ? `modèle de traduction « ${cfg.translateModel} » absent d'Ollama (ollama pull ${cfg.translateModel})`
-        : `serveur de traduction : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`;
-    if (res.status < 500) break;
-    await sleep(o.retryDelayMs ?? 3000, o.signal);
+      cfg.translateProvider === 'openai'
+        ? res.status === 401
+          ? 'API OpenAI : clé refusée (vérifier la clé dans les paramètres)'
+          : res.status === 429
+            ? 'API OpenAI : quota ou crédit épuisé (HTTP 429)'
+            : `API OpenAI : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`
+        : res.status === 404 && /model/i.test(detail)
+          ? `modèle de traduction « ${cfg.translateModel} » absent d'Ollama (ollama pull ${cfg.translateModel})`
+          : `serveur de traduction : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`;
+    // 429 (limite de débit) : on réessaie une fois après une pause.
+    if (res.status < 500 && res.status !== 429) break;
+    await sleep(o.retryDelayMs ?? (res.status === 429 ? 10_000 : 3000), o.signal);
   }
   throw new ServiceError(last || 'traduction impossible', 'traduction');
 }
@@ -610,7 +659,7 @@ export async function mtComplete(en: string, cfg: CommentaryConfig, o: Translate
       res = await fetch(url, {
         method: 'POST',
         body,
-        headers: { 'Content-Type': 'application/json', ...authHeaders(process.env.TRANSLATE_API_KEY) },
+        headers: { 'Content-Type': 'application/json', ...authHeaders(cfg.translateApiKey) },
         signal: timeoutSignal(timeoutMs, o.signal),
       });
     } catch (e) {

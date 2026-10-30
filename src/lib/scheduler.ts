@@ -9,7 +9,7 @@ import { countMatches } from './db';
 import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
 import { enqueueRecentAnalyses } from './analysis';
-import { enqueueRecentCommentaries } from './commentary';
+import { enqueueRecentCommentaries, inNightWindow } from './commentary';
 import { VIDEO_JOB_INTERVAL_MS } from './replayCadence';
 
 const g = globalThis as unknown as { __basketlandCron?: boolean };
@@ -41,19 +41,19 @@ export function startScheduler(): void {
   every(5 * MIN, () => syncStats(), 60_000);
   every(VIDEO_JOB_INTERVAL_MS, () => syncVideos(), 3 * MIN);
   every(60 * MIN, () => syncSubtitles(), 10 * MIN);
-  // Synchro automatique : met en file (une analyse à la fois) les matchs
-  // terminés récents qui ont un replay mais pas encore d'ancres OCR. Les
-  // échecs sont espacés (backoff) : un match illisible n'est pas réanalysé
-  // en boucle.
+  // Tâches de fond lourdes (analyse vidéo OCR, pré-traduction des
+  // commentaires) : SEULEMENT dans la fenêtre de nuit (2 h-6 h, heure de
+  // Paris, COMMENTARY_NIGHT_WINDOW). Le reste du temps, un match n'est
+  // analysé et traduit que quand quelqu'un l'ouvre. Un travail de fond
+  // encore en cours à la fin de la fenêtre se met en pause.
   every(10 * MIN, async () => {
+    if (!inNightWindow()) return;
     const n = enqueueRecentAnalyses();
-    if (n) console.log(`[cron] ${n} analyse(s) vidéo mise(s) en file`);
+    if (n) console.log(`[cron] ${n} analyse(s) vidéo mise(s) en file (nuit)`);
   }, 4 * MIN);
-  // Traduction des commentaires : un travail à la fois (GPU partagé), pour
-  // les matchs terminés depuis ≤ 10 jours avec replay et sans piste traduite.
-  // Inactif tant que TRANSCRIBE_URL / TRANSLATE_URL ne sont pas configurés.
   every(10 * MIN, async () => {
+    if (!inNightWindow()) return;
     const n = enqueueRecentCommentaries();
-    if (n) console.log(`[cron] ${n} traduction(s) de commentaires mise(s) en file`);
+    if (n) console.log(`[cron] pré-traduction de nuit : ${n} match(s) mis en file`);
   }, 6 * MIN);
 }

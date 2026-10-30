@@ -14,9 +14,9 @@
  * Par défaut les deux restent chargés ENSEMBLE pendant tout le travail
  * (traitement tronçon par tronçon, sous-titres publiés au fil de l'eau) :
  * large-v3-turbo en fp16 (~1,6 Go) et Gemma 4 E4B en Q4 (~6,6 Go)
- * tiennent dans une carte de 10-12 Go. `COMMENTARY_GPU_SEQUENTIAL=1` revient
- * à l'enchaînement « Whisper, puis arrêt, puis Ollama » pour un modèle de
- * traduction plus gros (voir commentary.ts). Les modèles sont rangés dans
+ * tiennent dans une carte de 10-12 Go. Les sessions sont fermées (modèles
+ * déchargés) dès la fin, la pause ou l'échec d'un travail (voir
+ * commentary.ts). Les modèles sont rangés dans
  * `/data/models` et survivent aux mises à jour du conteneur.
  *
  * Si TRANSCRIBE_URL / TRANSLATE_URL sont définis, les serveurs externes

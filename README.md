@@ -184,10 +184,10 @@ Le jeton d'ingestion est soit défini par la variable d'environnement
 
 ### Calibration automatique de la VF
 
-La synchronisation se fait **toute seule** : toutes les 10 minutes, les
-matchs terminés depuis moins de 10 jours qui ont un replay sont mis en file
-d'analyse (une analyse à la fois, 3 à 6 min chacune). Ouvrir la fiche d'un
-match le fait passer en tête de file. L'état est affiché sous le lecteur
+La synchronisation se fait **toute seule** : ouvrir la fiche d'un match
+lance son analyse (3 à 6 min). En tâche de fond, les matchs terminés depuis
+moins de 10 jours qui ont un replay ne sont analysés que la nuit, de 2 h à
+6 h (`COMMENTARY_NIGHT_WINDOW`), pour ne pas charger le serveur en journée. L'état est affiché sous le lecteur
 (« Synchro automatique en cours · 34 % », « VF calée », « Synchro estimée »…).
 
 Le replay coupe une trentaine de minutes de contenu : le décalage entre le
@@ -237,40 +237,44 @@ serveurs externes (speaches, Ollama), définir `TRANSCRIBE_URL` /
 `TRANSLATE_URL`.
 
 ```
-pour chaque tronçon de 10 min du replay :
+on ouvre un match → travail lancé aussitôt, à partir de la position de lecture :
+pour chaque tronçon d'1 min (le passage regardé d'abord, puis la suite) :
    ──ffmpeg──▶ audio du tronçon (Opus mono 16 kHz, 24 kb/s)
    ──Whisper──▶ texte anglais horodaté au mot
    ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
-   ──Ollama (Gemma 4 E4B)──▶ français, par lots de 14 lignes contrôlés
-   ──▶ publiés dans commentary_cues ──▶ GET /api/matches/[id]/subtitles (+ .vtt)
-à la fin : piste marquée complète (badge « VF », statut « ready »)
+   ──Ollama (Gemma 4 E4B) ou API OpenAI──▶ français, par lots contrôlés
+   ──▶ publiés (commentary_cues + commentary_chunks) ──▶ GET /api/matches/[id]/subtitles
+tous les tronçons faits : piste complète (badge « VF », statut « ready »)
 ```
 
-**Sous-titres progressifs** : les sous-titres arrivent par tranches de
-10 minutes de match, dès que chaque tranche est traduite — on peut commencer
-à regarder presque tout de suite. Pendant le travail, `GET /subtitles` sert
-ce qui est déjà publié (`commentary.status: "running"`, avec
-`commentary.available_until` = secondes de vidéo couvertes) et la fiche
-affiche « Sous-titres disponibles jusqu'à 34:10 — la suite arrive » ; le
-lecteur ajoute les nouvelles tranches en cours de lecture (interrogation
-toutes les 12 s). Un sous-titre publié n'est plus jamais modifié ni
-renuméroté : seuls ceux qui se terminent avant la zone de recouvrement avec
-le tronçon suivant (2 s de marge) sont publiés, le reste attend le tronçon
-suivant. Si le travail échoue en route, ce qui est publié reste affiché et la
-reprise continue là où elle s'était arrêtée.
+**Traduction à la demande** : rien n'est traduit pour rien. Ouvrir la fiche
+d'un match lance sa traduction tout de suite (un travail de fond éventuel
+est mis en pause), **à partir de la position de lecture**, par tronçons d'une
+minute : les premiers sous-titres arrivent ~20-30 s après l'ouverture
+(estimation), puis la traduction prend de l'avance sur la lecture (Whisper
+turbo et Gemma vont plusieurs fois plus vite que le temps réel). Un saut dans
+la vidéo réoriente le travail : la fiche envoie sa position à chaque
+interrogation (`GET /subtitles?t=…`, toutes les 12 s et après chaque saut).
+Le bandeau sous le lecteur indique « Sous-titres prêts jusqu'à 34:10 ».
 
-**Mémoire GPU** : par défaut Whisper (large-v3-turbo, fp16 ≈ 1,6 Go) et
-le modèle de traduction (Gemma 4 E4B Q4 ≈ 6,6 Go) restent chargés
-**ensemble** pendant tout le travail : ils tiennent dans une carte de
-10-12 Go. Avec un modèle de traduction plus gros, `COMMENTARY_GPU_SEQUENTIAL=1`
-revient à l'ancien enchaînement : tout transcrire, arrêter Whisper, puis
-traduire (les sous-titres sont alors publiés par tranches pendant la
-traduction seulement).
+**Pause et déchargement** : sans signe de vie de la fiche pendant 3 min, le
+travail se met en pause et les modèles sont **déchargés** de la carte
+graphique ; à la fin de chaque travail aussi. Ce qui est traduit reste, et la
+reprise continue où elle s'était arrêtée.
 
-- **Un travail à la fois** (le GPU est partagé). Toutes les 10 min, les
-  matchs terminés depuis ≤ 10 jours avec replay (HLS ou MP4 « mobile » :
-  l'audio suffit) sont mis en file ; ouvrir la fiche d'un match le met en
-  tête de file.
+**Pré-traduction de nuit** : en tâche de fond, seule la fenêtre de **2 h à
+6 h** (heure de Paris) traduit les matchs terminés depuis ≤ 10 jours, et
+analyse leur vidéo (repères des quart-temps). À 6 h, un travail de fond en
+cours se met en pause. La page d'accueil indique où en est chaque replay :
+« VF » (prête), « VF en cours », « VF 45 % » (en partie traduit), et un
+résumé au-dessus des replays.
+
+**Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
+et le modèle de traduction (Gemma 4 E4B Q4 ≈ 6,6 Go) sont chargés ensemble :
+ils tiennent dans une carte de 10-12 Go. Avec une clé OpenAI, Ollama n'est
+pas démarré du tout.
+
+- **Un travail à la fois** (le GPU est partagé).
 - **Reprise** : tronçons audio, transcriptions et traductions déjà faites
   sont gardés dans `/data/commentary/<okId>/` jusqu'au succès ; un serveur
   éteint ou un flux coupé ne fait pas tout recommencer. Une piste partielle
@@ -307,8 +311,11 @@ traduction seulement).
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
 | `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
-| `COMMENTARY_CHUNK_SEC` | `600` | Durée d'un tronçon audio (et donc d'une tranche de sous-titres publiée). |
-| `COMMENTARY_GPU_SEQUENTIAL` | — | `1` : un seul modèle à la fois en mémoire GPU (tout transcrire, arrêter Whisper, puis traduire), pour un gros modèle de traduction. Par défaut, Whisper et le traducteur restent chargés ensemble et le match est traité tronçon par tronçon. |
+| `COMMENTARY_CHUNK_SEC` | `60` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt. |
+| `COMMENTARY_NIGHT_WINDOW` | `2-6` | Fenêtre de pré-traduction et d'analyse vidéo en tâche de fond (heures de Paris) : `2-6` = de 2 h à 6 h, `off` = jamais (seulement à la demande), `always` = en continu. |
+| `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
+| `OPENAI_API_KEY` | — | Clé API OpenAI : si définie (ou enregistrée dans la page Paramètres, prioritaire), la traduction passe par l'API OpenAI au lieu d'Ollama. La transcription reste locale. Facturée à l'usage par OpenAI (ce n'est pas l'abonnement ChatGPT). |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Modèle OpenAI de traduction. |
 | `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
 | `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
 
