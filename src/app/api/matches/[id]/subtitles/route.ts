@@ -36,7 +36,15 @@ export async function GET(req: Request, ctx: RouteCtx<{ id: string }>) {
   return json({
     match_id: id,
     count: cues.length,
-    subtitles: cues.map((c) => ({ seq: c.seq, video_ts: c.start_ts, end_ts: c.end_ts, text: c.text_fr, speaker: '', kind: 'voice' })),
+    subtitles: cues.map((c) => ({
+      seq: c.seq,
+      video_ts: c.start_ts,
+      end_ts: c.end_ts,
+      text: c.text_fr,
+      speaker: '',
+      kind: 'voice',
+      ...(c.emphasis ? { emphasis: c.emphasis } : {}),
+    })),
     commentary: commentaryStatus(id),
   });
 }

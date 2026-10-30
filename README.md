@@ -35,7 +35,7 @@ L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement d�
 
 ### Prérequis : la carte NVIDIA
 
-La traduction des commentateurs (Whisper + Gemma 4) tourne **dans le
+La traduction des commentateurs (Whisper + TranslateGemma) tourne **dans le
 conteneur**, sur la carte graphique. Une seule fois sur le NAS :
 
 1. **Apps** → installer le plugin **Nvidia Driver** (ich777), choisir la
@@ -65,8 +65,8 @@ docker run -d \
 > `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
 > conteneur. Whisper et Ollama sont **dans l'image** : rien d'autre à
 > installer. Au premier match traduit, les modèles sont téléchargés dans
-> `/mnt/user/appdata/basketland/models` (~1,6 Go pour Whisper, ~6,6 Go
-> pour Gemma 4 E4B) puis réutilisés.
+> `/mnt/user/appdata/basketland/models` (~1,6 Go pour Whisper, ~8,1 Go
+> pour TranslateGemma 12B) puis réutilisés.
 
 > Les droits du volume sont gérés automatiquement : au démarrage, le
 > conteneur rend `/data` à l'utilisateur `node` (uid 1000) puis lâche les
@@ -213,11 +213,12 @@ Le jeton d'ingestion est soit défini par la variable d'environnement
 
 ### Calibration automatique de la VF
 
-La synchronisation se fait **toute seule**, la nuit (de 2 h à 6 h) : chaque
+La synchronisation se fait **toute seule**, en tâche de fond, dès que le
+replay d'un match (terminé depuis moins de 10 jours) est disponible. Chaque
 analyse (3 à 6 min) télécharge le flux en haute qualité et sollicite fort le
-processeur, ce qui ferait geler une lecture en cours. En tâche de fond, les matchs terminés depuis
-moins de 10 jours qui ont un replay ne sont analysés que la nuit, de 2 h à
-6 h (`COMMENTARY_NIGHT_WINDOW`), pour ne pas charger le serveur en journée. L'état est affiché sous le lecteur
+processeur, ce qui ferait geler une lecture en cours : elle **se met en
+pause tant que quelqu'un regarde une vidéo** et reprend ensuite.
+`COMMENTARY_NIGHT_WINDOW=2-6` la limite à la nuit (2 h à 6 h). L'état est affiché sous le lecteur
 (« Synchro automatique en cours · 34 % », « VF calée », « Synchro estimée »…).
 
 Le replay coupe une trentaine de minutes de contenu : le décalage entre le
@@ -268,11 +269,13 @@ serveurs externes (speaches, Ollama), définir `TRANSCRIBE_URL` /
 
 ```
 on ouvre un match → travail lancé aussitôt, à partir de la position de lecture :
-pour chaque tronçon d'1 min (le passage regardé d'abord, puis la suite) :
+pour chaque tronçon de 2 min (le passage regardé d'abord, puis la suite) :
    ──ffmpeg──▶ audio du tronçon (Opus mono 16 kHz, 24 kb/s)
    ──Whisper──▶ texte anglais horodaté au mot
-   ──filtre des hallucinations, découpage en sous-titres (≤ 84 car., 1,2-6 s)
-   ──Ollama (Gemma 4 E4B) ou API OpenAI──▶ français, par lots contrôlés
+   ──ffmpeg──▶ intensité de la voix, mot par mot (dB par rapport au ton habituel)
+   ──filtre des hallucinations, découpage en sous-titres courts calés sur la voix
+     (≤ 60 car., 1,2-5 s, coupés sur les respirations et les changements de ton)
+   ──Ollama (TranslateGemma 12B) ou API OpenAI──▶ français, par lots contrôlés
    ──▶ publiés (commentary_cues + commentary_chunks) ──▶ GET /api/matches/[id]/subtitles
 tous les tronçons faits : piste complète (badge « VF », statut « ready »)
 ```
@@ -281,15 +284,27 @@ tous les tronçons faits : piste complète (badge « VF », statut « ready »)
 d'un match lance sa traduction dès que la lecture a démarré (le lecteur a
 ~15 s d'avance chargée, ou au plus tard 20 s après l'ouverture : **la vidéo
 passe d'abord**), en mettant en pause un travail de fond éventuel, **à
-partir de la position de lecture**, par tronçons d'une minute : les premiers sous-titres arrivent ~20-30 s après l'ouverture
+partir de la position de lecture**, par tronçons de 2 minutes : les premiers sous-titres arrivent ~30-60 s après l'ouverture
 (estimation), puis la traduction prend de l'avance sur la lecture (Whisper
-turbo et Gemma vont plusieurs fois plus vite que le temps réel). Un saut dans
+turbo et TranslateGemma vont plus vite que le temps réel). Un saut dans
 la vidéo réoriente le travail : la fiche envoie sa position à chaque
-interrogation (`GET /subtitles?t=…`, toutes les 12 s et après chaque saut).
+interrogation (`GET /subtitles?t=…`, toutes les 12 s et après chaque saut)
+et un signe de vie toutes les 20 s pendant la lecture (`POST /watching`).
 Le bandeau sous le lecteur indique l'avance des sous-titres sur la lecture
-(« Sous-titres en direct · 2 min d'avance »). La VF s'affiche sur une seule
-ligne compacte ; taille (S à XL) et position (en bas / en haut, pour dégager
-le bandeau du score) se règlent dans le menu ⚙ du lecteur.
+(« Sous-titres en direct · 2 min d'avance »).
+
+**Affichage de la VF** : une ligne compacte, **en haut de l'image** par
+défaut (le bandeau du score, en bas, reste dégagé) ; taille (S à XL) et
+position (en haut / en bas) se règlent dans le menu ⚙ du lecteur. Les
+sous-titres sont **courts et calés sur la voix** : coupés sur les
+respirations du commentateur, la ponctuation et les changements nets de ton
+(une exclamation a sa propre ligne), jamais au milieu d'un groupe de sens,
+et affichés le temps d'être lus quand le commentateur se tait. S'il enchaîne
+trop vite, la ligne précédente reste un instant au-dessus, plus petite et
+estompée. Les **moments forts** ressortent : quand la voix monte (≥ +3 dB
+par rapport au ton habituel du passage), texte appuyé et liseré orange ;
+quand elle explose (≥ +6 dB, ou un « ! »), ligne plus grande et plus chaude
+qui « claque » à l'entrée.
 
 **La lecture reste prioritaire** : ffmpeg, Whisper, Ollama et l'OCR
 tournent en priorité processeur basse (`nice` 10, `BACKGROUND_NICE`) ;
@@ -297,9 +312,15 @@ l'extraction audio réutilise le flux déjà résolu par le lecteur (pas de
 nouvelle résolution ok.ru en pleine lecture) ; le tronçon suivant se
 télécharge pendant que le GPU traite le courant, et le modèle de traduction
 se charge pendant la première transcription. L'analyse vidéo (repères des
-quart-temps) ne tourne plus pendant la journée : elle télécharge le flux en
-haute qualité et sature le processeur (OCR), ce qui fige la lecture ; elle
-passe la nuit, de 2 h à 6 h.
+quart-temps) télécharge le flux en haute qualité et sature le processeur
+(OCR), ce qui figerait la lecture : elle ne tourne que quand personne ne
+regarde.
+
+**Diagnostic des gels** : le lecteur signale chaque gel au serveur, qui
+l'écrit dans les journaux du conteneur (`[lecteur] gel de 2.4 s à 31:05 ·
+720p (2.8 Mb/s) · débit mesuré … · tampon … s`), ainsi que les segments
+vidéo lents à venir d'ok.ru (`[vidéo] segment lent depuis ok.ru …`) : de
+quoi distinguer un problème de réseau d'une surcharge du serveur.
 
 **Noms des joueurs** : Whisper écorche souvent les noms (« Edie » pour
 Edey). Avec l'effectif du match (feuille de stats ESPN), les écarts d'une ou
@@ -316,17 +337,24 @@ travail se met en pause et les modèles sont **déchargés** de la carte
 graphique ; à la fin de chaque travail aussi. Ce qui est traduit reste, et la
 reprise continue où elle s'était arrêtée.
 
-**Pré-traduction de nuit** : en tâche de fond, seule la fenêtre de **2 h à
-6 h** (heure de Paris) traduit les matchs terminés depuis ≤ 10 jours, et
-analyse leur vidéo (repères des quart-temps). À 6 h, un travail de fond en
-cours se met en pause. La page d'accueil indique où en est chaque replay :
-« VF » (prête), « VF en cours », « VF 45 % » (en partie traduit), et un
-résumé au-dessus des replays.
+**Traitement dès que le replay est disponible** : en tâche de fond, chaque
+replay trouvé (match terminé depuis ≤ 10 jours) est traduit puis analysé
+(repères des quart-temps), un travail à la fois. **Dès que quelqu'un regarde
+une vidéo, le travail de fond s'efface** : celui du match regardé passe
+devant, les autres se mettent en pause et reprennent une fois la lecture
+finie (ou 3 min sans signe de vie). `COMMENTARY_NIGHT_WINDOW=2-6` limite le
+travail de fond à la nuit, `off` le supprime (traduction seulement à
+l'ouverture d'un match). La page d'accueil montre **la vidéo en cours de
+traitement** (traduction ou analyse, avancement, « en pause pendant la
+lecture ») et la file d'attente, ainsi que l'état de chaque replay : « VF »
+(prête), « VF en cours », « VF 45 % » (en partie traduit).
 
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
-et le modèle de traduction (Gemma 4 E4B Q4 ≈ 6,6 Go) sont chargés ensemble :
-ils tiennent dans une carte de 10-12 Go. Avec une clé OpenAI, Ollama n'est
-pas démarré du tout.
+et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
+contexte) sont chargés ensemble : il faut une carte de 12 Go. Sur une carte
+plus petite, `TRANSLATE_PARALLEL=1` réduit la mémoire du contexte, ou
+`TRANSLATE_MODEL=gemma4:e4b` (≈ 6,6 Go) revient au modèle précédent. Avec
+une clé OpenAI, Ollama n'est pas démarré du tout.
 
 - **Un travail à la fois** (le GPU est partagé).
 - **Reprise** : tronçons audio, transcriptions et traductions déjà faites
@@ -357,16 +385,16 @@ pas démarré du tout.
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama. |
-| `TRANSLATE_MODEL` | `gemma4:e4b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **Gemma 4 E4B**, 1er du banc d'essai (voir plus bas). Alternatives mesurées : `gemma4:12b` (même qualité, 2× plus lent), `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
+| `TRANSLATE_MODEL` | `translategemma:12b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **TranslateGemma 12B** (Q4_K_M, ≈ 8,1 Go), le modèle de traduction de Google (voir plus bas). Alternatives : `gemma4:e4b` (1er du banc d'essai, plus léger), `gemma4:12b`, `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
 | `TRANSLATE_PARALLEL` | `2` | Lots (ou phrases en mode `mt`) traduits en même temps. L'Ollama embarqué règle `OLLAMA_NUM_PARALLEL` pareil ; pour un Ollama externe, le régler soi-même. |
 | `TRANSLATE_BATCH` | `14` | Sous-titres par lot (1 à 60). 12 à 15 recommandé : au-delà, les modèles fusionnent ou décalent plus souvent des lignes. |
-| `TRANSLATE_JSON_SCHEMA` | auto | `1` / `0` : impose ou non le schéma JSON de sortie (Ollama embarqué). Auto : oui pour Gemma 4 E2B/E4B, non sinon (Gemma 4 12B décale des lignes sous schéma imposé). |
+| `TRANSLATE_JSON_SCHEMA` | auto | `1` / `0` : impose ou non le schéma JSON de sortie (Ollama embarqué). Auto : oui pour Gemma 4 E2B/E4B, non sinon (Gemma 4 12B décale des lignes sous schéma imposé ; TranslateGemma passe par son gabarit brut, sans schéma). |
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
 | `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
-| `COMMENTARY_CHUNK_SEC` | `60` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt. |
-| `COMMENTARY_NIGHT_WINDOW` | `2-6` | Fenêtre de pré-traduction et d'analyse vidéo en tâche de fond (heures de Paris) : `2-6` = de 2 h à 6 h, `off` = jamais (seulement à la demande), `always` = en continu. |
+| `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
+| `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
 | `COMMENTARY_MAX_LEAD_SEC` | `300` (5 min) | Quand quelqu'un regarde, la traduction ne prend pas plus d'avance que cela sur la lecture : elle attend, au lieu de télécharger le flux ok.ru en concurrence avec le lecteur. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
@@ -375,15 +403,23 @@ pas démarré du tout.
 | `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
 | `COMMENTARY_DISABLED` | — | `1` désactive la fonctionnalité. |
 
-**Pourquoi Gemma 4 E4B** : banc d'essai sur 55 vraies phrases de
+**Pourquoi TranslateGemma 12B** : un modèle Gemma 3 spécialisé par Google
+dans la traduction (55 langues), plus fidèle qu'un LLM généraliste sur des
+phrases courtes et elliptiques. Il n'accepte qu'un seul message : le prompt
+(règles, glossaire du commentaire basket) et les lignes partent dans son
+gabarit brut (`/api/generate`, `raw`). Chaque lot porte **le match** (« Knicks
+@ Celtics ») et **l'effectif** : tout ce qui est dit est interprété comme du
+basket (« he's cooking » → « il est en feu », pas « il cuisine »).
+
+**Banc d'essai précédent (Gemma 4 E4B)** : banc d'essai sur 55 vraies phrases de
 commentateurs NBA (plusieurs diffuseurs, jargon, chiffres, noms), 13 modèles
 locaux, note sur 110. Gemma 4 E4B 97, Gemma 4 12B 96, Ministral 3 14B 95,
 Mistral Nemo 12B 93… MiLMMT-46-4B 66 (« Brunson got a three » → « Brunson a
 obtenu une note de 3 » ; Gemma : « Brunson marque un trois points »), NLLB et
 Opus-MT ~50. Qwen 3.8 27B ne fait pas mieux et ne tient pas dans 12 Go.
 
-**Mode `chat` (par défaut)** : lots de 14 sous-titres + les 3 lignes
-précédentes pour le contexte, prompt système dédié au commentaire basket
+**Mode `chat` (par défaut)** : lots de 14 sous-titres + les 5 lignes
+précédentes pour le contexte, le match et l'effectif, prompt système dédié au commentaire basket
 (vocabulaire beIN/Canal+ : « la raquette », « les 24 secondes », « contre »…),
 température 0,2, `num_ctx` 4096, sortie JSON. Chaque lot est **contrôlé** :
 ids exacts, texte non vide et différent de l'anglais, chiffres et noms propres
@@ -398,8 +434,8 @@ la fois, gabarit officiel du modèle (`Translate this from English to French:
 phrase au prorata de l'anglais. Le prompt système ne s'applique pas.
 
 **Temps estimé** par match (2 h) sur une carte 12 Go : Whisper turbo
-~3-6 min + Gemma 4 E4B ~6-10 min avec 2 lots en parallèle, soit **≈ 15-25 min**
-(estimation calculée, pas mesurée : à confirmer sur le NAS).
+~3-6 min + TranslateGemma 12B ~12-20 min avec 2 lots en parallèle, soit
+**≈ 20-30 min** (estimation calculée, pas mesurée : à confirmer sur le NAS).
 
 ## Développement local
 

@@ -47,6 +47,7 @@ import {
   type TranslateContext,
   type TranslateLine,
 } from './commentaryAi';
+import { audioEnvelope, withEnergy, type Envelope } from './audioEnergy';
 import { buildCues, filterTranscript, shiftTranscript, wordsFromTranscript, type AsrWord, type Cue, type Transcript } from './commentaryCues';
 import { BROWSER_UA } from './http';
 import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
@@ -776,6 +777,12 @@ export interface CommentaryDeps {
    */
   openTranscriber?: (cfg: CommentaryConfig, signal: AbortSignal) => Promise<Transcriber>;
   openTranslator?: (cfg: CommentaryConfig, signal: AbortSignal, onProgress: (done: number, total: number) => void) => Promise<{ close(): Promise<void> }>;
+  /**
+   * Intensité de la voix dans l'audio d'un tronçon (audioEnergy.ts), pour
+   * couper les sous-titres sur les changements de ton et mettre en relief
+   * les moments forts. Absente (tests) ou en échec : sous-titres sans relief.
+   */
+  envelope?: (file: string, signal: AbortSignal) => Promise<Envelope | null>;
 }
 
 export interface Transcriber {
@@ -786,6 +793,7 @@ export interface Transcriber {
 const defaultDeps: CommentaryDeps = {
   resolveStream: (okId, force) => resolveOkStream(okId, { force: !!force }),
   extract: extractAudioChunk,
+  envelope: (file, signal) => audioEnvelope(file, signal),
   transcribe: transcribeAudio,
   translate: translateBatch,
   // Démarrage d'un service embarqué ou téléchargement d'un modèle en échec :
@@ -1099,7 +1107,11 @@ export async function runCommentary(
       asr = deps.openTranscriber ? await deps.openTranscriber(cfg, signal) : remoteTranscriber(cfg, deps.transcribe);
     }
     report('transcription', done.size);
-    const transcript = await asr.transcribe(audio, prompt, signal);
+    let transcript = await asr.transcribe(audio, prompt, signal);
+    // Intensité de la voix mot par mot, tant que l'audio est là.
+    const env = deps.envelope ? await deps.envelope(audio, signal).catch(() => null) : null;
+    checkAborted(signal);
+    if (env) transcript = withEnergy(transcript, env);
     writeJson(cacheJson, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
     fs.rmSync(audio, { force: true }); // transcrit : l'audio ne sert plus
     return transcript;
@@ -1149,7 +1161,15 @@ export async function runCommentary(
       cues.map((c) => {
         const t = cache.lines[c.seq];
         const translated = t && t.en === c.text && !t.untranslated;
-        return { seq: c.seq, start_ts: c.start, end_ts: c.end, text_en: c.text, text_fr: translated ? t.fr : c.text, untranslated: translated ? 0 : 1 };
+        return {
+          seq: c.seq,
+          start_ts: c.start,
+          end_ts: c.end,
+          text_en: c.text,
+          text_fr: translated ? t.fr : c.text,
+          untranslated: translated ? 0 : 1,
+          emphasis: c.emphasis ?? 0,
+        };
       }),
     );
     done.add(plan.index);

@@ -15,16 +15,25 @@
  *  2. `shiftTranscript` / `mergeTranscripts` — remet chaque tronçon à sa
  *     place dans la vidéo (les tronçons se chevauchent de quelques secondes :
  *     un mot n'est gardé que dans le tronçon qui contient son milieu) ;
- *  3. `buildCues` — regroupe les mots en sous-titres : ≤ 84 caractères en
- *     anglais (deux lignes de 42, le français étant ~20 % plus long),
- *     1,2 à 6 s, coupure de préférence sur la ponctuation ou une pause, jamais
- *     de chevauchement.
+ *  3. `buildCues` — regroupe les mots en sous-titres COURTS, calés sur la
+ *     voix : ≤ 60 caractères en anglais (une ligne, le français étant ~15 %
+ *     plus long), 1,2 à 5 s, coupure sur les respirations du commentateur
+ *     (pause ≥ 0,35 s), la ponctuation, et les changements nets de ton (une
+ *     exclamation a sa propre ligne) ; jamais de chevauchement. Chaque
+ *     sous-titre reçoit un niveau d'`emphasis` (0 à 2) tiré de l'intensité de
+ *     la voix (`energy` des mots, voir audioEnergy.ts) et des « ! ».
  */
 
 export interface AsrWord {
   word: string;
   start: number;
   end: number;
+  /**
+   * Intensité de la voix sur ce mot, en dB par rapport au niveau habituel du
+   * tronçon (0 = ton normal, +6 = nettement plus fort). Absente si l'audio
+   * n'a pas pu être mesuré.
+   */
+  energy?: number;
 }
 
 export interface AsrSegment {
@@ -50,6 +59,8 @@ export interface Cue {
   start: number;
   end: number;
   text: string;
+  /** Mise en relief : 0 ton normal, 1 voix qui monte, 2 moment fort (cri, exclamation). */
+  emphasis?: number;
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -61,9 +72,9 @@ function parseWords(raw: unknown): AsrWord[] {
   const out: AsrWord[] = [];
   for (const w of raw) {
     if (!w || typeof w !== 'object') continue;
-    const { word, start, end } = w as Record<string, unknown>;
+    const { word, start, end, energy } = w as Record<string, unknown>;
     if (typeof word !== 'string' || !finite(start) || !finite(end)) continue;
-    out.push({ word, start, end: Math.max(start, end) });
+    out.push({ word, start, end: Math.max(start, end), ...(finite(energy) ? { energy } : {}) });
   }
   return out;
 }
@@ -227,7 +238,12 @@ export function filterTranscript(t: Transcript, opts: HallucinationOptions = {})
  */
 export function shiftTranscript(t: Transcript, offset: number, keepFrom = Number.NEGATIVE_INFINITY, keepTo = Number.POSITIVE_INFINITY): Transcript {
   const r2 = (x: number) => Math.round(x * 1000) / 1000;
-  const sw = (w: AsrWord): AsrWord => ({ word: w.word, start: r2(w.start + offset), end: r2(w.end + offset) });
+  const sw = (w: AsrWord): AsrWord => ({
+    word: w.word,
+    start: r2(w.start + offset),
+    end: r2(w.end + offset),
+    ...(finite(w.energy) ? { energy: w.energy } : {}),
+  });
   const keep = (x: { start: number; end: number }) => {
     const m = (x.start + x.end) / 2;
     return m >= keepFrom && m < keepTo;
@@ -312,19 +328,38 @@ export function wordsFromTranscript(t: Transcript): AsrWord[] {
 // ------------------------------------------------------------------ sous-titres
 
 export interface CueOptions {
-  /** Caractères max d'un sous-titre (2 lignes de 42). */
+  /** Caractères max d'un sous-titre (une ligne ; le français est ~15 % plus long). */
   maxChars?: number;
   minDuration?: number;
   maxDuration?: number;
-  /** Pause au-delà de laquelle on coupe volontiers (s). */
+  /** Pause (respiration) au-delà de laquelle on coupe volontiers (s). */
   pauseSplit?: number;
   /** Pause au-delà de laquelle on coupe toujours (s). */
   hardGap?: number;
   /** Temps de lecture ajouté après le dernier mot, si la place le permet (s). */
   readingTail?: number;
+  /**
+   * Vitesse de lecture visée (caractères de français par seconde) : une ligne
+   * reste affichée le temps d'être lue, si le silence qui suit le permet.
+   */
+  readingCps?: number;
+  /** Écart d'intensité (dB) qui marque un changement de ton : on coupe là. */
+  toneShiftDb?: number;
 }
 
-const DEFAULTS: Required<CueOptions> = { maxChars: 84, minDuration: 1.2, maxDuration: 6, pauseSplit: 0.5, hardGap: 1.5, readingTail: 0.5 };
+const DEFAULTS: Required<CueOptions> = {
+  maxChars: 60,
+  minDuration: 1.2,
+  maxDuration: 5,
+  pauseSplit: 0.35,
+  hardGap: 1.2,
+  readingTail: 0.4,
+  readingCps: 15,
+  toneShiftDb: 6,
+};
+
+/** Le français fait ~15 % de caractères de plus que l'anglais. */
+const FR_EXPANSION = 1.15;
 
 /** Assemble des mots Whisper (« ␣Hello, », « ␣world ») en texte propre. */
 export function joinWords(words: AsrWord[]): string {
@@ -346,7 +381,12 @@ const bare = (w: AsrWord) => w.word.trim().toLowerCase();
 /** Mots qui ouvrent une proposition : on coupe volontiers AVANT eux. */
 const OPENERS = new Set(['and', 'but', 'so', 'because', 'while', 'when', 'who', 'which', 'that', 'or', 'if', 'then', 'as']);
 /** Mots qui ne terminent jamais une ligne (« … on its » / « feet »). */
-const WEAK_END = new Set(['a', 'an', 'the', 'its', 'his', 'her', 'their', 'our', 'your', 'my', 'of', 'to', 'in', 'on', 'at', 'for', 'by', 'from', 'with', 'into', 'and', 'but', 'or', 'is', 'was', 'are', 'he', 'she', 'they', 'we', 'it', 'this']);
+const WEAK_END = new Set(
+  (
+    'a an the its his her their our your my of to in on at for by from with into onto over under through past than ' +
+    'across behind toward towards against between around and but or is was are he she they we it this'
+  ).split(' '),
+);
 
 /**
  * Meilleur point de coupure dans un groupe trop long : après une fin de
@@ -366,6 +406,10 @@ function bestSplit(group: AsrWord[], o: Required<CueOptions>): number {
     const gap = group[k].start - prev.end;
     let score = endsSentence(prev) ? 3 : endsClause(prev) ? 2 : 0;
     if (gap > o.pauseSplit) score += 2 + gap;
+    // Changement net d'intensité de la voix entre deux mots : le ton change.
+    const ea = prev.energy;
+    const eb = group[k].energy;
+    if (finite(ea) && finite(eb) && Math.abs(eb - ea) >= o.toneShiftDb) score += 1;
     if (!score && OPENERS.has(bare(group[k])) && head.length >= o.maxChars * 0.45) score = 1;
     // À score égal, on préfère couper tard (première partie mieux remplie).
     if (score >= 1 && score + k / 1000 > bestScore) {
@@ -375,13 +419,37 @@ function bestSplit(group: AsrWord[], o: Required<CueOptions>): number {
   }
   if (best > 0) return best;
   let k = group.length;
-  while (k > group.length - 2 && k > 1 && WEAK_END.has(bare(group[k - 1]))) k--;
+  while (k > group.length - 3 && k > 1 && WEAK_END.has(bare(group[k - 1]))) k--;
   return k;
 }
 
+/** Intensité moyenne (dB) des mots qui en ont une ; null sinon. */
+function meanEnergy(g: AsrWord[]): number | null {
+  const e = g.map((w) => w.energy).filter(finite);
+  return e.length ? e.reduce((a, b) => a + b, 0) / e.length : null;
+}
+
 /**
- * Regroupe les mots en sous-titres. Les cues ne se chevauchent jamais : la
- * fin d'un sous-titre est bornée par le début du suivant (40 ms d'écart).
+ * Niveau de mise en relief d'un sous-titre : la moyenne de la moitié la plus
+ * forte de ses mots (les petits mots, prononcés plus bas, ne diluent pas un
+ * cri), renforcée par un « ! ».
+ */
+export function cueEmphasis(g: AsrWord[], text: string): number {
+  const e = g
+    .map((w) => w.energy)
+    .filter(finite)
+    .sort((a, b) => b - a);
+  const top = e.slice(0, Math.max(1, Math.ceil(e.length / 2)));
+  const loud = e.length ? top.reduce((a, b) => a + b, 0) / top.length : 0;
+  let level = loud >= 6 ? 2 : loud >= 3 ? 1 : 0;
+  if (/!/.test(text)) level = Math.min(2, Math.max(1, level + 1));
+  return level;
+}
+
+/**
+ * Regroupe les mots en sous-titres courts, calés sur la voix. Les cues ne se
+ * chevauchent jamais : la fin d'un sous-titre est bornée par le début du
+ * suivant (40 ms d'écart).
  */
 export function buildCues(input: AsrWord[], opts: CueOptions = {}): Cue[] {
   const o = { ...DEFAULTS, ...opts };
@@ -400,6 +468,11 @@ export function buildCues(input: AsrWord[], opts: CueOptions = {}): Cue[] {
       const prev = cur[cur.length - 1];
       const gap = w.start - prev.end;
       const dur = prev.end - cur[0].start;
+      const len = joinWords(cur).length;
+      const level = meanEnergy(cur);
+      // Changement net de ton (la voix monte d'un coup, ou retombe) marqué
+      // par une micro-pause : l'exclamation aura sa propre ligne.
+      const toneShift = level !== null && finite(w.energy) && Math.abs(w.energy - level) >= o.toneShiftDb && gap >= 0.12;
       if (gap >= o.hardGap) {
         flush(cur);
         cur = [];
@@ -411,8 +484,12 @@ export function buildCues(input: AsrWord[], opts: CueOptions = {}): Cue[] {
           flush(cur);
           cur = [];
         }
-      } else if (dur >= o.minDuration && (endsSentence(prev) || gap > o.pauseSplit) && joinWords(cur).length >= 12) {
-        // Fin de phrase ou pause, et le sous-titre a déjà de quoi être lu.
+      } else if (dur >= o.minDuration && (endsSentence(prev) || gap > o.pauseSplit) && len >= 12) {
+        // Fin de phrase ou respiration, et le sous-titre a déjà de quoi être lu.
+        flush(cur);
+        cur = [];
+      } else if (len >= 12 && (toneShift || (endsClause(prev) && gap > 0.2 && len >= 28))) {
+        // Saute de ton, ou virgule suivie d'une pause : groupe de sens complet.
         flush(cur);
         cur = [];
       }
@@ -426,12 +503,15 @@ export function buildCues(input: AsrWord[], opts: CueOptions = {}): Cue[] {
   for (const g of groups) {
     const text = joinWords(g);
     if (!/[\p{L}\p{N}]/u.test(text)) continue;
-    cues.push({ seq: 0, start: g[0].start, end: g[g.length - 1].end, text });
+    const emphasis = cueEmphasis(g, text);
+    cues.push({ seq: 0, start: g[0].start, end: g[g.length - 1].end, text, ...(emphasis ? { emphasis } : {}) });
   }
   cues.forEach((c, i) => {
     const next = cues[i + 1];
-    let end = Math.max(c.end + o.readingTail, c.start + o.minDuration);
-    end = Math.min(end, c.start + o.maxDuration);
+    // Le temps de LIRE la ligne (en français), si le silence qui suit le permet.
+    const reading = (c.text.length * FR_EXPANSION) / o.readingCps;
+    let end = Math.max(c.end + o.readingTail, c.start + o.minDuration, c.start + reading);
+    end = Math.min(end, Math.max(c.end + o.readingTail, c.start + o.maxDuration));
     if (next) end = Math.min(end, next.start - 0.04);
     // Mot suivant collé : on garde au moins la fin du dernier mot, sans chevaucher.
     if (end <= c.start) end = next ? Math.max(c.start + 0.01, Math.min(c.end, next.start)) : c.start + o.minDuration;
