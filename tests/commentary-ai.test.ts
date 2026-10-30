@@ -18,6 +18,8 @@ import {
   DEFAULT_TRANSLATE_MODEL,
   groupSentences,
   mtPrompt,
+  parsePlainTranslation,
+  PLAIN_TRANSLATE_PROMPT,
   splitProportional,
   translateBatchMt,
 } from '../src/lib/commentaryAi';
@@ -46,6 +48,12 @@ function fakeFetch(handler: (url: string, init: RequestInit) => Response | Promi
 
 const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const chatRes = (content: string) => jsonRes({ choices: [{ message: { role: 'assistant', content } }] });
+
+/** Dernier recours en texte brut (une ligne seule, sans JSON) ? */
+function isPlain(init: RequestInit): boolean {
+  const body = JSON.parse(String(init.body)) as { messages: { role: string; content: string }[] };
+  return body.messages[0].content === PLAIN_TRANSLATE_PROMPT;
+}
 
 /** Lignes du lot demandées dans le message utilisateur. */
 function requestedLines(init: RequestInit): { i: number; en: string }[] {
@@ -285,9 +293,14 @@ describe('traduction par lots (faux serveur Ollama)', () => {
     expect((await translateBatch(lines, [], commentaryConfig())).every((l) => !l.untranslated)).toBe(true);
   });
 
-  it('lot incomplet : nouvel essai, puis moitiés, puis l’anglais marqué', async () => {
+  it('lot incomplet : nouvel essai, puis moitiés, puis texte brut, puis l’anglais marqué', async () => {
     const asked: number[][] = [];
+    const plain: number[] = [];
     fakeFetch((_u, init) => {
+      if (isPlain(init)) {
+        plain.push(JSON.parse(String(init.body)).temperature);
+        return chatRes('');
+      }
       const req = requestedLines(init);
       asked.push(req.map((l) => l.i));
       // Plusieurs lignes : seule la 1 revient. Seule, la 2 revient ; la 3 reste vide.
@@ -303,6 +316,38 @@ describe('traduction par lots (faux serveur Ollama)', () => {
     ]);
     // Lot entier ×2, moitié [1,2] ×2 (la 2 manque), puis 1 et 2 seules, moitié [3] ×2.
     expect(asked).toEqual([[1, 2, 3], [1, 2, 3], [1, 2], [1, 2], [1], [2], [3], [3]]);
+    // La 3, toujours vide : deux essais en texte brut avant l'anglais.
+    expect(plain).toEqual([0.2, 0]);
+  });
+
+  it('ligne rebelle en JSON : rattrapée en texte brut (sans response_format, consignes basket, contexte)', async () => {
+    const line = { i: 7, en: 'Now Kamara from beyond the arc. And Edie with the board.' };
+    const calls = fakeFetch((_u, init) => {
+      // Le modèle recopie l'anglais en JSON, mais traduit quand on lui demande la ligne seule.
+      if (!isPlain(init)) return chatRes(JSON.stringify({ t: [{ i: 7, fr: line.en }] }));
+      return chatRes('Traduction : « Maintenant Kamara derrière l’arc. Et Edey au rebond. »');
+    });
+    const out = await translateBatch([line], ['Portland brings it up.'], commentaryConfig(), { match: 'Memphis Grizzlies @ Portland Trail Blazers' });
+    expect(out).toEqual([{ i: 7, fr: 'Maintenant Kamara derrière l’arc. Et Edey au rebond.', untranslated: false }]);
+    expect(calls).toHaveLength(3); // JSON ×2, puis texte brut
+    const body = JSON.parse(String(calls[2].init.body));
+    expect(body.response_format).toBeUndefined();
+    expect(body.messages[0].content).toContain('« board » = rebond');
+    expect(body.messages[0].content).not.toContain('{"t"');
+    expect(body.messages[1].content).toContain('match : Memphis Grizzlies @ Portland Trail Blazers');
+    expect(body.messages[1].content).toContain('context (à ne pas traduire) :\nPortland brings it up.');
+    expect(body.messages[1].content).toContain(`ligne :\n${line.en}`);
+  });
+
+  it('réponse en texte brut : étiquette, guillemets, JSON et refus', () => {
+    expect(parsePlainTranslation('Il déclenche de loin.')).toBe('Il déclenche de loin.');
+    expect(parsePlainTranslation('<think>…</think>\nFrançais : "Il déclenche de loin."')).toBe('Il déclenche de loin.');
+    expect(parsePlainTranslation('```\n« Dedans ! »\n```')).toBe('Dedans !');
+    expect(parsePlainTranslation('{"t":[{"i":3,"fr":"Temps mort Portland."}]}')).toBe('Temps mort Portland.');
+    expect(parsePlainTranslation('{"fr":"Temps mort Portland."}')).toBe('Temps mort Portland.');
+    expect(parsePlainTranslation('Désolé, je ne peux pas.')).toBe('');
+    expect(parsePlainTranslation("I'm sorry, I can't help with that.")).toBe('');
+    expect(parsePlainTranslation('Désolés pour lui, il rate.')).toBe('Désolés pour lui, il rate.');
   });
 
   it('réponse illisible : repli sans bloquer le match', async () => {

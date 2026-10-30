@@ -10,9 +10,20 @@ import { currentSession } from '@/lib/authServer';
 import { listUsers } from '@/lib/db';
 import { dubDisabledReason } from '@/lib/dub';
 import { autoTranslateEnabled, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView, vfMode } from '@/lib/settings';
+import { PARIS_TZ } from '@/lib/time';
+import { appVersion } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Paramètres' };
+
+const dateFmt = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short', timeZone: PARIS_TZ });
+
+/** Version en service : pour vérifier que le serveur tourne sur la dernière image. */
+function versionText(): string {
+  const { commit, builtAt } = appVersion();
+  if (!commit) return 'Numéro de version non renseigné.';
+  return `Version ${commit}${builtAt ? ` · image construite le ${dateFmt.format(new Date(builtAt))}` : ''}.`;
+}
 
 function SectionTitle({ id, kicker, children }: { id: string; kicker: string; children: React.ReactNode }) {
   return (
@@ -74,6 +85,8 @@ export default async function SettingsPage() {
           <OpenAiSettings initial={openAiSettingsView()} placeholderModel={OPENAI_MODEL_PLACEHOLDER} />
         </section>
       )}
+
+      <p className="text-xs leading-relaxed text-paper-faint">{versionText()}</p>
     </div>
   );
 }

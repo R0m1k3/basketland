@@ -433,13 +433,47 @@ export function commentaryReady(matchId: number): boolean {
   return currentTrack(matchId)?.complete === 1;
 }
 
+/** Rattrapage déjà tenté pour une piste (replay et modèle de traduction). */
+interface LeftoversRecord {
+  okId: string;
+  model: string;
+}
+const leftoversKey = (matchId: number) => `commentary-leftovers:${matchId}`;
+
+/**
+ * Piste complète avec des lignes restées en anglais, pas encore rattrapée :
+ * un travail court (sans Whisper) les retraduit une à une (`translateLeftovers`).
+ * Un seul essai par piste : une ligne vraiment intraduisible ne relance rien.
+ */
+export function commentaryLeftoversPending(matchId: number): boolean {
+  const t = currentTrack(matchId);
+  if (t?.complete !== 1 || !t.untranslated) return false;
+  let rec: LeftoversRecord | undefined;
+  try {
+    rec = db.kvGet<LeftoversRecord>(leftoversKey(matchId), Number.POSITIVE_INFINITY);
+  } catch {
+    rec = undefined;
+  }
+  return !(rec && rec.okId === t.ok_id && rec.model === t.translate_model);
+}
+
+/** Rien à faire pour ce match : piste complète, sans rattrapage en attente. */
+function commentaryDone(matchId: number): boolean {
+  return commentaryReady(matchId) && !commentaryLeftoversPending(matchId);
+}
+
+/** Travail de simple rattrapage : piste déjà complète, pas de relance forcée (la fiche la dit prête). */
+const leftoversOnly = (job: Job) => !job.force && commentaryReady(job.matchId);
+
 /**
  * Sous-titres à servir : ceux déjà publiés pour le replay actuel, même si la
  * piste est encore partielle (travail en cours, ou interrompu à mi-match).
- * Une piste d'un autre replay n'est jamais servie.
+ * Une piste d'un autre replay n'est jamais servie. Les lignes restées en
+ * anglais (traduction impossible) ne le sont pas non plus : pas d'anglais au
+ * milieu de la VF ; elles reviennent une fois rattrapées (`translateLeftovers`).
  */
 export function servedCommentaryCues(matchId: number): db.CommentaryCueRow[] {
-  return currentTrack(matchId) ? db.getCommentaryCues(matchId) : [];
+  return currentTrack(matchId) ? db.getCommentaryCues(matchId).filter((c) => !c.untranslated) : [];
 }
 
 /**
@@ -521,7 +555,7 @@ export function enqueueCommentary(
     if (opts.explicit) st.running.job.explicit = true;
     return { queued: false, started: true, message: 'Traduction déjà en cours' };
   }
-  if (!opts.force && commentaryReady(matchId)) return { queued: false, started: false, message: 'Traduction des commentaires déjà prête' };
+  if (!opts.force && commentaryDone(matchId)) return { queued: false, started: false, message: 'Traduction des commentaires déjà prête' };
   const existing = st.queue.findIndex((j) => j.matchId === matchId);
   const job: Job = {
     matchId,
@@ -586,7 +620,7 @@ function pump(): void {
     }
     const [job] = st.queue.splice(i, 1);
     if (commentaryDisabledReason() || unavailableReason(job.matchId)) continue;
-    if (!job.force && commentaryReady(job.matchId)) continue;
+    if (!job.force && commentaryDone(job.matchId)) continue;
     start(job);
   }
   if (!st.running && !st.queue.length && st.idleResolve) {
@@ -691,8 +725,20 @@ function currentModels(): { transcribe: string; translate: string } {
   return { transcribe: cfg.transcribeModel, translate: cfg.translateModel };
 }
 
+function readyStatus(matchId: number): CommentaryStatus {
+  const t = db.getCommentaryTrack(matchId) as db.CommentaryTrackRow;
+  return {
+    status: 'ready',
+    models: { transcribe: t.transcribe_model, translate: t.translate_model },
+    ...(t.untranslated ? { reason: `${t.untranslated} ligne(s) sans traduction (non affichées)` } : {}),
+  };
+}
+
 /** Statut de la traduction des commentaires d'un match (contrat de l'API). */
 export function commentaryStatus(matchId: number): CommentaryStatus {
+  // Rattrapage des lignes restées en anglais : la piste reste « prête » à l'écran.
+  const job = st.running?.job.matchId === matchId ? st.running.job : st.queue.find((j) => j.matchId === matchId);
+  if (job && leftoversOnly(job)) return readyStatus(matchId);
   if (st.running?.job.matchId === matchId) {
     const p = st.running.progress;
     const until = availableUntil(matchId, p);
@@ -711,14 +757,7 @@ export function commentaryStatus(matchId: number): CommentaryStatus {
     const covered = coveredRanges(matchId);
     return { status: 'queued', position, ...(until ? { available_until: until } : {}), ...(covered ? { covered } : {}), models: currentModels() };
   }
-  if (commentaryReady(matchId)) {
-    const t = db.getCommentaryTrack(matchId) as db.CommentaryTrackRow;
-    return {
-      status: 'ready',
-      models: { transcribe: t.transcribe_model, translate: t.translate_model },
-      ...(t.untranslated ? { reason: `${t.untranslated} ligne(s) laissée(s) en anglais (traduction impossible)` } : {}),
-    };
-  }
+  if (commentaryReady(matchId)) return readyStatus(matchId);
   const disabled = commentaryDisabledReason();
   if (disabled) return { status: 'disabled', reason: disabled };
   const unavailable = unavailableReason(matchId);
@@ -740,7 +779,7 @@ export function prioritizeOnView(matchId: number): void {
   const m = db.getMatch(matchId);
   if (!m || m.status !== 'final' || !m.video_ok_id || !m.video_available) return;
   if (st.running?.job.matchId === matchId || commentaryQueuePosition(matchId) === 1) return;
-  if (commentaryDisabledReason() || commentaryReady(matchId)) return;
+  if (commentaryDisabledReason() || commentaryDone(matchId)) return;
   if (!commentaryRetryAllowed(getCommentaryRecord(matchId), m.video_ok_id)) return;
   enqueueCommentary(matchId, { priority: true });
 }
@@ -756,6 +795,11 @@ export function enqueueRecentCommentaries(days = 10, limit = 30): number {
     if (!commentaryRetryAllowed(getCommentaryRecord(m.id), m.video_ok_id)) continue;
     // Piste complète d'un autre modèle de traduction : à refaire (sinon « déjà prête »).
     if (enqueueCommentary(m.id, { force: commentaryReady(m.id) }).queued) n++;
+  }
+  // Pistes complètes avec des lignes restées en anglais : rattrapage seul.
+  for (const m of db.finalMatchesWithUntranslatedCues(since, limit)) {
+    if (st.running?.job.matchId === m.id || commentaryQueuePosition(m.id) || !commentaryLeftoversPending(m.id)) continue;
+    if (enqueueCommentary(m.id).queued) n++;
   }
   return n;
 }
@@ -977,6 +1021,47 @@ const pause = (ms: number, signal: AbortSignal) =>
   });
 
 /**
+ * Rattrapage des sous-titres publiés restés en anglais (traduction
+ * impossible au premier passage, ou publiés avant le dernier recours en
+ * texte brut) : chaque ligne est retraduite seule, avec les lignes qui la
+ * précèdent pour le sens ; une ligne enfin traduite remplace l'anglais en
+ * base. `skip` : lignes déjà tentées pendant ce travail. Une fois passé au
+ * bout, le rattrapage est noté pour la piste (un seul essai par piste).
+ * Rend le nombre de lignes traduites.
+ */
+async function translateLeftovers(
+  matchId: number,
+  cfg: CommentaryConfig,
+  deps: CommentaryDeps,
+  o: TranslateContext & { signal: AbortSignal },
+  onProgress: (done: number) => void,
+  skip: ReadonlySet<number> = new Set(),
+): Promise<number> {
+  const rows = db.untranslatedCommentaryCues(matchId).filter((c) => !skip.has(c.seq));
+  let fixed = 0;
+  for (const [k, c] of rows.entries()) {
+    checkAborted(o.signal);
+    onProgress(k);
+    const context = db.commentaryCuesBefore(matchId, c.start_ts, CONTEXT_LINES);
+    const [r] = await deps.translate([{ i: c.seq, en: c.text_en }], context, cfg, o);
+    if (r && r.i === c.seq && !r.untranslated && r.fr.trim()) {
+      db.setCommentaryCueTranslation(matchId, c.seq, r.fr);
+      fixed++;
+    }
+  }
+  const t = db.getCommentaryTrack(matchId);
+  if (t?.complete) {
+    try {
+      db.kvSet(leftoversKey(matchId), { okId: t.ok_id, model: t.translate_model } satisfies LeftoversRecord);
+    } catch (e) {
+      console.error('[commentaires] rattrapage non noté :', (e as Error).message);
+    }
+  }
+  if (rows.length) console.log(`[commentaires] match ${matchId} : ${fixed}/${rows.length} ligne(s) restée(s) en anglais traduite(s)`);
+  return fixed;
+}
+
+/**
  * Un travail : tronçon par tronçon (1 min), en commençant à la position du
  * spectateur, chaque tronçon publié dès qu'il est traduit. Les tronçons,
  * transcriptions et traductions déjà présents dans le dossier de travail
@@ -995,6 +1080,26 @@ export async function runCommentary(
   const match = db.getMatch(job.matchId);
   if (!match?.video_ok_id) throw new Error('pas de replay');
   const okId = match.video_ok_id;
+  // Effectif du match (feuille de stats) : corrige les noms écorchés par Whisper.
+  const rosterNamesList = [...new Set(db.getPlayerStats(job.matchId).map((p) => p.player_name).filter(Boolean))];
+  const roster = rosterIndex(rosterNamesList);
+  const leftoverCtx = { signal, roster, match: `${match.away_name} @ ${match.home_name}` };
+
+  // Piste déjà complète pour ce replay, sans relance forcée : seulement le
+  // rattrapage des lignes restées en anglais (ni flux vidéo, ni Whisper).
+  const prevTrack = db.getCommentaryTrack(job.matchId);
+  if (!job.force && prevTrack?.complete === 1 && prevTrack.ok_id === okId && prevTrack.cues > 0) {
+    const total = db.untranslatedCommentaryCues(job.matchId).length;
+    let mt: { close(): Promise<void> } | null = null;
+    try {
+      if (total && deps.openTranslator) mt = await deps.openTranslator(cfg, signal, (d, tot) => progress({ phase: 'preparation', done: d, total: tot }));
+      const fixed = await translateLeftovers(job.matchId, cfg, deps, leftoverCtx, (d) => progress({ phase: 'traduction', done: d, total }));
+      return { ok: true, reason: `rattrapage : ${fixed}/${total} ligne(s) restée(s) en anglais traduite(s)` };
+    } finally {
+      await mt?.close();
+    }
+  }
+
   const dir = workDir(okId);
   fs.mkdirSync(dir, { recursive: true });
 
@@ -1008,7 +1113,6 @@ export async function runCommentary(
   if (!duration) throw new Error('durée de la vidéo inconnue');
   // Une piste commencée garde son découpage (pas de travail perdu si
   // COMMENTARY_CHUNK_SEC change) ; une nouvelle piste prend le réglage actuel.
-  const prevTrack = db.getCommentaryTrack(job.matchId);
   const chunkSec =
     prevTrack && !prevTrack.complete && prevTrack.ok_id === okId && prevTrack.transcribe_model === cfg.transcribeModel && prevTrack.translate_model === cfg.translateModel && prevTrack.chunk_sec
       ? prevTrack.chunk_sec
@@ -1029,10 +1133,7 @@ export async function runCommentary(
           ),
         ])
       : undefined;
-  // Effectif du match (feuille de stats) : corrige les noms écorchés par Whisper.
-  const rosterNamesList = [...new Set(db.getPlayerStats(job.matchId).map((p) => p.player_name).filter(Boolean))];
-  const roster = rosterIndex(rosterNamesList);
-  // Et le donne à Whisper (« hotwords ») : noms bien mieux reconnus, sans les
+  // L'effectif est aussi donné à Whisper (« hotwords ») : noms bien mieux reconnus, sans les
   // segments de 30 s du prompt. Les sous-titres sont recoupés sur les mots.
   const hotwords = process.env.WHISPER_HOTWORDS === '0' || !rosterNamesList.length ? undefined : rosterNamesList.join(', ');
   const track: db.CommentaryTrackMeta = {
@@ -1148,9 +1249,17 @@ export async function runCommentary(
 
   let batches = 0;
 
+  // Lignes demandées au traducteur pendant ce travail (le rattrapage final ne les redemande pas).
+  const attempted = new Set<number>();
+  /** À traduire : ligne pas en cache, changée, ou restée en anglais (nouvel essai). */
+  const needsTranslation = (c: Cue) => {
+    const t = cache.lines[c.seq];
+    return !t || t.en !== c.text || t.untranslated;
+  };
+
   /** Traduit et publie les sous-titres d'un tronçon. */
   const translateAndPublish = async (plan: ChunkPlan, cues: Cue[]) => {
-    const todoAll = cues.filter((c) => cache.lines[c.seq]?.en !== c.text);
+    const todoAll = cues.filter(needsTranslation);
     if (todoAll.length) await openMt();
     if (cues.length) report('traduction', done.size);
     // Contexte du premier lot : les sous-titres déjà publiés juste avant ce tronçon.
@@ -1166,14 +1275,15 @@ export async function runCommentary(
         checkAborted(signal);
         const batch = cues.slice(k, k + cfg.batch);
         batches++;
-        const todo = batch.filter((c) => cache.lines[c.seq]?.en !== c.text);
+        const todo = batch.filter(needsTranslation);
         if (!todo.length) continue;
+        for (const c of todo) attempted.add(c.seq);
         const context = [...before, ...cues.slice(0, k).map((c) => c.text)].slice(-CONTEXT_LINES);
         const res = await deps.translate(
           todo.map((c) => ({ i: c.seq, en: c.text })),
           context,
           cfg,
-          { signal, roster, match: `${match.away_name} @ ${match.home_name}` },
+          leftoverCtx,
         );
         for (const r of res) {
           const c = todo.find((x) => x.seq === r.i);
@@ -1234,6 +1344,13 @@ export async function runCommentary(
         chunkCues(plan, transcript, prompt).map((c) => ({ ...c, text: fixRosterNames(c.text, roster) })),
       );
     }
+    // Piste complète : les lignes restées en anglais lors d'un travail
+    // précédent sont retentées pendant que le traducteur est chargé.
+    if (!paused) {
+      const left = db.untranslatedCommentaryCues(job.matchId).filter((c) => !attempted.has(c.seq));
+      if (left.length) await openMt();
+      await translateLeftovers(job.matchId, cfg, deps, leftoverCtx, (d) => report('traduction', d, left.length), attempted);
+    }
   } catch (e) {
     if (e instanceof StreamUnavailable) return networkOutcome(e.message, job.matchId);
     throw e;
@@ -1259,7 +1376,7 @@ export async function runCommentary(
   return {
     ok: true,
     reason:
-      `${t.cues} sous-titres traduits${t.untranslated ? ` (${t.untranslated} laissés en anglais)` : ''} ; ` +
+      `${t.cues} sous-titres traduits${t.untranslated ? ` (${t.untranslated} sans traduction, non affichés)` : ''} ; ` +
       `${total} tronçon(s), ${batches} lot(s) ; ${cfg.transcribeModel} + ${cfg.translateModel} ; ${minutes} min`,
   };
 }

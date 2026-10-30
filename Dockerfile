@@ -119,6 +119,13 @@ COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]
 
+# Version affichée en bas de la page Paramètres (commit et date de
+# l'image, passés par la CI) : pour vérifier qu'un serveur tourne bien sur la
+# dernière image. En fin d'étage : un nouveau commit ne refait aucune couche lourde.
+ARG GIT_SHA=
+ARG BUILD_DATE=
+ENV APP_COMMIT=$GIT_SHA APP_BUILT_AT=$BUILD_DATE
+
 # Pas de `USER node` ici : l'entrypoint démarre en root pour rendre le volume
 # /data à `node` (le chown du build est perdu au montage), puis lâche les
 # privilèges via setpriv avant de lancer le serveur.

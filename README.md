@@ -156,7 +156,14 @@ sans `-v` ne touche pas au dossier hôte.
 
 > Si tu as installé le conteneur via l'interface Unraid, un **Update** dans
 > l'onglet Docker fait la même chose (téléchargement de la nouvelle image
-> puis redémarrage), sans ligne de commande.
+> puis redémarrage), sans ligne de commande. Unraid ne propose « Update »
+> qu'après sa vérification des mises à jour (« Check for Updates ») ; à
+> défaut, « Force Update » dans le menu du conteneur (mode avancé).
+
+**Vérifier la version en service** : le bas de la page Paramètres affiche
+« Version <commit> · image construite le <date> ». Le commit doit être celui
+du dernier merge sur `main` (onglet *Actions* du dépôt) ; sinon, le NAS tourne
+encore sur l'ancienne image.
 
 ## Connexion et utilisateurs
 
@@ -169,7 +176,8 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
 - **Connexion** : `/login`. La session (cookie httpOnly) dure 30 jours et se
   prolonge tant qu'elle sert. 5 échecs de connexion → 1 minute d'attente.
 - **Paramètres** (`/parametres`, icône d'engrenage en haut à droite) : chacun y
-  change son mot de passe et se déconnecte. Un administrateur y gère aussi les
+  change son mot de passe et se déconnecte, et voit en bas la version en
+  service (commit et date de l'image). Un administrateur y gère aussi les
   comptes (ajout, rôle, réinitialisation du mot de passe, suppression — le
   dernier administrateur ne peut être ni supprimé ni rétrogradé).
 - **Traduction via OpenAI (option)** : dans Paramètres › « Traduction des
@@ -403,8 +411,14 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
   Un administrateur peut aussi **refaire** une piste, même terminée :
   « Relancer la traduction » (`{"action":"retry"}`, 403 pour un simple
   utilisateur). Une ligne que le LLM ne
-  sait pas traduire reste en anglais (marquée `untranslated` en base) sans
-  bloquer le match.
+  sait pas traduire est gardée en anglais en base (marquée `untranslated`)
+  sans bloquer le match, mais **jamais affichée** (ni sous-titre, ni export
+  WebVTT, ni doublage) : pas d'anglais au milieu de la VF. Elle est retentée
+  à la fin du travail suivant sur ce match, et une piste complète qui en
+  contient encore (publiée avant ce rattrapage) reçoit un **travail court de
+  rattrapage** — sans flux vidéo ni Whisper, les lignes retraduites une à
+  une ; la fiche reste « prête » pendant ce temps. Un seul rattrapage par
+  piste (replay et modèle de traduction).
 - **Nouvelle vidéo** (autre identifiant ok.ru) ou **nouveau modèle de
   traduction** (`TRANSLATE_MODEL`) : la piste est refaite (pour les matchs
   des 10 derniers jours).
@@ -464,7 +478,9 @@ température 0,2, `num_ctx` 4096, sortie JSON. Chaque lot est **contrôlé** :
 ids exacts, texte non vide et différent de l'anglais, chiffres et noms propres
 de chaque ligne retrouvés en français (une traduction décalée d'une ligne
 échoue à ce test). Lot douteux → nouvel essai à température 0, puis lot coupé
-en deux ; une ligne vraiment intraduisible reste en anglais. Pour Qwen3,
+en deux ; une ligne seule toujours sans traduction est redemandée en **texte
+brut** (sans JSON, mêmes consignes basket, deux essais) ; une ligne vraiment
+intraduisible reste en anglais en base, sans être affichée. Pour Qwen3,
 `/no_think` est ajouté automatiquement.
 
 **Mode `mt`** (MiLMMT et autres modèles de traduction purs) : une phrase à

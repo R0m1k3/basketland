@@ -966,6 +966,27 @@ export function getCommentaryCues(matchId: number): CommentaryCueRow[] {
   return all<CommentaryCueRow>('SELECT * FROM commentary_cues WHERE match_id = $id ORDER BY start_ts, seq', { id: matchId });
 }
 
+/** Sous-titres publiés restés en anglais (traduction impossible), dans l'ordre de la vidéo. */
+export function untranslatedCommentaryCues(matchId: number): CommentaryCueRow[] {
+  return all<CommentaryCueRow>('SELECT * FROM commentary_cues WHERE match_id = $id AND untranslated != 0 ORDER BY start_ts, seq', { id: matchId });
+}
+
+/**
+ * Traduction enfin trouvée pour un sous-titre resté en anglais. Le compte
+ * de la piste suit ; le doublage du tronçon sera refait (l'empreinte de ses
+ * sous-titres change, voir dub.ts `cuesSignature`).
+ */
+export function setCommentaryCueTranslation(matchId: number, seq: number, textFr: string): void {
+  tx(() => {
+    run('UPDATE commentary_cues SET text_fr = $fr, untranslated = 0 WHERE match_id = $id AND seq = $seq', { id: matchId, seq, fr: textFr });
+    run(
+      'UPDATE commentary_tracks SET untranslated = (SELECT COUNT(*) FROM commentary_cues WHERE match_id = $id AND untranslated != 0) WHERE match_id = $id',
+      { id: matchId },
+    );
+    run('UPDATE dub_tracks SET complete = 0 WHERE match_id = $id', { id: matchId });
+  });
+}
+
 /** Fin (s) du dernier sous-titre en base, 0 s'il n'y en a pas. */
 export function commentaryPublishedUntil(matchId: number): number {
   return one<{ t: number | null }>('SELECT MAX(end_ts) AS t FROM commentary_cues WHERE match_id = $id', { id: matchId })?.t ?? 0;
@@ -1004,6 +1025,17 @@ export function finalMatchesNeedingCommentary(sinceIso: string, limit = 30, tran
                          AND ($model IS NULL OR t.translate_model = $model))
      ORDER BY m.date_utc DESC LIMIT $limit`,
     { since: sinceIso, limit, model: translateModel ?? null },
+  );
+}
+
+/** Matchs terminés récents dont la piste complète du replay actuel a des lignes restées en anglais. */
+export function finalMatchesWithUntranslatedCues(sinceIso: string, limit = 30): MatchRow[] {
+  return all<MatchRow>(
+    `SELECT m.* FROM matches m JOIN commentary_tracks t ON t.match_id = m.id
+     WHERE m.status = 'final' AND m.video_available = 1 AND m.date_utc >= $since
+       AND t.ok_id = m.video_ok_id AND t.complete = 1 AND t.untranslated > 0
+     ORDER BY m.date_utc DESC LIMIT $limit`,
+    { since: sinceIso, limit },
   );
 }
 

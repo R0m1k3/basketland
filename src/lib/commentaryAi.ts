@@ -18,8 +18,9 @@
  *    travail s'arrête et sera repris plus tard (la transcription déjà faite
  *    est gardée sur disque) ;
  *  - réponse du LLM inexploitable (JSON cassé, ligne manquante) : nouvel
- *    essai du lot, puis ligne par ligne, puis l'anglais en dernier recours.
- *    Une ligne rebelle ne bloque jamais tout le match.
+ *    essai du lot, puis ligne par ligne, puis la ligne seule en texte brut,
+ *    et enfin l'anglais, marqué (non affiché, retenté plus tard). Une ligne
+ *    rebelle ne bloque jamais tout le match.
  */
 import fs from 'node:fs';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
@@ -331,6 +332,17 @@ export function translateSystemPrompt(): string {
   return TRANSLATE_SYSTEM_PROMPT;
 }
 
+/**
+ * Dernier recours pour une ligne qu'aucun lot JSON n'a su rendre (réponse
+ * vide ou illisible, recopie de l'anglais) : la ligne seule, demandée en
+ * texte brut — sans JSON à respecter, le modèle s'en sort presque toujours.
+ * Mêmes consignes basket que les lots (celles du prompt par défaut, même
+ * avec TRANSLATE_PROMPT_FILE) ; seul le format de la réponse change.
+ */
+export const PLAIN_TRANSLATE_PROMPT = `${TRANSLATE_SYSTEM_PROMPT.slice(0, TRANSLATE_SYSTEM_PROMPT.lastIndexOf('\n\nRéponds uniquement'))}
+
+Réponds uniquement avec la traduction française de la ligne demandée, sur une seule ligne : ni guillemets, ni étiquette, ni explication.`;
+
 /** Qwen3 « réfléchit » à voix haute par défaut : `/no_think` le coupe. */
 export const needsNoThink = (model: string) => /qwen3/i.test(model);
 
@@ -356,6 +368,49 @@ export function buildUserMessage(lines: TranslateLine[], context: string[], mode
   const game = match ? { match } : {};
   const payload = JSON.stringify({ ...game, ...players, context, lines: lines.map((l) => ({ i: l.i, en: l.en })) });
   return `Traduis ces lignes. Réponds uniquement avec le JSON demandé.\n${payload}${needsNoThink(model) ? '\n/no_think' : ''}`;
+}
+
+/** Message utilisateur du dernier recours : une seule ligne, en texte brut. */
+export function buildPlainMessage(en: string, context: string[], model: string, roster?: RosterIndex, match?: string): string {
+  const parts = ['Traduis cette ligne en français. Réponds uniquement avec la traduction.'];
+  if (match) parts.push(`match : ${match}`);
+  if (roster?.full.length) parts.push(`joueurs : ${roster.full.join(', ')}`);
+  if (context.length) parts.push(`context (à ne pas traduire) :\n${context.join('\n')}`);
+  parts.push(`ligne :\n${en}`);
+  return `${parts.join('\n\n')}${needsNoThink(model) ? '\n/no_think' : ''}`;
+}
+
+/** Refus ou excuse du modèle à la place d'une traduction. */
+const REFUSAL = /^(?:(?:je suis )?désolée?|je ne (?:peux|suis) pas|(?:i'?m |i am )?sorry|i can(?:no|')t|as an ai)(?!\p{L})/iu;
+
+/**
+ * Traduction d'une réponse en texte brut : bloc <think>, balises ```,
+ * étiquette (« Traduction : ») et guillemets autour de la ligne retirés ; un
+ * JSON renvoyé malgré la consigne est lu s'il ne contient qu'une traduction.
+ * Rend '' pour un refus ou une réponse inexploitable.
+ */
+export function parsePlainTranslation(content: string): string {
+  let s = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const fence = /```(?:\w+)?\s*([\s\S]*?)```/.exec(s);
+  if (fence) s = fence[1].trim();
+  if (/^[[{]/.test(s)) {
+    const found = [...parseTranslation(s).values()];
+    if (found.length === 1) return found[0];
+    try {
+      const o = JSON.parse(s) as Record<string, unknown>;
+      const v = o.fr ?? o.traduction ?? o.translation;
+      return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
+    } catch {
+      return '';
+    }
+  }
+  s = s
+    .replace(/^(?:traduction(?: française)?|français|french|fr)\s*:\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const quoted = /^(?:«\s*(.*?)\s*»|"(.*)"|“(.*)”)$/.exec(s);
+  if (quoted) s = (quoted[1] ?? quoted[2] ?? quoted[3]).trim();
+  return REFUSAL.test(s) ? '' : s;
 }
 
 /**
@@ -499,7 +554,18 @@ export function gemmaRawPrompt(system: string, user: string): string {
   return `<start_of_turn>user\n${system}\n\n${user}<end_of_turn>\n<start_of_turn>model\n`;
 }
 
-export async function chatCompletion(system: string, user: string, cfg: CommentaryConfig, o: TranslateContext = {}, temperature = 0.2): Promise<string> {
+/**
+ * `json` : réponse JSON imposée (lots) ; false pour le dernier recours en
+ * texte brut (`plainAttempt`), sans schéma ni `response_format`.
+ */
+export async function chatCompletion(
+  system: string,
+  user: string,
+  cfg: CommentaryConfig,
+  o: TranslateContext = {},
+  temperature = 0.2,
+  json = true,
+): Promise<string> {
   const native = cfg.translateMode === 'embedded';
   const raw = native && needsRawGemma(cfg.translateModel);
   const url = raw ? `${ollamaBase(cfg.translateUrl)}/api/generate` : native ? `${ollamaBase(cfg.translateUrl)}/api/chat` : `${cfg.translateUrl}/chat/completions`;
@@ -524,7 +590,7 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
           messages,
           stream: false,
           keep_alive: '10m',
-          format: schemaSafe(cfg.translateModel) ? TRANSLATION_SCHEMA : undefined,
+          format: json && schemaSafe(cfg.translateModel) ? TRANSLATION_SCHEMA : undefined,
           options: { temperature, top_p: 0.9, num_ctx: 4096, num_predict: 1200 },
         }
       : cfg.translateProvider === 'openai'
@@ -534,10 +600,10 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
             model: cfg.translateModel,
             messages,
             stream: false,
-            response_format: { type: 'json_object' },
+            ...(json ? { response_format: { type: 'json_object' } } : {}),
             ...(/^(gpt-5|o\d)/i.test(cfg.translateModel) ? { reasoning_effort: 'low' } : { temperature }),
           }
-        : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, response_format: { type: 'json_object' } },
+        : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, ...(json ? { response_format: { type: 'json_object' } } : {}) },
   );
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -587,7 +653,7 @@ export async function chatCompletion(system: string, user: string, cfg: Commenta
 export interface TranslatedLine {
   i: number;
   fr: string;
-  /** Traduction impossible : `fr` est l'anglais d'origine. */
+  /** Traduction impossible : `fr` est l'anglais d'origine (jamais affiché). */
   untranslated: boolean;
 }
 
@@ -621,6 +687,13 @@ async function chatAttempt(
   return { got, missing: lines.length - got.size + extra, suspect };
 }
 
+/** Dernier recours pour une ligne seule : traduction en texte brut, acceptable ou undefined. */
+async function plainAttempt(line: TranslateLine, context: string[], cfg: CommentaryConfig, o: TranslateContext, temperature: number): Promise<string | undefined> {
+  const user = buildPlainMessage(line.en, context, cfg.translateModel, o.roster, o.match);
+  const fr = parsePlainTranslation(await chatCompletion(PLAIN_TRANSLATE_PROMPT, user, cfg, o, temperature, false));
+  return validTranslation(line.en, fr) ? fr : undefined;
+}
+
 /** Lot douteux : une ligne manque (ou un id en trop), ou trop de lignes perdent leurs noms et chiffres. */
 const doubtful = (r: { missing: number; suspect: number }, n: number) => r.missing > 0 || r.suspect >= Math.max(2, Math.ceil(n / 4));
 const badness = (r: { missing: number; suspect: number }) => r.missing * 2 + r.suspect;
@@ -631,7 +704,10 @@ const badness = (r: { missing: number; suspect: number }) => r.missing * 2 + r.s
  *     et différent de l'anglais, noms et chiffres conservés ;
  *  2. lot douteux → nouvel essai à température 0, le meilleur des deux est gardé ;
  *  3. toujours douteux → le lot est coupé en deux, chaque moitié reprend en 1 ;
- *  4. une ligne seule sans traduction acceptable après deux essais → l'anglais (marqué).
+ *  4. une ligne seule sans traduction acceptable après deux essais → demandée
+ *     en texte brut, deux essais (`plainAttempt`) ;
+ *  5. toujours rien → l'anglais, marqué `untranslated` (jamais affiché ; la
+ *     ligne est retentée plus tard, voir `translateLeftovers`).
  * `context` : quelques lignes précédentes, données pour le sens seulement.
  */
 export async function translateBatch(lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext = {}): Promise<TranslatedLine[]> {
@@ -653,6 +729,11 @@ async function translateChat(system: string, lines: TranslateLine[], context: st
     const a = await translateChat(system, head, context, cfg, o);
     const b = await translateChat(system, tail, [...context, ...head.map((l) => l.en)].slice(-CONTEXT_LINES), cfg, o);
     return [...a, ...b];
+  }
+  if (lines.length === 1 && !best.got.has(lines[0].i)) {
+    const l = lines[0];
+    const fr = (await plainAttempt(l, context, cfg, o, 0.2)) ?? (await plainAttempt(l, context, cfg, o, 0));
+    if (fr) return [{ i: l.i, fr, untranslated: false }];
   }
   return lines.map((l) => {
     const fr = best.got.get(l.i);
