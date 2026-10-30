@@ -477,7 +477,7 @@ voix figées livrées dans `assets/voices/` (un enregistrement de référence de
 | `A` | Commentateur (play-by-play) |
 | `B4` | Consultant principal |
 | `B1` | Troisième voix (2e consultant, bord du terrain, interview) |
-| `F` | Voix féminine : casting en cours, prise en charge dès que `assets/voices/F/` existe |
+| `F` | Voix féminine (reporter au bord du terrain, consultante) |
 
 Ces voix ont été **créées** par Qwen3-TTS VoiceDesign à partir d'une
 description (aucune voix réelle n'est imitée) puis validées à l'écoute ;

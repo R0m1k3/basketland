@@ -51,14 +51,15 @@ describe('listVoices', () => {
     expect(listVoices(path.join(tmp, 'nexiste-pas'))).toEqual([]);
   });
 
-  it('voix livrées dans assets/voices : A, B4, B1 complètes', () => {
+  it('voix livrées dans assets/voices : A, B4, B1, F complètes', () => {
     const dir = path.join(__dirname, '..', 'assets', 'voices');
     expect(listVoices(dir)).toEqual([
       { id: 'A', role: 'commentateur', label: 'Commentateur', gender: 'm' },
       { id: 'B4', role: 'consultant', label: 'Consultant', gender: 'm' },
       { id: 'B1', role: 'troisieme_voix', label: 'Troisième voix', gender: 'm' },
+      { id: 'F', role: 'voix_feminine', label: 'Voix féminine', gender: 'f' },
     ]);
-    for (const id of ['A', 'B4', 'B1']) {
+    for (const id of ['A', 'B4', 'B1', 'F']) {
       const meta = JSON.parse(fs.readFileSync(path.join(dir, id, 'voice.json'), 'utf8'));
       expect(meta.id).toBe(id);
       expect(meta.reference_transcript).toBe(fs.readFileSync(path.join(dir, id, 'reference.txt'), 'utf8').trim());
