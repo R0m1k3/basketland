@@ -11,9 +11,10 @@
  *
  *   synth : une ligne de texte → un WAV mono (PCM 16 bits, 24 kHz) dans la
  *           voix demandée (clonage de la voix figée) ;
- *   embed : empreintes vocales (ECAPA, 192 valeurs normalisées) et F0
- *           médiane de segments d'un fichier audio, pour attribuer les
- *           lignes aux commentateurs (diarisation).
+ *   embed : empreintes vocales (ECAPA, 192 valeurs normalisées), F0
+ *           médiane et probabilité « voix de femme » de segments d'un
+ *           fichier audio, pour attribuer les lignes aux commentateurs
+ *           (diarisation) et la voix féminine aux locutrices.
  *
  * Modèles téléchargés au premier usage dans `/data/models/hf` (cache
  * Hugging Face, même dossier que les autres modèles), jamais dans l'image.
@@ -119,6 +120,7 @@ interface WorkerReply {
   sample_rate?: number;
   embeddings?: unknown;
   f0?: unknown;
+  female?: unknown;
 }
 
 interface Pending {
@@ -298,18 +300,29 @@ export class VoiceSession {
   }
 
   /**
-   * Empreinte vocale (192 valeurs, norme 1) et F0 médiane (Hz) de chaque
-   * segment [début, fin] (secondes) de `file`. `null` : segment trop court
-   * (< 0,4 s) pour une empreinte, ou sans voix pour la F0.
+   * Empreinte vocale (192 valeurs, norme 1), F0 médiane (Hz) et probabilité
+   * « voix de femme » (0-1) de chaque segment [début, fin] (secondes) de
+   * `file`. `null` : segment trop court (< 0,4 s) pour une empreinte, sans
+   * voix pour la F0, de moins d'1 s pour le genre. `female` est absent si le
+   * moteur ne le fournit pas (ancienne version) : rien n'est alors déduit.
    */
-  async embed(file: string, segments: [number, number][], signal?: AbortSignal): Promise<{ embeddings: (number[] | null)[]; f0: (number | null)[] }> {
+  async embed(
+    file: string,
+    segments: [number, number][],
+    signal?: AbortSignal,
+  ): Promise<{ embeddings: (number[] | null)[]; f0: (number | null)[]; female?: (number | null)[] }> {
     const r = await this.request({ op: 'embed', file: path.resolve(file), segments }, 'analyse des voix', signal);
     const embeddings = Array.isArray(r.embeddings) ? (r.embeddings as unknown[]).map((e) => (Array.isArray(e) ? (e as number[]) : null)) : [];
     const f0 = Array.isArray(r.f0) ? (r.f0 as unknown[]).map((v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)) : [];
     if (embeddings.length !== segments.length || f0.length !== segments.length) {
       throw new Error(`voix : réponse incomplète (${embeddings.length} empreintes pour ${segments.length} segments)`);
     }
-    return { embeddings, f0 };
+    // Facultatif : ignoré s'il est absent ou incohérent (le reste de l'analyse reste utilisable).
+    const female =
+      Array.isArray(r.female) && r.female.length === segments.length
+        ? (r.female as unknown[]).map((v) => (typeof v === 'number' && v >= 0 && v <= 1 ? v : null))
+        : undefined;
+    return female ? { embeddings, f0, female } : { embeddings, f0 };
   }
 
   /** Arrête le moteur : la mémoire du GPU est rendue. */

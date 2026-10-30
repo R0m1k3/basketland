@@ -57,7 +57,10 @@ if (model === 'muet') {
       if (!fs.existsSync(req.file)) return send({ id: req.id, ok: false, error: `fichier audio introuvable : ${req.file}` });
       const embeddings = req.segments.map(([a, b]) => (b - a >= 0.4 ? Array.from({ length: 192 }, (_, i) => (i === 0 ? 1 : 0)) : null));
       const f0 = req.segments.map(([a, b]) => (b - a >= 0.25 ? 118.5 : null));
-      return send({ id: req.id, ok: true, embeddings, f0 });
+      // Ancien moteur : pas de champ `female`. Sinon P(femme) dès 1 s (0,97 au-delà de 4 s, une « locutrice »).
+      if (model === 'ancien') return send({ id: req.id, ok: true, embeddings, f0 });
+      const female = req.segments.map(([a, b]) => (b - a >= 4 ? 0.97 : b - a >= 1 ? 0.03 : null));
+      return send({ id: req.id, ok: true, embeddings, f0, female });
     }
     send({ id: req.id, ok: false, error: `opération inconnue : ${req.op}` });
   });

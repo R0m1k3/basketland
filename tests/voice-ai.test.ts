@@ -121,14 +121,28 @@ describe('VoiceSession (faux moteur)', () => {
       [0, 2.5],
       [3, 3.2],
       [4, 4.3],
+      [5, 10],
     ]);
-    expect(e.embeddings).toHaveLength(3);
+    expect(e.embeddings).toHaveLength(4);
     expect(e.embeddings[0]).toHaveLength(192);
     expect(e.embeddings[1]).toBeNull();
-    expect(e.f0).toEqual([118.5, null, 118.5]);
+    expect(e.f0).toEqual([118.5, null, 118.5, 118.5]);
+    // Probabilité « voix de femme » : null sous 1 s.
+    expect(e.female).toEqual([0.03, null, null, 0.97]);
 
     await s.close();
     await expect(s.synth('Encore', 'A', out)).rejects.toThrow(/fermée/);
+  });
+
+  it('moteur sans détection du genre (ancienne version) : `female` absent, le reste inchangé', async () => {
+    process.env.TTS_MODEL = 'ancien';
+    const s = await VoiceSession.open();
+    const out = path.join(tmp, 'x.wav');
+    fs.writeFileSync(out, 'RIFF');
+    const e = await s.embed(out, [[0, 6]]);
+    expect(e).toEqual({ embeddings: [expect.any(Array)], f0: [118.5] });
+    expect('female' in e).toBe(false);
+    await s.close();
   });
 
   it('erreurs du moteur remontées, la session reste utilisable', async () => {
