@@ -15,3 +15,6 @@ scan_scoreboard.mjs
 
 # Serveur Rust (cargo)
 server/target/
+
+# Copies de travail locales des agents Claude Code
+.claude/worktrees/

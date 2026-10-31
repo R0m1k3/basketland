@@ -8,3 +8,4 @@ npm-debug.log*
 .env*
 docker-compose.yml
 server/target
+.claude

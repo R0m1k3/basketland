@@ -76,6 +76,21 @@ impl Db {
         res.map_err(|e| e.to_string())
     }
 
+    /// Connexion à part, ouverte pour l'occasion : pour un travail long
+    /// (scrypt…) qui ne doit pas bloquer la connexion partagée.
+    pub async fn run_own<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
+    ) -> DbResult<T> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let own = Db::new(path);
+            own.with(f)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     /// `with` depuis le code asynchrone.
     pub async fn run<T: Send + 'static>(
         &self,

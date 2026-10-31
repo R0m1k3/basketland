@@ -86,10 +86,11 @@ pub struct Session {
 }
 
 /// `validateSession` : session valide (renouvelée au besoin), sinon `None`.
-pub fn validate_session(
+pub fn validate_session_opts(
     c: &rusqlite::Connection,
     token: Option<&str>,
     now: DateTime<Utc>,
+    renew: bool,
 ) -> rusqlite::Result<Option<Session>> {
     let Some(token) = token.filter(|t| !t.is_empty() && t.len() <= 128) else {
         return Ok(None);
@@ -105,7 +106,7 @@ pub fn validate_session(
     };
     let mut expires_at = s.expires_at.clone();
     let mut renewed = false;
-    if (exp - now).num_milliseconds() < SESSION_TTL_MS - SESSION_RENEW_AFTER_MS {
+    if renew && (exp - now).num_milliseconds() < SESSION_TTL_MS - SESSION_RENEW_AFTER_MS {
         expires_at = iso_utc(now + Duration::milliseconds(SESSION_TTL_MS));
         db::extend_session(c, &h, &expires_at)?;
         renewed = true;
@@ -117,6 +118,15 @@ pub fn validate_session(
         expires_at,
         renewed,
     }))
+}
+
+/// `validateSession` avec renouvellement glissant.
+pub fn validate_session(
+    c: &rusqlite::Connection,
+    token: Option<&str>,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<Option<Session>> {
+    validate_session_opts(c, token, now, true)
 }
 
 /// Valeur d'un cookie de l'en-tête `Cookie` (décodée comme le fait Next).
@@ -163,18 +173,38 @@ pub fn session_cookie(
 ) -> Option<HeaderValue> {
     let exp = crate::time::parse_instant(expires_at)?;
     let max_age = ((exp - now).num_milliseconds() / 1000).max(0);
-    let enc = percent_encoding::utf8_percent_encode(token, percent_encoding::NON_ALPHANUMERIC)
-        .to_string();
-    // Jeton base64url : les caractères - et _ n'ont pas besoin d'être encodés.
-    let enc = enc.replace("%2D", "-").replace("%5F", "_");
-    let mut v = format!(
-        "{SESSION_COOKIE}={enc}; Path=/; Expires={}; Max-Age={max_age}; HttpOnly; SameSite=lax",
-        exp.format("%a, %d %b %Y %H:%M:%S GMT")
+    // Ordre des attributs de Next (Path, Expires, Max-Age, Secure, HttpOnly, SameSite).
+    let v = format!(
+        "{SESSION_COOKIE}={}; Path=/; Expires={}; Max-Age={max_age}{}; HttpOnly; SameSite=lax",
+        encode_uri_component(token),
+        exp.format("%a, %d %b %Y %H:%M:%S GMT"),
+        if https { "; Secure" } else { "" },
     );
-    if https {
-        v.push_str("; Secure");
-    }
     HeaderValue::from_str(&v).ok()
+}
+
+/// Cookie de session effacé (`clearSessionCookie`).
+pub fn clear_session_cookie(https: bool) -> HeaderValue {
+    let v = format!(
+        "{SESSION_COOKIE}=; Path=/; Max-Age=0{}; HttpOnly; SameSite=lax",
+        if https { "; Secure" } else { "" }
+    );
+    HeaderValue::from_str(&v).expect("cookie")
+}
+
+/// `encodeURIComponent`.
+pub fn encode_uri_component(s: &str) -> String {
+    const SET: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'!')
+        .remove(b'~')
+        .remove(b'*')
+        .remove(b'\'')
+        .remove(b'(')
+        .remove(b')');
+    percent_encoding::utf8_percent_encode(s, SET).to_string()
 }
 
 /// Contrôle d'accès d'une route d'API servie par Rust.

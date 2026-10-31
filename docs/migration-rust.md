@@ -43,10 +43,10 @@ navigateur ──► basketland-server (Rust, :3012)
 |---|---------|------|
 | 1 | Passerelle (relais, lancement et arrêt de Node), sessions, `GET /api/health`, `GET /api/schedule`, `GET /api/matches` | ✅ |
 | 2 | Lecture seule : `GET /api/matches/[id]`, `/stats` (stats pas encore récupérées : relayé à Node), `/clips`, `/api/standings` (client ESPN, cache 30 min) | ✅ |
-| 3 | Comptes : login, logout, setup, mot de passe (scrypt identique), utilisateurs, paramètres | à faire |
+| 3 | Comptes : `/api/auth/login`, `/logout`, `/setup`, `/api/account/password`, `/api/admin/users` (scrypt au même format, limitation des tentatives) | ✅ |
 | 4 | Proxy vidéo ok.ru : résolution du flux, playlists, segments, MP4 (le plus gros trafic) | à faire |
 | 5 | Synchronisation ESPN et basketball-video, cron interne, `/api/ingest` | à faire |
-| 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity` | à faire |
+| 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity`, `/api/admin/settings` | à faire |
 | 7 | Doublage (voix Qwen3-TTS / MiniMax) et OCR du bandeau de score | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
 
