@@ -21,22 +21,28 @@ pub mod ingest;
 pub mod ingest_db;
 pub mod js;
 pub mod jsval;
+pub mod linescore;
 pub mod media;
 pub mod node;
 pub mod okru;
+pub mod pages;
 pub mod present;
 pub mod proxy;
+pub mod queries;
 pub mod replay;
 pub mod routes;
 pub mod routes_auth;
 pub mod routes_ingest;
 pub mod routes_match;
+pub mod routes_pages;
 pub mod routes_replay;
 pub mod routes_settings;
 pub mod routes_video;
 pub mod settings;
 pub mod state;
+pub mod teams;
 pub mod time;
+pub mod version;
 pub mod vf;
 pub mod vf_sync;
 pub mod video;
@@ -114,6 +120,18 @@ pub fn app(state: state::AppState) -> Router {
             "/api/ingest",
             post(routes_ingest::ingest).fallback(proxy::forward),
         )
+        // Données des pages (étape 8a) ; seule `/api/pages/session` est publique.
+        .route(
+            routes_pages::PUBLIC_SESSION_PATH,
+            get(routes_pages::session),
+        )
+        .route("/api/pages/home", get(routes_pages::home))
+        .route("/api/pages/matchs", get(routes_pages::matchs))
+        .route("/api/pages/matchs/{id}", get(routes_pages::match_page))
+        .route("/api/pages/equipes", get(routes_pages::equipes))
+        .route("/api/pages/equipes/{abbr}", get(routes_pages::equipe))
+        .route("/api/pages/classement", get(routes_pages::classement))
+        .route("/api/pages/parametres", get(routes_pages::parametres))
         .fallback(relay)
         .with_state(state)
 }

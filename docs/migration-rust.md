@@ -50,7 +50,8 @@ navigateur ──► basketland-server (Rust, :3012)
 | 6a | Fondations médias en bibliothèque Rust, **pas encore branchées** (Node fait toujours tourner les files) : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
 | 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | en cours : file de traduction et doublage portés (non branchés) |
 | 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`) | à faire |
-| 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
+| 8a | Données de chaque page en JSON servies par Rust (`GET /api/pages/…`) : portage de `queries.ts`, `teams.ts`, `linescore.ts`, `version.ts`, `currentSession`, `safeNextPath` ; état des files encore côté Node lu par `POST /api/internal/page-state` | ✅ |
+| 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export React) servis par Rust (règles d'accès des pages comprises), migrations SQL en Rust, Node retiré de l'image | à faire |
 
 ## Développement
 
@@ -268,3 +269,75 @@ traduction et le doublage branchés par leurs crochets (une traduction qui
 démarre fait céder le doublage, `full.ogg` gardé pour le doublage puis
 effacé par lui) et le montage par le vrai ffmpeg. `tests/dub-player.test.ts`
 ne teste que le lecteur (client) : rien à porter côté serveur.
+
+### Données des pages (étape 8a)
+
+Chaque page de `src/app/**/page.tsx` (et le layout racine) est encore un
+composant serveur de Next qui lit la base et les modules de `src/lib`. Rust
+sert désormais, pour chacune, un JSON qui contient exactement ce que calcule
+ce composant : les props de ses composants client et ce qu'il écrit lui-même
+(titres de `generateMetadata`, textes qui dépendent du serveur). L'étape 8b
+fera des pages des composants client qui lisent ces routes ; **aucune page
+n'est encore convertie**. Code : `server/src/pages.rs` (une fonction par
+page), `queries.rs`, `teams.rs`, `linescore.rs`, `version.rs`,
+`auth::safe_next_path`, routes dans `routes_pages.rs`.
+
+Reste côté client (8b) la mise en forme pure : libellés de dates
+(`components/schedule/dates.ts`), comptes à rebours (`now` du navigateur),
+couleurs et noms d'équipe (`teams.ts`, déjà importé par les composants
+client), `seasonLabel`, liens, classes. Les `Map` de Node (`dayCounts`,
+`seasonRecords`) deviennent des objets à clés triées. `GameView` =
+`MatchDto` de `GET /api/matches/[id]` + `hasStats`, `hasReplay`, `hasVf`,
+`vf` (`{state:'ready'|'none'}` ou `{state:'running'|'partial', pct}`).
+
+Toutes les routes exigent une session (401 `{ error: "non connecté" }`,
+renouvellement glissant du cookie), sauf `/api/pages/session`.
+`Cache-Control: no-store`. Cookie `bl_spoilers=hide` → `spoilers: "hide"`.
+
+| Route | Page | Réponse |
+|-------|------|---------|
+| `GET /api/pages/session?next=` (**publique**) | layout, `/login`, `/setup` | `{ has_users, user: {id, username, role} \| null, next }` ; `next` = `safeNextPath(next)`. Layout : en-tête complet si `user`. `/login` : `!has_users` → `/setup`, `user` → `next`. `/setup` : `has_users` → `/login`. Session renouvelée (cookie réémis) comme le faisait le middleware sur ces pages. |
+| `GET /api/pages/home` | `/` | `{ spoilers, today, season, live, replays (9, le premier est la une), hero_night (nuit de la une, pour `nightLabel`), night, night_title, night_games, next_up_id, days: [{key, games}], standings (cache, ou null), auto_translate, activity, vf_count: {ready, running, partial, todo}, idle_text, night_window_label }` |
+| `GET /api/pages/matchs?d=&team=` | `/matchs` | `{ spoilers, today, team (abréviation NBA validée ou null), selected, day, team_view }` ; vue jour (`team` null) : `day = { counts, games, records, prev, next, replays, upcoming, live, all_night }`, `team_view` null ; vue équipe : `team_view = { upcoming, played (terminés, du plus récent), record }`, `day` null. Titre fixe « Calendrier ». |
+| `GET /api/pages/matchs/{id}` | `/matchs/[id]` | `{ title, description, spoilers, match (DTO), linescore, plays (onglet Actions), lite ([seq, period, clock_sec, clock_display]), has_video, positions ([seq, video_ts]), auto_translate, vf_mode, is_admin }` ; **404** `{ error: "match introuvable", title: "Match introuvable" }` (= `notFound()`). |
+| `GET /api/pages/equipes` | `/equipes` | `{ season, today, conferences: [{conference, divisions: [{division, teams: [{team, record, next, seed}]}]}] }` (équipes déjà triées comme la page). Titre fixe « Équipes ». |
+| `GET /api/pages/equipes/{abbr}` | `/equipes/[abbr]` | `{ title, spoilers, abbr, team, today, upcoming_count, next_game, upcoming_rest (2e à 9e), finished_count, form (10 derniers de saison régulière), recent (10), replays_count, replays (6), summary: {season, total, home, road, streak, streak_win}, seed, pct }` ; **404** `{ error: "équipe introuvable" }` (abréviation mal formée, ou inconnue sans match en base). |
+| `GET /api/pages/classement` | `/classement` | `{ conferences }` : cache de 30 min, sinon ESPN, cache périmé si ESPN échoue, `[]` faute de mieux (`loadStandings`). Titre fixe « Classement ». |
+| `GET /api/pages/parametres` | `/parametres` | `{ user, admin, admin_data, version: {commit, builtAt}, version_text }` ; `admin_data` (administrateur seul, sinon null) = `{ users, auto_translate, vf_mode, voice_disabled_reason, minimax, openai, openai_model_placeholder }`. Sans session : 401 (la page renvoyait vers `/login?next=/parametres`). |
+
+Ce que tiennent encore les files de Node — match en cours de traduction
+(`commentaryRunningMatchId`, état de la VF dans `toViews`), `currentActivity()`,
+`commentaryDisabledReason()`, `dubDisabledReason()` — n'est pas réimplémenté :
+Rust le lit par `POST /api/internal/page-state` (jeton d'ingestion, chemin
+public pour le middleware de Node, jamais relayé depuis l'extérieur), corps
+`{ dub }` (`dub: true` pour la page Paramètres d'un administrateur seulement).
+Appelé par `home`, `matchs`, `equipes`, `equipes/{abbr}` et `parametres`
+(admin) ; Node injoignable : **502** `{ error: "application Node injoignable
+(démarrage en cours ?)" }`. Le branchement des médias en Rust remplacera cet
+appel par la lecture directe des services Rust (`routes_pages::fetch_node_state`).
+
+À savoir pour 8b : côté Node, `defaultCalendarDay` ne prend jamais la branche
+« le matin » (`Number('20 h')` vaut NaN : `Intl` en français écrit l'heure
+avec « h ») ; Rust reproduit ce comportement, à corriger des deux côtés. Les
+règles d'accès des pages (`decideAccess` : redirections vers `/login?next=…`
+et `/setup`) devront être appliquées par Rust quand il servira les fichiers
+statiques. `components/schedule/dates.ts` importe `shiftKey` de
+`queries.ts`, qui ouvre la base : à déplacer pour un composant client.
+
+Vérifié contre Node (`server/tests/node-fixtures-pages.mts` →
+`fixtures/pages.expected.json`, `tests/pages_node.rs`) : base au schéma réel
+remplie par le code Node (vraie nuit ESPN du 27/10/2026 avec stats et
+play-by-play, calendrier de 37 jours, saison passée, présaison, playoffs,
+All-Star, matchs en cours, replays HLS et MP4, pistes de traduction dans
+tous les états, classement ESPN réel, comptes et réglages), 55 scénarios à
+instant figé (toutes les pages, fenêtres de nuit, traduction en cours, non
+configurée ou désactivée, dates invalides, identifiants `0x…`, 404, cache du
+classement périmé, versions…) : réponses identiques à l'octet, ordre des
+clés compris. Routes, accès, 404, cookie, appel interne et Node injoignable
+face à une fausse application Node (`tests/pages.rs`). En direct, Node et
+Rust lancés sur une base remplie depuis ESPN par le cron Rust (1 273 matchs
+de la saison, stats et play-by-play, 20 replays trouvés, analyses vidéo en
+cours chez Node) : 18 pages servies par Rust identiques à l'octet au calcul
+de Node (`INGEST_TOKEN=… npx -y tsx server/tests/node-fixtures-pages.mts
+--live <base> <url de Rust> <jeton de session> <url de Node>`, l'état des
+files étant lu chez Node comme le fait Rust).

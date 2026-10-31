@@ -71,6 +71,53 @@ pub fn is_public_path(pathname: &str) -> bool {
     PUBLIC_EXACT.contains(&p) || PUBLIC_PREFIXES.iter().any(|x| p.starts_with(x)) || root_static(p)
 }
 
+/// `isApiPath`.
+pub fn is_api_path(pathname: &str) -> bool {
+    let p = normalize(pathname);
+    p == "/api" || p.starts_with("/api/")
+}
+
+pub const LOGIN_PATH: &str = "/login";
+pub const SETUP_PATH: &str = "/setup";
+
+/// `safeNextPath` : destination après connexion (`?next=`), uniquement un
+/// chemin relatif du même site ; tout le reste (URL absolue, `//hôte`,
+/// antislash, caractères de contrôle, pages d'authentification, API) renvoie
+/// vers l'accueil. Analyse WHATWG (`new URL(raw, base)`) par la crate `url`.
+pub fn safe_next_path(raw: Option<&str>) -> String {
+    let home = || "/".to_string();
+    let Some(raw) = raw.filter(|r| r.starts_with('/') && !r.starts_with("//")) else {
+        return home();
+    };
+    if raw.contains('\\') || raw.chars().any(|c| c <= '\x1f' || c == '\x7f') {
+        return home();
+    }
+    let Ok(base) = url::Url::parse("http://basketland.invalid") else {
+        return home();
+    };
+    let Ok(u) = base.join(raw) else {
+        return home();
+    };
+    if u.origin() != base.origin() {
+        return home();
+    }
+    let path = normalize(u.path());
+    if path == LOGIN_PATH || path == SETUP_PATH || is_api_path(path) {
+        return home();
+    }
+    let search = u.query().filter(|q| !q.is_empty()).map(|q| format!("?{q}"));
+    let hash = u
+        .fragment()
+        .filter(|f| !f.is_empty())
+        .map(|f| format!("#{f}"));
+    format!(
+        "{}{}{}",
+        u.path(),
+        search.unwrap_or_default(),
+        hash.unwrap_or_default()
+    )
+}
+
 pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
@@ -255,6 +302,32 @@ mod tests {
         ] {
             assert!(!is_public_path(p), "{p}");
         }
+    }
+
+    // Cas de tests/auth.test.ts.
+    #[test]
+    fn destination_apres_connexion_comme_safenextpath() {
+        assert_eq!(
+            safe_next_path(Some("/matchs/1?x=2#pbp")),
+            "/matchs/1?x=2#pbp"
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("https://evil.example"),
+            Some("//evil.example"),
+            Some("/\\evil.example"),
+            Some("\\\\evil"),
+            Some("javascript:alert(1)"),
+            Some("/\tevil"),
+            Some("/login"),
+            Some("/setup?x"),
+            Some("/api/matches"),
+        ] {
+            assert_eq!(safe_next_path(bad), "/", "{bad:?}");
+        }
+        assert_eq!(safe_next_path(Some("/a/../equipes/?")), "/equipes/");
+        assert_eq!(safe_next_path(Some("/x y?a=é#")), "/x%20y?a=%C3%A9");
     }
 
     #[test]

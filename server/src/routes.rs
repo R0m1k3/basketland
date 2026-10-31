@@ -19,6 +19,20 @@ pub(crate) async fn guarded(
     headers: &HeaderMap,
     res: impl std::future::Future<Output = Response>,
 ) -> Response {
+    guarded_session(st, uri, headers, |_| res).await
+}
+
+/// [`guarded`], la session validée passée au gestionnaire (`None` : chemin public).
+pub(crate) async fn guarded_session<F, Fut>(
+    st: &AppState,
+    uri: &OriginalUri,
+    headers: &HeaderMap,
+    handler: F,
+) -> Response
+where
+    F: FnOnce(Option<auth::Session>) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
     let session = match auth::check_api(&st.db, uri.path(), headers).await {
         Ok(Access::Allowed(s)) => s,
         Ok(Access::Unauthorized) => return error(StatusCode::UNAUTHORIZED, "non connecté"),
@@ -30,7 +44,7 @@ pub(crate) async fn guarded(
             );
         }
     };
-    let mut res = res.await;
+    let mut res = handler(session.clone()).await;
     if let Some(s) = session.filter(|s| s.renewed) {
         if let Some(token) = auth::cookie(headers, auth::SESSION_COOKIE) {
             if let Some(v) =

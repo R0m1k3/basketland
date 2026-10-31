@@ -462,6 +462,16 @@ pub fn kv_get(
     key: &str,
     max_age_ms: Option<i64>,
 ) -> rusqlite::Result<Option<Value>> {
+    kv_get_at(c, key, max_age_ms, chrono::Utc::now())
+}
+
+/// `kv_get` à un instant donné (pages, tests).
+pub fn kv_get_at(
+    c: &Connection,
+    key: &str,
+    max_age_ms: Option<i64>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> rusqlite::Result<Option<Value>> {
     let mut st = c.prepare("SELECT value, updated_at FROM kv_cache WHERE key = ?1")?;
     let mut rows = st.query_map([key], |r| {
         Ok((
@@ -475,7 +485,7 @@ pub fn kv_get(
     if let Some(max) = max_age_ms {
         // Date illisible : Date.parse → NaN, la comparaison échoue et la valeur est servie.
         if let Some(at) = crate::time::parse_instant(&updated) {
-            if (chrono::Utc::now() - at).num_milliseconds() > max {
+            if (now - at).num_milliseconds() > max {
                 return Ok(None);
             }
         }
