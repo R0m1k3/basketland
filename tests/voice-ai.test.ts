@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_TTS_MODEL, listVoices, voiceConfig, VoiceSession } from '../src/lib/voiceAi';
+import { __resetVoiceModelsForTests, DEFAULT_TTS_MODEL, listVoices, prepareVoiceModels, voiceConfig, voiceModelsDownload, VoiceSession } from '../src/lib/voiceAi';
 
 /**
  * Voix du doublage (Qwen3-TTS embarqué) : le vrai moteur Python n'est pas
@@ -203,5 +203,39 @@ describe('VoiceSession (faux moteur)', () => {
   it('doublage désactivé : open refuse', async () => {
     process.env.DUB_DISABLED = '1';
     await expect(VoiceSession.open()).rejects.toThrow(/DUB_DISABLED/);
+  });
+});
+
+describe('prepareVoiceModels (téléchargement hors GPU, faux moteur)', () => {
+  beforeEach(() => {
+    const voices = path.join(tmp, 'voices');
+    addVoice(voices, 'A', { id: 'A' });
+    Object.assign(process.env, { TTS_PYTHON: process.execPath, TTS_WORKER: FAKE, VOICES_DIR: voices });
+    __resetVoiceModelsForTests();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => __resetVoiceModelsForTests());
+
+  it('un seul téléchargement partagé, progression lisible, puis plus rien à faire', async () => {
+    const a = prepareVoiceModels();
+    expect(prepareVoiceModels()).toBe(a);
+    await vi.waitFor(() => expect(voiceModelsDownload()).toEqual({ done: 1e9, total: 2.5e9 }));
+    fs.writeFileSync(path.join(tmp, 'models', 'hf', 'go'), '');
+    await a;
+    expect(voiceModelsDownload()).toBeNull();
+    // Déjà en cache pour ce processus : aucun nouveau processus.
+    fs.rmSync(path.join(tmp, 'models', 'hf', 'go'));
+    await expect(prepareVoiceModels()).resolves.toBeUndefined();
+  });
+
+  it('échec : rejet avec la raison du moteur, et l’appel suivant réessaie', async () => {
+    process.env.TTS_MODEL = 'casse';
+    await expect(prepareVoiceModels()).rejects.toThrow(/réseau coupé/);
+    expect(voiceModelsDownload()).toBeNull();
+    delete process.env.TTS_MODEL;
+    const p = prepareVoiceModels();
+    await vi.waitFor(() => expect(voiceModelsDownload()).not.toBeNull());
+    fs.writeFileSync(path.join(tmp, 'models', 'hf', 'go'), '');
+    await expect(p).resolves.toBeUndefined();
   });
 });

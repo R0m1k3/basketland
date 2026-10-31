@@ -22,6 +22,8 @@ export interface DubBannerState {
   reason?: string;
   /** Pendant le travail : tronçons doublés sur tronçons traduits publiés. */
   progress?: { done: number; total: number };
+  /** Étape en cours, ou téléchargement des voix qui avance pendant l'attente. */
+  step?: string;
   /** Tronçons déjà doublés (jouables). */
   chunks: number;
 }
@@ -70,6 +72,8 @@ interface Line {
   spinning: boolean;
   title: string;
   detail: string | null;
+  /** Seconde ligne de détail (facultative). */
+  note?: string | null;
 }
 
 function StatusLine({ line }: { line: Line }) {
@@ -83,6 +87,7 @@ function StatusLine({ line }: { line: Line }) {
       <span className="min-w-0">
         <span className={`block text-sm font-semibold ${line.tone}`}>{line.title}</span>
         {line.detail && <span className="block text-xs text-paper-mute">{line.detail}</span>}
+        {line.note && <span className="block text-xs text-paper-mute">{line.note}</span>}
       </span>
     </span>
   );
@@ -94,16 +99,25 @@ function dubLine(dub: DubBannerState, canStart: boolean): Line | null {
   switch (dub.status) {
     case 'running': {
       const p = dub.progress;
+      const listen = 'Les passages déjà doublés s’écoutent tout de suite : menu ⚙ du lecteur → Voix → « VF doublée ».';
       return {
         ...base,
         tone: 'text-flame-hot',
         spinning: true,
         title: p ? `Doublage en voix françaises · ${p.done} / ${p.total} tronçon${p.total > 1 ? 's' : ''}` : 'Doublage en voix françaises : démarrage',
-        detail: 'Les passages déjà doublés s’écoutent tout de suite : menu ⚙ du lecteur → Voix → « VF doublée ».',
+        detail: dub.step ? cap(dub.step) : listen,
+        note: dub.step && dub.chunks > 0 ? listen : null,
       };
     }
     case 'waiting':
-      return { ...base, tone: 'text-flame-hot', dot: 'bg-flame', title: 'Doublage en attente', detail: dub.reason ? cap(dub.reason) : null };
+      return {
+        ...base,
+        tone: 'text-flame-hot',
+        dot: 'bg-flame',
+        title: 'Doublage en attente',
+        detail: dub.reason ? cap(dub.reason) : null,
+        note: dub.step ? `${cap(dub.step)} (continue pendant l’attente)` : null,
+      };
     case 'partial':
       return {
         ...base,

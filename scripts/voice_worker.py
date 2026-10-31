@@ -13,6 +13,13 @@ une requête JSON par ligne :
      "female": [p | null, …]}
   ← {"id": n, "ok": false, "error": "…"}   (le processus continue)
 
+`--download-only` : télécharge les modèles (Qwen3-TTS, empreintes vocales,
+classifieur homme/femme) dans le cache sans rien charger sur le GPU, puis
+s'arrête. Node le lance dès qu'un doublage est demandé, indépendamment de la
+carte graphique (voiceAi.ts, `prepareVoiceModels`) :
+  ← {"event": "progress", "done": 1200000000, "total": 2500000000}   (toutes les 5 s, octets)
+  ← {"event": "downloaded"}   (ou {"event": "error", "error": "…"})
+
 `female` (facultatif côté Node) : probabilité que le segment soit une voix
 de femme (classifieur scripts/voice_gender.py, chargé à la première analyse
 comme le modèle d'empreintes) ; null si le segment dure moins d'1 s ou si
@@ -89,8 +96,11 @@ def dir_size(path: str) -> int:
     return total
 
 
-def fetch_model(name: str) -> str:
-    """Chemin local du modèle ; téléchargement au premier usage, progression dans les journaux."""
+def fetch_model(name: str, on_progress=None) -> str:
+    """
+    Chemin local du modèle ; téléchargement au premier usage, progression dans
+    les journaux (et toutes les 5 s à `on_progress(fait, total)`, en octets).
+    """
     if os.path.isdir(name):
         return name
     from huggingface_hub import constants, snapshot_download
@@ -116,6 +126,8 @@ def fetch_model(name: str) -> str:
         last = 0
         while not stop.wait(5):
             done = dir_size(folder)
+            if on_progress:
+                on_progress(done, total)
             if total:
                 tenth = min(9, int(done * 10 / total))
                 if tenth > last:
@@ -464,6 +476,36 @@ def median_f0(x):
     return round(float(np.median(f)), 1)
 
 
+# ------------------------------------------------------------------ téléchargement seul
+
+
+def download_only(args) -> int:
+    """Modèles mis en cache sans rien charger (ni GPU, ni voix) ; progression sur le protocole."""
+    try:
+        fetch_model(args.model, lambda done, total: send({"event": "progress", "done": done, "total": total}))
+        from huggingface_hub import hf_hub_download, snapshot_download
+
+        # Petits modèles de l'analyse des voix (≈ 150 Mo), chargés plus tard par la
+        # session : le cache d'abord (aucun appel réseau quand tout est déjà là).
+        try:
+            snapshot_download(EMBED_MODEL, local_files_only=True)
+        except Exception:
+            snapshot_download(EMBED_MODEL)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from voice_gender import GENDER_MODEL, GENDER_REVISION
+
+        try:
+            hf_hub_download(GENDER_MODEL, "model.safetensors", revision=GENDER_REVISION, local_files_only=True)
+        except Exception:
+            hf_hub_download(GENDER_MODEL, "model.safetensors", revision=GENDER_REVISION)
+    except Exception as e:
+        traceback.print_exc()
+        send({"event": "error", "error": f"téléchargement des modèles de voix impossible : {e}"})
+        return 1
+    send({"event": "downloaded"})
+    return 0
+
+
 # ------------------------------------------------------------------ boucle
 
 
@@ -473,6 +515,7 @@ def main() -> int:
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     ap.add_argument("--download-root", default="")
     ap.add_argument("--voices-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "voices"))
+    ap.add_argument("--download-only", action="store_true")
     args = ap.parse_args()
 
     if args.download_root:
@@ -485,6 +528,8 @@ def main() -> int:
     warnings.filterwarnings("ignore", category=FutureWarning)
     warnings.filterwarnings("ignore", category=UserWarning)
 
+    if args.download_only:
+        return download_only(args)
     try:
         engine = Engine(args)
     except Exception as e:

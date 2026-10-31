@@ -9,6 +9,24 @@ const model = arg('--model');
 const voicesDir = arg('--voices-dir');
 const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 
+// Téléchargement seul : progression (octets) puis fin, sans GPU ni voix.
+if (args.includes('--download-only')) {
+  process.stderr.write(`[voix] téléchargement du modèle ${model} (HF_HOME ${process.env.HF_HOME})\n`);
+  if (model === 'casse') {
+    send({ event: 'error', error: 'téléchargement des modèles de voix impossible : réseau coupé' });
+    process.exit(1);
+  }
+  send({ event: 'progress', done: 1_000_000_000, total: 2_500_000_000 });
+  // Le test lit la progression, puis libère la fin en créant ce fichier.
+  const go = path.join(process.env.HF_HOME, 'go');
+  const t = setInterval(() => {
+    if (!fs.existsSync(go)) return;
+    clearInterval(t);
+    send({ event: 'downloaded' });
+    process.exit(0);
+  }, 20);
+} else {
+
 // Le test retrouve le processus (arrêt effectif après une interruption).
 fs.writeFileSync(path.join(path.dirname(voicesDir), 'worker.pid'), String(process.pid));
 process.stderr.write(`chargement de ${model} (download-root ${arg('--download-root')}, HF_HOME ${process.env.HF_HOME})\n`);
@@ -64,4 +82,5 @@ if (model === 'muet') {
     }
     send({ id: req.id, ok: false, error: `opération inconnue : ${req.op}` });
   });
+}
 }

@@ -21,7 +21,11 @@
  * GPU PARTAGÉ : le doublage ne tourne jamais en même temps qu'une
  * traduction ou une analyse vidéo. Si l'une démarre, le doublage ferme son
  * moteur de voix à la prochaine réplique (ou au prochain tronçon) et se
- * remet en file ; il reprend quand le GPU est libre.
+ * remet en file ; il reprend quand le GPU est libre. Le téléchargement des
+ * modèles de voix (premier usage, ~2,5 Go) n'a pas besoin du GPU : il part
+ * dès la mise en file, avance pendant l'attente, et n'est jamais interrompu
+ * quand le doublage cède la place. La fiche voit l'étape en cours (manifeste
+ * `step`) et ce qui occupe le GPU.
  *
  * PRIORITÉ À LA LECTURE (même règle que la traduction) : un doublage de
  * fond s'efface pendant qu'on regarde un AUTRE match ; le doublage du match
@@ -107,11 +111,20 @@ export interface VoiceSessionLike {
 export interface VoiceEngine {
   config(): { disabledReason?: string };
   open(signal?: AbortSignal): Promise<VoiceSessionLike>;
+  /**
+   * Modèles mis en cache (téléchargés au premier usage) sans le GPU ; partagé,
+   * jamais interrompu par un travail (voir `prepareVoiceModels`, voiceAi.ts).
+   */
+  prepare?(): Promise<void>;
+  /** Téléchargement des modèles en cours (octets), sinon null. */
+  download?(): { done: number; total: number } | null;
 }
 
 interface VoiceAiModule {
   VoiceSession: { open(signal?: AbortSignal): Promise<VoiceSessionLike> };
   voiceConfig(): { disabledReason?: string };
+  prepareVoiceModels(): Promise<void>;
+  voiceModelsDownload(): { done: number; total: number } | null;
 }
 
 interface EngineState {
@@ -136,7 +149,12 @@ async function loadEngine(): Promise<VoiceEngine | null> {
       // Import différé (rien n'est chargé tant qu'aucun doublage n'est demandé) ;
       // l'annotation vérifie le contrat de voiceAi.ts à la compilation.
       const m: VoiceAiModule = await import('./voiceAi');
-      eng.engine = { config: () => m.voiceConfig(), open: (signal) => m.VoiceSession.open(signal) };
+      eng.engine = {
+        config: () => m.voiceConfig(),
+        open: (signal) => m.VoiceSession.open(signal),
+        prepare: () => m.prepareVoiceModels(),
+        download: () => m.voiceModelsDownload(),
+      };
       eng.loadError = null;
       return eng.engine;
     } catch (e) {
@@ -707,6 +725,8 @@ export interface DubProgress {
   total: number;
   /** Tronçon en cours (idx). */
   chunk?: number;
+  /** Étape en cours, en clair (« synthèse des répliques : 12 / 30 »…), affichée sur la fiche. */
+  step?: string;
 }
 
 export interface DubOutcome {
@@ -742,6 +762,9 @@ const defaultDeps: DubDeps = {
   openVoice: async (signal) => {
     const e = await loadEngine();
     if (!e) throw new Error(`moteur de voix indisponible : ${eng.loadError ?? 'module absent'}`);
+    // Modèles d'abord en cache, sans le GPU : si le travail cède la place
+    // pendant le téléchargement, seule l'attente s'arrête (pas le téléchargement).
+    if (e.prepare) await untilAborted(e.prepare(), signal, 'téléchargement des voix');
     return e.open(signal);
   },
   assemble: (clips, duration, outFile, signal) => assembleChunk(clips, duration, outFile, signal),
@@ -762,6 +785,23 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 
 function checkAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new Error('travail interrompu');
+}
+
+/** Attend `p`, ou rejette dès l'interruption (sans arrêter ce que `p` représente). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal, what: string): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error(`${what} : attente interrompue`));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error(`${what} : attente interrompue`));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+/** Téléchargement des modèles de voix, en clair (« 42 % · 1,1 / 2,5 Go »). */
+export function downloadText(p: { done: number; total: number }): string {
+  const go = (b: number) => (b / 1e9).toFixed(1).replace('.', ',');
+  const amount = p.total > 0 ? `${Math.min(99, Math.floor((p.done * 100) / p.total))} % · ${go(p.done)} / ${go(p.total)} Go` : `${go(p.done)} Go`;
+  return `téléchargement des voix (premier usage, une seule fois) : ${amount}`;
 }
 
 const YIELD_TEXT: Record<DubYield, string> = {
@@ -854,6 +894,12 @@ export async function runDub(
   let overruns = 0;
   let failedCues = 0;
   let total = 0;
+  let current: DubProgress = { done: 0, total: 0 };
+  const report = (p: DubProgress) => {
+    current = p;
+    progress(p);
+  };
+  const step = (text: string) => report({ ...current, step: text });
 
   /** Double un tronçon et le publie. */
   const dubChunk = async (ch: PlannedChunk, allCues: db.CommentaryCueRow[], rank: number) => {
@@ -870,9 +916,12 @@ export async function runDub(
         const exEnd = Math.max(Number.isFinite(ch.keepTo) ? ch.keepTo : 0, ...cues.map((c) => c.end_ts)) + 0.5;
         const audio = path.join(tmp, `source-${ch.idx}.ogg`);
         chunkFiles.push(audio);
+        step('extraction du son d’origine');
         await extract(exStart, Math.ceil((exEnd - exStart) * 10) / 10, audio);
         yieldCheck();
+        if (!session) step('démarrage du moteur de voix (chargement du modèle sur la carte graphique)');
         const voice = await openSession();
+        step('reconnaissance des voix des commentateurs');
         // 2. Empreinte de chaque réplique ; en échec, voix de la précédente.
         let embeddings: (number[] | null)[] = cues.map(() => null);
         let f0: (number | null)[] = cues.map(() => null);
@@ -906,9 +955,12 @@ export async function runDub(
           );
         }
         // 4-5. Synthèse et calage de chaque réplique traduite.
+        const toSay = cues.filter((c) => !c.untranslated && c.text_fr.trim()).length;
+        let said = 0;
         for (let i = 0; i < cues.length; i++) {
           const c = cues[i];
           if (c.untranslated || !c.text_fr.trim()) continue;
+          step(`synthèse des répliques : ${++said} / ${toSay}`);
           yieldCheck();
           checkAborted(signal);
           const sp = state.speakers.find((s) => s.id === speakers[i]);
@@ -932,8 +984,7 @@ export async function runDub(
           clips.push({ file: out, start: c.start_ts, slotEnd: c.start_ts + fit.slot, fitted: fit.fitted, tempo: fit.tempo, overrun: fit.overrun });
           if (sp) talk.set(sp.id, (talk.get(sp.id) ?? 0) + (c.end_ts - c.start_ts));
         }
-        const speakable = cues.filter((c) => !c.untranslated && c.text_fr.trim()).length;
-        if (speakable && !clips.length) throw new Error(`synthèse impossible pour tout le tronçon ${ch.idx} (${failed} réplique(s)) : ${lastErr}`);
+        if (toSay && !clips.length) throw new Error(`synthèse impossible pour tout le tronçon ${ch.idx} (${failed} réplique(s)) : ${lastErr}`);
       }
       // 6. Montage : silence + répliques à leur place, sur toute la zone du
       // tronçon (un peu plus si la première réplique commence juste avant, ou
@@ -948,6 +999,7 @@ export async function runDub(
       const part = `${out}.part`;
       chunkFiles.push(part);
       checkAborted(signal);
+      step('montage de la piste');
       await deps.assemble(
         clips.map((c, i) => ({ file: c.file, at: at[i] - start, tempo: c.tempo })),
         end - start,
@@ -1000,7 +1052,7 @@ export async function runDub(
         first = false;
         console.log(`[doublage] match ${job.matchId} : démarrage (${todo.length} tronçon(s) à doubler sur ${chunks.length} traduit(s))`);
       }
-      progress({ done: chunks.length - todo.length, total, chunk: ch.idx });
+      report({ done: chunks.length - todo.length, total, chunk: ch.idx });
       await dubChunk(ch, cues, chunks.length - todo.length + 1);
     }
   } catch (e) {
@@ -1062,8 +1114,33 @@ function jobTimeoutMs(): number {
 
 /** Le GPU est-il pris par une traduction ou une analyse vidéo (une analyse en pause pendant la lecture ne compte pas) ? */
 export function gpuBusy(): boolean {
-  if (commentaryActivity().running) return true;
-  return analysisActivity().running.some((r) => r.phase !== 'en pause pendant la lecture');
+  return gpuHolder(0) !== null;
+}
+
+/** Ce qui occupe le GPU, en clair et vu depuis le match `matchId` (« la traduction de ce match »…), sinon null. */
+function gpuHolder(matchId: number): string | null {
+  const c = commentaryActivity().running;
+  if (c) return c.matchId === matchId ? 'la traduction de ce match' : 'la traduction d’un autre match';
+  const a = analysisActivity().running.filter((r) => r.phase !== 'en pause pendant la lecture');
+  if (!a.length) return null;
+  return a.some((r) => r.matchId === matchId) ? 'l’analyse vidéo de ce match' : 'l’analyse vidéo d’un autre match';
+}
+
+/**
+ * Téléchargement des modèles de voix lancé tout de suite (premier usage,
+ * ~2,5 Go), sans attendre le GPU : il avance pendant que le doublage attend
+ * en file. Sans effet si les modèles sont déjà là ou en cours de téléchargement.
+ */
+function prefetchVoiceModels(): void {
+  void loadEngine()
+    .then((e) => e?.prepare?.())
+    .catch((err) => console.error(`[doublage] modèles de voix : ${short(err)} (nouvel essai au prochain doublage)`));
+}
+
+/** Téléchargement des modèles de voix en cours, en clair, sinon undefined. */
+function downloadStep(): string | undefined {
+  const d = (eng.override ?? eng.engine)?.download?.();
+  return d ? downloadText(d) : undefined;
 }
 
 /** Doublage de fond permis : fenêtre ouverte (traduction automatique comprise) ET mode « doublage ». */
@@ -1135,6 +1212,7 @@ export function enqueueDub(matchId: number, opts: { priority?: boolean; explicit
   } else if (opts.priority) st.queue.unshift(job);
   else st.queue.push(job);
   if (opts.priority) preemptBackground();
+  prefetchVoiceModels();
   pump();
   if (st.running?.job.matchId === matchId) return { queued: true, started: true, message: 'Doublage lancé' };
   const position = dubQueuePosition(matchId);
@@ -1419,6 +1497,8 @@ export interface DubManifest {
   reason?: string;
   /** Pendant le travail (`running`) : tronçons doublés sur tronçons traduits publiés. */
   progress?: { done: number; total: number };
+  /** Étape en cours (`running`) ou téléchargement des voix qui avance pendant l'attente (`waiting`), en clair. */
+  step?: string;
   chunks: DubManifestChunk[];
   voices: Partial<Record<VoiceRole, string>>;
 }
@@ -1450,19 +1530,24 @@ export function dubManifest(matchId: number): DubManifest {
   const voices: DubManifest['voices'] = {};
   if (valid) for (const r of parseJson<string[]>(dub.voices, [])) if (r in ROLE_LABELS) voices[r as VoiceRole] = ROLE_LABELS[r as VoiceRole];
   const base = { chunks, voices };
+  const download = downloadStep();
   if (st.running?.job.matchId === matchId) {
     const p = st.running.progress;
-    return { status: 'running', ...(p && p.total ? { progress: { done: p.done, total: p.total } } : {}), ...base };
+    const step = download ?? p?.step;
+    return { status: 'running', ...(p && p.total ? { progress: { done: p.done, total: p.total } } : {}), ...(step ? { step } : {}), ...base };
   }
   const position = dubQueuePosition(matchId);
   if (position) {
     const job = st.queue[position - 1];
+    const holder = gpuHolder(matchId);
     const reason = waitsForSubtitles(job)
       ? 'traduction des commentaires en cours : le doublage suivra'
-      : gpuBusy()
-        ? 'en attente du GPU : la traduction ou l’analyse vidéo passe d’abord'
-        : `en file (position ${position})`;
-    return { status: 'waiting', reason, ...base };
+      : holder
+        ? `en attente du GPU : ${holder} passe d’abord, le doublage reprend ensuite`
+        : st.running
+          ? `en file (position ${position}) : un autre match est en cours de doublage`
+          : `en file (position ${position})`;
+    return { status: 'waiting', reason, ...(download ? { step: download } : {}), ...base };
   }
   if (valid && dub.complete === 1) return { status: 'ready', ...base };
   // « Le doublage suivra » seulement s'il suit vraiment : doublage automatique (mode « doublage »).
