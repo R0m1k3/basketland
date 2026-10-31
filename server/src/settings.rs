@@ -34,6 +34,8 @@ pub mod keys {
     pub const MINIMAX_TRANSLATE_MODEL: &str = "minimax_translate_model";
     /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'nvidia' (Parakeet).
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
+    /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
+    pub const FETCH_PARALLEL: &str = "fetch_parallel";
 }
 
 /// Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire).
@@ -238,6 +240,33 @@ pub fn transcribe_engine(s: &Settings) -> &'static str {
     }
 }
 
+/// Bornes du nombre de connexions simultanées (`fetchParallel`).
+pub const FETCH_PARALLEL_MAX: u64 = 32;
+
+/// Valeur acceptée pour `fetchParallel` : entier de 1 à 32, ou null (défaut).
+pub fn is_fetch_parallel(v: Option<&Value>) -> bool {
+    match v {
+        Some(Value::Null) => true,
+        Some(v) => v
+            .as_u64()
+            .is_some_and(|n| (1..=FETCH_PARALLEL_MAX).contains(&n)),
+        None => false,
+    }
+}
+
+/// Connexions simultanées choisies dans les Paramètres, `None` si aucun choix.
+pub fn fetch_parallel(s: &Settings) -> Option<usize> {
+    s.get(keys::FETCH_PARALLEL)
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| (1..=FETCH_PARALLEL_MAX).contains(n))
+        .map(|n| n as usize)
+}
+
+/// Applique le choix des Paramètres au téléchargement de l'audio.
+pub fn apply_fetch_parallel(s: &Settings) {
+    crate::media::hls_fetch::set_fetch_parallel(fetch_parallel(s));
+}
+
 /// Coupe JavaScript `s.slice(a, b)` en unités UTF-16 (indices positifs).
 fn utf16_range(s: &str, a: usize, b: usize) -> String {
     let u: Vec<u16> = s.encode_utf16().collect();
@@ -434,6 +463,7 @@ pub fn settings_view(s: &Settings) -> Value {
         "vfMode": vf_mode(s),
         "transcribeEngine": transcribe_engine(s),
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
+        "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
     })
 }
 

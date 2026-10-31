@@ -140,6 +140,8 @@ export interface SettingsPage {
     transcribe_engine: TranscribeEngine;
     /** Pourquoi ce choix n'est pas appliqué (TRANSCRIBE_URL, TRANSCRIBE_MODEL…), sinon null. */
     transcribe_engine_override: string | null;
+    /** Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32). */
+    fetch_parallel: number;
     voice_disabled_reason: string | null;
     minimax: MinimaxSettingsView;
     openai: OpenAiSettingsView;

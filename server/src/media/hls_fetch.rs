@@ -4,8 +4,8 @@
 //! ok.ru bride chaque connexion (quelques centaines de kb/s, avec des arrêts
 //! nets) : ffmpeg, qui lit les segments un par un sur une seule connexion,
 //! extrayait l'audio moins vite que le temps réel. Ici, les segments d'un
-//! tronçon partent en même temps sur plusieurs connexions
-//! (`COMMENTARY_FETCH_PARALLEL`, 16 par défaut), chacun repris sur une
+//! tronçon partent en même temps sur plusieurs connexions (Paramètres, sinon
+//! `COMMENTARY_FETCH_PARALLEL`, 16 par défaut), chacun repris sur une
 //! connexion neuve s'il cale ; ils sont recollés dans l'ordre (MPEG-TS se
 //! concatène tel quel) puis découpés localement par ffmpeg.
 
@@ -13,6 +13,7 @@ use super::abort::AbortSignal;
 use super::audio::SourceHeaders;
 use futures_util::StreamExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -89,13 +90,31 @@ pub fn covering(segs: &[Segment], start: f64, length: f64) -> &[Segment] {
     &segs[first..last.max(first)]
 }
 
-/// Connexions simultanées vers ok.ru par tronçon (`COMMENTARY_FETCH_PARALLEL`, 16 par défaut, 1 à 32).
-pub fn fetch_parallel() -> usize {
+/// Choix des Paramètres (`fetch_parallel`), 0 = aucun.
+static CHOSEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Retient le choix des Paramètres (`None` : retour au défaut). Appelé au
+/// démarrage et à chaque enregistrement : vaut pour les tronçons suivants.
+pub fn set_fetch_parallel(n: Option<usize>) {
+    CHOSEN.store(n.map_or(0, |n| n.clamp(1, 32)), Ordering::SeqCst);
+}
+
+/// Sans choix dans les Paramètres : `COMMENTARY_FETCH_PARALLEL`, sinon 16 (1 à 32).
+pub fn fetch_parallel_default() -> usize {
     std::env::var("COMMENTARY_FETCH_PARALLEL")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|n| *n > 0)
         .map_or(16, |n| n.min(32))
+}
+
+/// Connexions simultanées vers ok.ru par tronçon : choix des Paramètres, sinon
+/// [`fetch_parallel_default`].
+pub fn fetch_parallel() -> usize {
+    match CHOSEN.load(Ordering::SeqCst) {
+        0 => fetch_parallel_default(),
+        n => n,
+    }
 }
 
 /// Téléchargement parallèle activé (`COMMENTARY_PARALLEL_FETCH`, sauf `0`).
@@ -294,6 +313,16 @@ mod tests {
         assert_eq!(urls(covering(&s, 3.9, 0.2)), vec![0.0, 4.0]);
         assert_eq!(urls(covering(&s, 5.0, 100.0)), vec![4.0, 8.0]);
         assert!(covering(&s, 20.0, 5.0).is_empty());
+    }
+
+    #[test]
+    fn choix_des_parametres() {
+        set_fetch_parallel(Some(24));
+        assert_eq!(fetch_parallel(), 24);
+        set_fetch_parallel(Some(99));
+        assert_eq!(fetch_parallel(), 32);
+        set_fetch_parallel(None);
+        assert_eq!(fetch_parallel(), fetch_parallel_default());
     }
 
     #[test]

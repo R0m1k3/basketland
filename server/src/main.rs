@@ -117,6 +117,13 @@ async fn main() {
     let mut int = signal(SignalKind::interrupt()).expect("signal SIGINT");
     // Tous les jobs (calendrier, stats, replays, VF, analyses, pré-traductions) ; Node n'en lance plus.
     cron::start(st.clone());
+    // Connexions simultanées choisies dans les Paramètres (audio des tronçons).
+    let db = st.db.clone();
+    tokio::spawn(async move {
+        if let Ok(s) = db.run(basketland_server::settings::Settings::load).await {
+            basketland_server::settings::apply_fetch_parallel(&s);
+        }
+    });
     let server = axum::serve(listener, app(st));
 
     let code = tokio::select! {

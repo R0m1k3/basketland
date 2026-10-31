@@ -119,6 +119,7 @@ async fn pages_comme_node() {
                     if let Some(a) = v.get_mut("admin_data").and_then(Value::as_object_mut) {
                         let e = a.shift_remove("transcribe_engine");
                         a.shift_remove("transcribe_engine_override");
+                        a.shift_remove("fetch_parallel");
                         assert!(
                             matches!(
                                 e.as_ref().and_then(Value::as_str),

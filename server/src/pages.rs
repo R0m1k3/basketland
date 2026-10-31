@@ -702,6 +702,8 @@ pub fn parametres(
             "vf_mode": settings::vf_mode(&s),
             "transcribe_engine": settings::transcribe_engine(&s),
             "transcribe_engine_override": crate::media::commentary_ai::transcribe_engine_override(&s),
+            "fetch_parallel": settings::fetch_parallel(&s)
+                .unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
             "voice_disabled_reason": media.dub_disabled_reason,
             "minimax": settings::minimax_settings_view(&s),
             "openai": settings::openai_settings_view(&s),

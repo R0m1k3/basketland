@@ -71,6 +71,12 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     {
         return Err("transcribeEngine invalide (attendu : 'whisper' ou 'nvidia')".into());
     }
+    if body.contains_key("fetchParallel") && !s::is_fetch_parallel(body.get("fetchParallel")) {
+        return Err("fetchParallel invalide (attendu : un entier de 1 à 32, ou null)".into());
+    }
+    if let Some(v) = body.get("fetchParallel") {
+        updates.push((keys::FETCH_PARALLEL, v.as_u64().map(|n| n.to_string())));
+    }
     if let Some(v) = body.get("minimaxTranslate") {
         let Some(b) = v.as_bool() else {
             return Err("minimaxTranslate invalide (attendu : true ou false)".into());
@@ -127,6 +133,7 @@ pub async fn post(State(st): State<AppState>, uri: OriginalUri, req: Request) ->
             .await;
         match r {
             Ok(set) => {
+                s::apply_fetch_parallel(&set);
                 // Moteur NVIDIA choisi : modèle téléchargé tout de suite, pas à
                 // la première traduction.
                 if body.get("transcribeEngine").and_then(Value::as_str) == Some("nvidia")
@@ -214,6 +221,39 @@ mod tests {
         assert_eq!(
             crate::settings::settings_view(&s(Some("nvidia")))["transcribeEngine"],
             "nvidia"
+        );
+    }
+
+    #[test]
+    fn connexions_paralleles() {
+        for bad in [
+            json!({"fetchParallel": 0}),
+            json!({"fetchParallel": 33}),
+            json!({"fetchParallel": "8"}),
+            json!({"fetchParallel": 4.5}),
+        ] {
+            assert_eq!(
+                plan(bad),
+                Err("fetchParallel invalide (attendu : un entier de 1 à 32, ou null)".into())
+            );
+        }
+        assert_eq!(
+            plan(json!({"fetchParallel": 24})),
+            Ok(vec![("fetch_parallel", Some("24".into()))])
+        );
+        assert_eq!(
+            plan(json!({"fetchParallel": null})),
+            Ok(vec![("fetch_parallel", None)])
+        );
+        let s = |v: Option<&str>| {
+            crate::settings::Settings::from_pairs(v.map(|v| ("fetch_parallel", v)))
+        };
+        assert_eq!(crate::settings::fetch_parallel(&s(None)), None);
+        assert_eq!(crate::settings::fetch_parallel(&s(Some("24"))), Some(24));
+        assert_eq!(crate::settings::fetch_parallel(&s(Some("99"))), None);
+        assert_eq!(
+            crate::settings::settings_view(&s(Some("4")))["fetchParallel"],
+            4
         );
     }
 }
