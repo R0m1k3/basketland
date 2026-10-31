@@ -34,9 +34,9 @@ where
     });
 }
 
-/// Schéma présent : la base est créée et migrée par Node (au démarrage de
-/// son planificateur). Sur une installation neuve, le fichier n'existe pas
-/// encore quand le serveur Rust démarre.
+/// Schéma présent : la base est créée et migrée au démarrage du serveur
+/// (`schema::ensure_schema`) ; si ça a échoué (volume non inscriptible),
+/// les jobs attendent qu'elle existe.
 async fn schema_ready(db: &Db) -> bool {
     db.run(|c| {
         c.query_row(
@@ -61,7 +61,7 @@ pub fn start(st: AppState) {
         let mut warned = false;
         while !schema_ready(&st.db).await {
             if !warned && t0.elapsed() > Duration::from_secs(30) {
-                eprintln!("[cron] base pas encore créée par l'application Node : jobs en attente");
+                eprintln!("[cron] base pas encore créée : jobs en attente");
                 warned = true;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;

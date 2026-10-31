@@ -1,10 +1,15 @@
-use basketland_server::{app, cron, db, node, proxy, state, video};
+use basketland_server::{app, cron, db, node, proxy, schema, state, video};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 
 #[tokio::main]
 async fn main() {
+    // Récupération d'accès : `basketland-server reset-password <identifiant> <mot-de-passe>`.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("reset-password") {
+        std::process::exit(basketland_server::reset_password::run(&args[2..]));
+    }
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -43,6 +48,14 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // Base créée et migrée avant tout (Node la trouve prête ; il applique
+    // encore son propre schéma, identique et idempotent).
+    let db_path = db::default_db_path();
+    match tokio::task::spawn_blocking(move || schema::ensure_schema(&db_path)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("[serveur] {e}"),
+        Err(e) => eprintln!("[serveur] schéma de la base : {e}"),
+    }
     // Node n'est lancé qu'une fois le port public obtenu : jamais d'application orpheline.
     let local = listener.local_addr().unwrap_or(addr);
     let mut child = match node::NodeConfig::from_env() {

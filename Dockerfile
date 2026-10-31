@@ -144,7 +144,8 @@ COPY --chown=node:node scripts/whisper_worker.py ./scripts/whisper_worker.py
 COPY --chown=node:node scripts/voice_worker.py scripts/voice_gender.py ./scripts/
 # Voix figées du doublage (WAV de référence + transcription + voice.json).
 COPY --chown=node:node assets/voices ./assets/voices
-# Récupération d'accès : docker exec -it basketland node scripts/reset-password.mjs <identifiant> <mot-de-passe>
+# Récupération d'accès : docker exec -it basketland basketland-server reset-password <identifiant> <mot-de-passe>
+# (ancien script Node, gardé tant que Node est dans l'image : node scripts/reset-password.mjs)
 COPY --chown=node:node scripts/reset-password.mjs ./scripts/reset-password.mjs
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data && chown node:node /data

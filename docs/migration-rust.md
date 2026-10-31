@@ -51,7 +51,7 @@ navigateur ──► basketland-server (Rust, :3012)
 | 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `activity.ts`) et leurs routes (`/subtitles`, `/subtitles.vtt`, `/commentary`, `/watching`, `/dub`, `/dub/[idx]`, `/api/activity`), branchées ensemble avec l'étape 7 : les trois files tournent dans Rust, avec les jobs de fond | ✅ |
 | 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`, calage de `/api/matches/[id]/sync`) ; Tesseract natif dans l'image | ✅ |
 | 8a | Données de chaque page en JSON servies par Rust (`GET /api/pages/…`) : portage de `queries.ts`, `teams.ts`, `linescore.ts`, `version.ts`, `currentSession`, `safeNextPath` ; état des files lu dans les services Rust | ✅ |
-| 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export React) servis par Rust (règles d'accès des pages comprises), migrations SQL en Rust, Node retiré de l'image | à faire |
+| 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export React) servis par Rust (règles d'accès des pages comprises), migrations SQL en Rust, Node retiré de l'image | en cours : schéma et migrations de la base, récupération d'accès (`reset-password`) en Rust |
 
 ## Développement
 
@@ -319,6 +319,28 @@ traduction et le doublage branchés par leurs crochets (une traduction qui
 démarre fait céder le doublage, `full.ogg` gardé pour le doublage puis
 effacé par lui) et le montage par le vrai ffmpeg. `tests/dub-player.test.ts`
 ne teste que le lecteur (client) : rien à porter côté serveur.
+
+### Schéma de la base et récupération d'accès (étape 8b)
+
+Le serveur Rust crée et migre la base au démarrage, avant de lancer Node
+(`server/src/schema.rs`, équivalent d'`openDatabase` et `migrate` de
+`db.ts`) : mêmes instructions SQL au caractère près (`sqlite_master` garde
+le texte des `CREATE`), mêmes PRAGMA, mêmes migrations de colonnes, mêmes
+messages d'erreur quand le volume n'est pas inscriptible. Node applique
+encore son propre schéma, identique et idempotent, tant qu'il est là.
+Vérifié (`tests/schema.rs`) : une base neuve créée par Rust a exactement le
+schéma relevé sur les bases neuves de Node (fixtures de la traduction et des
+pages) ; une base d'avant les migrations reçoit les colonnes ajoutées depuis
+(pistes anciennes marquées complètes), et rejouer les migrations ne change
+rien.
+
+Récupération d'accès : `basketland-server reset-password <identifiant>
+<nouveau-mot-de-passe>` (`server/src/reset_password.rs`), même contrat que
+`scripts/reset-password.mjs` (compte administrateur créé s'il n'existe pas,
+sessions fermées, même empreinte scrypt, mêmes messages et codes de sortie,
+identité du propriétaire de la base reprise quand `docker exec` tourne en
+root). Test : `tests/reset_password.rs` (vrai binaire). Le script Node reste
+dans l'image tant que Node y est.
 
 ### Données des pages (étape 8a)
 
