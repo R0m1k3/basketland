@@ -25,7 +25,8 @@
 import fs from 'node:fs';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
 import { embeddedOllamaAvailable, embeddedOllamaUrl, embeddedWhisperAvailable } from './localAi';
-import { getSetting, SETTING_KEYS } from './settings';
+import { getSetting, minimaxTranslateModel, minimaxTranslateWanted, SETTING_KEYS } from './settings';
+import { minimaxConfig } from './voiceMinimax';
 import { nameRendered, type RosterIndex } from './rosterNames';
 
 // ------------------------------------------------------------------ configuration
@@ -63,7 +64,7 @@ export type TranslateEngine = 'mt' | 'chat';
 export type ServiceMode = 'embedded' | 'remote';
 
 /** Qui traduit : Ollama (embarqué ou externe), ou l'API OpenAI si une clé est configurée. */
-export type TranslateProvider = 'ollama' | 'openai';
+export type TranslateProvider = 'ollama' | 'openai' | 'minimax';
 
 /** Modèle OpenAI par défaut (rapide et peu coûteux ; remplaçable dans les paramètres ou par OPENAI_MODEL). */
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
@@ -136,13 +137,30 @@ export function engineFor(model: string, forced?: string): TranslateEngine {
   return /milmmt/i.test(model) ? 'mt' : 'chat';
 }
 
+/**
+ * Traduction par MiniMax (modèles texte, API compatible OpenAI) : demandée
+ * dans la page Paramètres (ou `MINIMAX_TRANSLATE=1`) et une clé MiniMax
+ * présente — la même que pour les voix du doublage. Null sinon.
+ */
+export function minimaxTranslateConfig(): { url: string; key: string; model: string } | null {
+  try {
+    if (!minimaxTranslateWanted()) return null;
+    const mm = minimaxConfig();
+    return mm.key ? { url: `${mm.url}/v1`, key: mm.key, model: minimaxTranslateModel() } : null;
+  } catch {
+    return null; // réglages illisibles : pas de MiniMax
+  }
+}
+
 export function commentaryConfig(): CommentaryConfig {
-  // Clé OpenAI configurée : la traduction passe par l'API OpenAI (Ollama n'est pas démarré).
-  const openai = openAiConfig();
-  const translateModel = openai ? openai.model : process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL;
+  // Traduction en ligne (Ollama n'est pas démarré) : MiniMax si demandé, sinon OpenAI si une clé est là.
+  const minimax = minimaxTranslateConfig();
+  const openai = minimax ? null : openAiConfig();
+  const online = minimax ?? (openai ? { url: OPENAI_URL, key: openai.key, model: openai.model } : null);
+  const translateModel = online ? online.model : process.env.TRANSLATE_MODEL?.trim() || DEFAULT_TRANSLATE_MODEL;
   // Sans URL externe, les services embarqués dans l'image Docker sont utilisés.
   const remoteAsr = trimUrl(process.env.TRANSCRIBE_URL);
-  const remoteMt = openai ? OPENAI_URL : trimUrl(process.env.TRANSLATE_URL);
+  const remoteMt = online ? online.url : trimUrl(process.env.TRANSLATE_URL);
   const transcribeMode: ServiceMode = remoteAsr ? 'remote' : 'embedded';
   const translateMode: ServiceMode = remoteMt ? 'remote' : 'embedded';
   const asrOk = !!remoteAsr || embeddedWhisperAvailable();
@@ -159,12 +177,12 @@ export function commentaryConfig(): CommentaryConfig {
     transcribeModel: process.env.TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIBE_MODEL,
     translateUrl: remoteMt || `${embeddedOllamaUrl()}/v1`,
     translateModel,
-    translateEngine: openai ? 'chat' : engineFor(translateModel, process.env.TRANSLATE_ENGINE),
-    translateProvider: openai ? 'openai' : 'ollama',
-    translateApiKey: openai ? openai.key : process.env.TRANSLATE_API_KEY?.trim() || '',
+    translateEngine: online ? 'chat' : engineFor(translateModel, process.env.TRANSLATE_ENGINE),
+    translateProvider: minimax ? 'minimax' : openai ? 'openai' : 'ollama',
+    translateApiKey: online ? online.key : process.env.TRANSLATE_API_KEY?.trim() || '',
     batch: intEnv('TRANSLATE_BATCH', 14, 1, 60),
-    // L'API OpenAI encaisse plus de requêtes simultanées qu'un GPU de NAS.
-    parallel: openai ? intEnv('TRANSLATE_PARALLEL', 4, 1, 16) : translateParallel(),
+    // Les API en ligne encaissent plus de requêtes simultanées qu'un GPU de NAS.
+    parallel: online ? intEnv('TRANSLATE_PARALLEL', 4, 1, 16) : translateParallel(),
     chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 120, 30, 3600),
     disabledReason,
   };
@@ -603,7 +621,11 @@ export async function chatCompletion(
             ...(json ? { response_format: { type: 'json_object' } } : {}),
             ...(/^(gpt-5|o\d)/i.test(cfg.translateModel) ? { reasoning_effort: 'low' } : { temperature }),
           }
-        : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, ...(json ? { response_format: { type: 'json_object' } } : {}) },
+        : cfg.translateProvider === 'minimax'
+          ? // MiniMax : modèles qui raisonnent (raisonnement rendu à part, `reasoning_content`) ;
+            // un raisonnement bref suffit. Pas de `response_format` : le JSON est demandé par la consigne.
+            { model: cfg.translateModel, messages, stream: false, temperature, reasoning_effort: 'low' }
+          : { model: cfg.translateModel, messages, temperature, top_p: 0.9, stream: false, ...(json ? { response_format: { type: 'json_object' } } : {}) },
   );
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -627,19 +649,32 @@ export async function chatCompletion(
         choices?: { message?: { content?: unknown } }[];
         message?: { content?: unknown };
         response?: unknown;
+        base_resp?: { status_code?: number; status_msg?: string };
       } | null;
+      // MiniMax peut répondre HTTP 200 avec une erreur dans `base_resp` (clé, crédit, débit).
+      const mmCode = cfg.translateProvider === 'minimax' ? (data?.base_resp?.status_code ?? 0) : 0;
+      if (mmCode) {
+        const msg = data?.base_resp?.status_msg || 'erreur';
+        last = mmCode === 1004 ? 'API MiniMax : clé refusée (vérifier la clé dans les paramètres)' : mmCode === 1008 ? 'API MiniMax : crédit épuisé' : `API MiniMax : ${msg} (code ${mmCode})`;
+        if (mmCode === 1002 || mmCode === 1039) {
+          await sleep(o.retryDelayMs ?? 10_000, o.signal); // débit dépassé : une pause, puis un nouvel essai
+          continue;
+        }
+        break;
+      }
       const content = raw ? data?.response : native ? data?.message?.content : data?.choices?.[0]?.message?.content;
       // Réponse vide ou mal formée : c'est le CONTENU qui est en cause, le lot sera retenté.
       return typeof content === 'string' ? content : '';
     }
     const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    const api = cfg.translateProvider === 'minimax' ? 'API MiniMax' : 'API OpenAI';
     last =
-      cfg.translateProvider === 'openai'
+      cfg.translateProvider === 'openai' || cfg.translateProvider === 'minimax'
         ? res.status === 401
-          ? 'API OpenAI : clé refusée (vérifier la clé dans les paramètres)'
+          ? `${api} : clé refusée (vérifier la clé dans les paramètres)`
           : res.status === 429
-            ? 'API OpenAI : quota ou crédit épuisé (HTTP 429)'
-            : `API OpenAI : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`
+            ? `${api} : quota ou crédit épuisé (HTTP 429)`
+            : `${api} : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`
         : res.status === 404 && /model/i.test(detail)
           ? `modèle de traduction « ${cfg.translateModel} » absent d'Ollama (ollama pull ${cfg.translateModel})`
           : `serveur de traduction : HTTP ${res.status}${detail ? ` — ${detail}` : ''}`;

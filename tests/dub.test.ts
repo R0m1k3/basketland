@@ -848,6 +848,40 @@ describe('démarrage : téléchargement des voix hors GPU, étapes visibles', ()
     release();
   });
 
+  it('synthèse en ligne (MiniMax) : le doublage d’un match suit sa traduction en cours, tronçon par tronçon, sans attendre la fin', async () => {
+    process.env.TRANSCRIBE_URL = 'http://gpu.local:8000/v1';
+    process.env.TRANSLATE_URL = 'http://gpu.local:11434/v1';
+    process.env.DUB_REPUMP_MS = '10';
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    touchViewer(M, 0); // on regarde le match depuis le début
+    let step1!: () => void;
+    let step2!: () => void;
+    const gate1 = new Promise<void>((r) => (step1 = r));
+    const gate2 = new Promise<void>((r) => (step2 = r));
+    // La traduction du match publie ses tronçons au fil de l'eau.
+    __setCommentaryRunnerForTests(async () => {
+      publish(M, 0, CHUNK0);
+      await gate1;
+      publish(M, 1, CHUNK1);
+      await gate2;
+      publish(M, 2, CHUNK2);
+      return { ok: true, reason: 'ok' };
+    });
+    __setDubEngineForTests({ config: () => ({}), open: async () => fake().session, usesGpu: () => false });
+    viaQueue(fake().deps);
+    enqueueCommentary(M, { priority: true, explicit: true });
+    await vi.waitFor(() => expect(db.getCommentaryChunks(M)).toHaveLength(1));
+    enqueueDub(M, { priority: true, explicit: true }); // « Doubler ce match » pendant la traduction
+    // Le début du match est doublé pendant que la traduction continue.
+    await vi.waitFor(() => expect(db.getDubChunks(M).map((c) => c.idx)).toEqual([0]));
+    expect(dubManifest(M).chunks).toHaveLength(1);
+    step1();
+    await vi.waitFor(() => expect(db.getDubChunks(M).map((c) => c.idx)).toEqual([0, 1]));
+    step2();
+    await vi.waitFor(() => expect(db.getDubChunks(M)).toHaveLength(3));
+    await __dubIdle();
+  });
+
   it('pendant le travail : l’étape en cours est dans le manifeste', async () => {
     publish(M, 0, CHUNK0);
     const steps: (string | undefined)[] = [];

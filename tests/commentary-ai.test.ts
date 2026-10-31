@@ -471,3 +471,65 @@ describe('API OpenAI (clé dans les paramètres ou OPENAI_API_KEY)', () => {
     await expect(translateBatch([{ i: 1, en: 'Bang!' }], [], commentaryConfig())).rejects.toThrow('API OpenAI : clé refusée');
   });
 });
+
+describe('API MiniMax (traduction demandée dans les paramètres, même clé que les voix)', () => {
+  beforeEach(() => {
+    freshDb();
+    setEnv();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    [...ENV, 'OPENAI_API_KEY', 'MINIMAX_API_KEY', 'MINIMAX_TRANSLATE', 'MINIMAX_TRANSLATE_MODEL'].forEach((k) => delete process.env[k]);
+  });
+
+  it('activée avec une clé : traduction par MiniMax, devant OpenAI ; sans clé ou désactivée : rien ne change', () => {
+    setSetting('openai_api_key', 'sk-test-0123456789abcd');
+    setSetting('minimax_translate', '1');
+    expect(commentaryConfig().translateProvider).toBe('openai'); // pas de clé MiniMax
+    setSetting('minimax_api_key', 'mm-key-0123456789abcdef');
+    expect(commentaryConfig()).toMatchObject({
+      translateProvider: 'minimax',
+      translateMode: 'remote',
+      translateUrl: 'https://api.minimax.io/v1',
+      translateModel: 'MiniMax-M3.1-Flash',
+      translateEngine: 'chat',
+      translateApiKey: 'mm-key-0123456789abcdef',
+      parallel: 4,
+    });
+    setSetting('minimax_translate_model', 'MiniMax-M3');
+    expect(commentaryConfig().translateModel).toBe('MiniMax-M3');
+    setSetting('minimax_translate', '0');
+    expect(commentaryConfig().translateProvider).toBe('openai');
+    // Variables d'environnement seules.
+    setSetting('minimax_translate', null);
+    setSetting('minimax_api_key', null);
+    setSetting('openai_api_key', null);
+    Object.assign(process.env, { MINIMAX_API_KEY: 'mm-env', MINIMAX_TRANSLATE: '1' });
+    expect(commentaryConfig()).toMatchObject({ translateProvider: 'minimax', translateApiKey: 'mm-env' });
+  });
+
+  it('requête MiniMax : clé Bearer, raisonnement bref, sans response_format ; le raisonnement à part est ignoré', async () => {
+    setSetting('minimax_api_key', 'mm-key-0123456789abcdef');
+    setSetting('minimax_translate', '1');
+    const calls = fakeFetch((_u, init) =>
+      chatRes(JSON.stringify({ t: requestedLines(init).map((l) => ({ i: l.i, fr: 'Dedans !' })) })),
+    );
+    const out = await translateBatch([{ i: 1, en: 'Bang!' }], [], commentaryConfig());
+    expect(out).toEqual([{ i: 1, fr: 'Dedans !', untranslated: false }]);
+    expect(calls[0].url).toBe('https://api.minimax.io/v1/chat/completions');
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer mm-key-0123456789abcdef');
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body).toMatchObject({ model: 'MiniMax-M3.1-Flash', reasoning_effort: 'low', stream: false });
+    expect(body.response_format).toBeUndefined();
+  });
+
+  it('erreur dans base_resp (HTTP 200) ou HTTP 401 : message clair', async () => {
+    setSetting('minimax_api_key', 'mm-key-0123456789abcdef');
+    setSetting('minimax_translate', '1');
+    fakeFetch(() => new Response(JSON.stringify({ base_resp: { status_code: 1008, status_msg: 'insufficient balance' } })));
+    await expect(translateBatch([{ i: 1, en: 'Bang!' }], [], commentaryConfig())).rejects.toThrow('API MiniMax : crédit épuisé');
+    fakeFetch(() => new Response('{}', { status: 401 }));
+    await expect(translateBatch([{ i: 1, en: 'Bang!' }], [], commentaryConfig())).rejects.toThrow('API MiniMax : clé refusée');
+  });
+});

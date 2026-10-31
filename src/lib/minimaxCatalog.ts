@@ -21,6 +21,13 @@ export const MINIMAX_MODELS = [
 ] as const;
 export const MINIMAX_DEFAULT_MODEL = 'speech-2.8-hd';
 
+/** Modèles texte MiniMax proposés pour la traduction des commentaires (API compatible OpenAI). */
+export const MINIMAX_TEXT_MODELS = [
+  { id: 'MiniMax-M3.1-Flash', label: 'MiniMax M3.1 Flash — rapide' },
+  { id: 'MiniMax-M3', label: 'MiniMax M3 — plus soigné, plus lent' },
+] as const;
+export const MINIMAX_DEFAULT_TEXT_MODEL = 'MiniMax-M3.1-Flash';
+
 /** Voix françaises du catalogue MiniMax (liste « System Voice ID » de la documentation). */
 export const MINIMAX_FRENCH_VOICES = [
   { id: 'French_Male_Speech_New', label: 'Homme posé' },

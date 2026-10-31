@@ -6,10 +6,12 @@
 import { settingGet, settingSet } from './db';
 import {
   MINIMAX_DEFAULT_MODEL,
+  MINIMAX_DEFAULT_TEXT_MODEL,
   MINIMAX_DEFAULT_VOICES,
   MINIMAX_FRENCH_VOICES,
   MINIMAX_MODELS,
   MINIMAX_ROLES,
+  MINIMAX_TEXT_MODELS,
   type MinimaxRole,
 } from './minimaxCatalog';
 
@@ -25,6 +27,9 @@ export const SETTING_KEYS = {
   minimaxApiKey: 'minimax_api_key',
   minimaxModel: 'minimax_tts_model',
   minimaxVoices: 'minimax_voices',
+  /** Traduction des commentaires par MiniMax : '1' (activée) ; modèle texte. */
+  minimaxTranslate: 'minimax_translate',
+  minimaxTranslateModel: 'minimax_translate_model',
 } as const;
 
 /** Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire). */
@@ -157,6 +162,10 @@ export interface MinimaxSettingsView {
   model: string;
   /** Voix en service par rôle (enregistrée, sinon MINIMAX_VOICE_<rôle>, sinon défaut). */
   voices: Record<MinimaxRole, string>;
+  /** Traduction des commentaires par MiniMax demandée (sert dès qu'une clé est là). */
+  translate: boolean;
+  /** Modèle texte de la traduction. */
+  translateModel: string;
 }
 
 /** Ce que l'interface peut afficher de la configuration MiniMax (jamais la clé complète). */
@@ -171,6 +180,8 @@ export function minimaxSettingsView(): MinimaxSettingsView {
     envKey: !!process.env.MINIMAX_API_KEY?.trim(),
     model: getSetting(SETTING_KEYS.minimaxModel) || process.env.MINIMAX_TTS_MODEL?.trim() || MINIMAX_DEFAULT_MODEL,
     voices,
+    translate: minimaxTranslateWanted(),
+    translateModel: minimaxTranslateModel(),
   };
 }
 
@@ -179,6 +190,21 @@ export function minimaxKeyError(key: string): string | null {
   if (key.length < 20 || key.length > 2000) return 'La clé API semble invalide (longueur inattendue).';
   if (!/^[\x21-\x7e]+$/.test(key)) return 'La clé API ne doit contenir ni espace ni caractère accentué.';
   return null;
+}
+
+/** Traduction par MiniMax demandée : réglage de la page, sinon variable `MINIMAX_TRANSLATE=1`. */
+export function minimaxTranslateWanted(): boolean {
+  const v = getSetting(SETTING_KEYS.minimaxTranslate);
+  return v === null ? process.env.MINIMAX_TRANSLATE?.trim() === '1' : v === '1';
+}
+
+/** Modèle texte MiniMax de la traduction : réglage, sinon `MINIMAX_TRANSLATE_MODEL`, sinon défaut. */
+export function minimaxTranslateModel(): string {
+  return getSetting(SETTING_KEYS.minimaxTranslateModel) || process.env.MINIMAX_TRANSLATE_MODEL?.trim() || MINIMAX_DEFAULT_TEXT_MODEL;
+}
+
+export function minimaxTranslateModelError(model: string): string | null {
+  return MINIMAX_TEXT_MODELS.some((m) => m.id === model) ? null : 'Modèle de traduction MiniMax inconnu.';
 }
 
 export function minimaxModelError(model: string): string | null {
