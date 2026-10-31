@@ -57,7 +57,7 @@ import { inNightWindow } from './nightWindow';
 import { lowerPriority } from './procPriority';
 import { fixRosterNames, rosterIndex } from './rosterNames';
 
-import { __clearViewersForTests, someoneWatching, touchViewer, viewerActive, viewerPlaying, viewerPosition } from './viewers';
+import { __clearViewersForTests, someoneWatching, touchViewer, viewerActive, viewerGone, viewerPlaying, viewerPosition } from './viewers';
 
 export { inNightWindow, touchViewer, viewerActive, viewerPosition };
 
@@ -806,15 +806,34 @@ export function enqueueCommentary(
  * Un match regardé passe devant un travail de FOND en cours : celui-ci est
  * interrompu (ce qui est déjà transcrit ou traduit reste sur disque et en
  * base), puis remis en file juste derrière, sans compter comme un échec.
- * Un travail demandé par un autre spectateur n'est jamais interrompu.
+ * Un travail demandé par un autre spectateur n'est pas interrompu tant que
+ * sa fiche est ouverte ; fiche quittée (`viewerGone` : plus de signe de vie
+ * depuis 45 s), il cède la place au lieu de garder la file jusqu'à la fin de
+ * `viewerIdleMs` (3 min) — on ne reste plus des minutes sans que la
+ * traduction du match qu'on vient d'ouvrir démarre.
  */
 function preemptBackground(): void {
   const r = st.running;
+  if (!r || r.preempted || !st.queue.some((j) => j.viewer)) return;
+  const id = r.job.matchId;
   // Un travail explicite dont la fiche n'est plus regardée cède aussi la place.
-  if (!r || r.preempted || (r.job.viewer && !(r.job.explicit && !viewerActive(r.job.matchId)))) return;
+  const yields = !r.job.viewer || (r.job.explicit && !viewerActive(id)) || viewerGone(id);
+  if (!yields) return;
   r.preempted = true;
-  console.log(`[commentaires] match ${r.job.matchId} mis en pause : le match ${st.queue[0]?.matchId} est regardé, il passe en premier`);
+  console.log(`[commentaires] match ${id} mis en pause : le match ${st.queue.find((j) => j.viewer)?.matchId} est regardé, il passe en premier`);
   r.abort();
+}
+
+/**
+ * Signe de vie de la fiche d'un match EN FILE (interrogation des
+ * sous-titres) : le travail en cours est réexaminé, pour qu'il cède la place
+ * dès que sa propre fiche est quittée, sans attendre la fin du tronçon ni
+ * l'expiration du spectateur.
+ */
+export function nudgeCommentaryQueue(matchId: number): void {
+  if (st.running?.job.matchId === matchId) return;
+  if (!st.queue.some((j) => j.matchId === matchId && j.viewer)) return;
+  preemptBackground();
 }
 
 /** Travail de fond hors de la fenêtre autorisée (et personne ne regarde ce match) : abandonné. */
@@ -858,6 +877,7 @@ function start(job: Job): void {
   const runner: CommentaryRunner = st.runner ?? ((j, p, sig, c) => runCommentary(j, p, sig, defaultDeps, c));
   const logId = db.logIngestStart(`commentaires-${job.matchId}`);
   const t0 = Date.now();
+  console.log(`[commentaires] match ${job.matchId} : traduction démarrée${st.queue.length ? ` (${st.queue.length} en attente)` : ''}`);
   // Garde-fou : un travail qui ne rend jamais la main (serveur figé…) est
   // interrompu au lieu de bloquer la file pour toujours.
   let watchdog: NodeJS.Timeout | undefined;

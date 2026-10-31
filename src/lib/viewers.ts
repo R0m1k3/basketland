@@ -42,6 +42,25 @@ export function viewerActive(matchId: number, now = Date.now()): boolean {
   return !!v && now - v.at < viewerIdleMs();
 }
 
+/**
+ * Délai (ms) sans signe de vie au-delà duquel la fiche d'un match est
+ * considérée QUITTÉE (45 s par défaut). Une fiche ouverte interroge les
+ * sous-titres toutes les 12 s pendant une traduction et envoie un signe de
+ * vie toutes les 20 s pendant la lecture : 45 s de silence, elle est fermée.
+ * Plus court que `viewerIdleMs` (3 min), qui laisse le temps de revenir sur
+ * la fiche sans perdre sa traduction tant que personne d'autre n'attend.
+ */
+export function viewerGoneMs(): number {
+  const n = Number(process.env.COMMENTARY_VIEWER_GONE_MS);
+  return Number.isFinite(n) && n > 0 ? n : 45_000;
+}
+
+/** La fiche de ce match a été regardée puis quittée (plus de signe de vie depuis `viewerGoneMs`). */
+export function viewerGone(matchId: number, now = Date.now()): boolean {
+  const v = viewers.get(matchId);
+  return !!v && now - v.at >= viewerGoneMs();
+}
+
 /** Position du spectateur actif, sinon null. */
 export function viewerPosition(matchId: number): number | null {
   return viewerActive(matchId) ? (viewers.get(matchId)?.t ?? 0) : null;

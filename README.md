@@ -458,6 +458,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `COMMENTARY_AUDIO_READRATE` | — | Vitesse maximale de cette extraction, en multiple du temps réel (ffmpeg `-readrate`), si elle gêne la lecture. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
+| `COMMENTARY_VIEWER_GONE_MS` | `45000` (45 s) | Fiche d'un match en cours de traduction sans signe de vie pendant ce délai : sa traduction cède la place au match qu'on vient d'ouvrir (au lieu de le faire attendre jusqu'à 3 min). |
 | `OPENAI_API_KEY` | — | Clé API OpenAI : si définie (ou enregistrée dans la page Paramètres, prioritaire), la traduction passe par l'API OpenAI au lieu d'Ollama. La transcription reste locale. Facturée à l'usage par OpenAI (ce n'est pas l'abonnement ChatGPT). |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Modèle OpenAI de traduction. |
 | `COMMENTARY_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail complet : au-delà, il est interrompu et la file continue. |
