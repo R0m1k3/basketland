@@ -1,30 +1,22 @@
-/** @type {import('next').NextConfig} */
+/**
+ * Interface en fichiers statiques (étape 8b, voir docs/migration-rust.md) :
+ * `next build` produit `out/`, servi par le serveur Rust. Chaque page est un
+ * composant client qui lit ses données dans `GET /api/pages/…` ; aucun code
+ * serveur Next ne tourne à l'exécution.
+ *
+ * Routes dynamiques (`/matchs/[id]`, `/equipes/[abbr]`) : un seul fichier par
+ * route, pour le paramètre de remplacement `_` (`out/matchs/_.html` et
+ * `_.txt`), que Rust sert pour tout identifiant ; la page lit le vrai dans
+ * l'URL.
+ *
+ * @type {import('next').NextConfig}
+ */
 const nextConfig = {
-  output: 'standalone',
+  output: 'export',
+  trailingSlash: false,
   poweredByHeader: false,
   reactStrictMode: true,
   images: { unoptimized: true },
-  // tesseract.js lance un worker_thread sur un script résolu depuis son propre
-  // dossier : empaqueté par Next, ce chemin pointait dans `.next/` (« Cannot
-  // find module .next/worker-script/node/index.js ») et l'OCR plantait. On le
-  // laisse donc dans node_modules, chargé tel quel à l'exécution.
-  serverExternalPackages: ['tesseract.js', 'tesseract.js-core', '@tesseract.js-data/eng'],
-  // tesseract.js est chargé à l'exécution (voir `runtimeRequire` dans
-  // src/lib/ocr.ts) : le traçage du build standalone ne le voit pas, et
-  // l'image Docker n'embarquait NI le paquet, NI son worker, NI le cœur WASM,
-  // NI les données de langue — l'OCR ne pouvait pas marcher en production.
-  // On copie donc explicitement le paquet et ses dépendances.
-  outputFileTracingIncludes: {
-    '/**': [
-      './node_modules/tesseract.js/package.json',
-      './node_modules/tesseract.js/src/**/*',
-      './node_modules/tesseract.js-core/package.json',
-      './node_modules/tesseract.js-core/*.{js,wasm}',
-      './node_modules/@tesseract.js-data/eng/{package.json,index.js}',
-      './node_modules/@tesseract.js-data/eng/4.0.0_best_int/**/*',
-      './node_modules/{bmp-js,idb-keyval,is-url,node-fetch,whatwg-url,tr46,webidl-conversions,regenerator-runtime,wasm-feature-detect,zlibjs}/**/*',
-    ],
-  },
 };
 
 export default nextConfig;

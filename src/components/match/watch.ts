@@ -22,7 +22,7 @@ export type WatchStep = 'refresh' | 'poll' | 'idle' | 'stop';
 
 /**
  * Guet du replay, à chaque tick : `refresh` dès que le replay est
- * disponible (la page serveur affichera le lecteur), `stop` après 3 h,
+ * disponible (la page, relue, affichera le lecteur), `stop` après 3 h,
  * sinon `poll`.
  */
 export function replayWatchStep(s: { available: boolean; startedAt: number; now: number }): WatchStep {
