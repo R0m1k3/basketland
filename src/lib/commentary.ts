@@ -257,6 +257,13 @@ export function extractFullAudio(
         '24k',
         '-application',
         'voip',
+        // Chaque paquet écrit tout de suite sur le disque : le fichier est
+        // découpé PENDANT l'extraction (traduction, doublage) dès que
+        // `out_time` couvre le tronçon. Sans ça, ffmpeg n'écrit que par blocs
+        // de 512 Ko (2 à 3 min de commentaire) et la découpe sortait
+        // tronquée, sans erreur : sous-titres absents en fin de tronçon.
+        '-flush_packets',
+        '1',
         '-f',
         'ogg',
         '-y',

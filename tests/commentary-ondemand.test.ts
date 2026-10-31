@@ -562,4 +562,37 @@ describe('son complet (ffmpeg réel)', () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  // Régression : les tronçons sont découpés PENDANT l'extraction, dès que
+  // `out_time` les couvre. ffmpeg n'écrivait le fichier que par blocs de
+  // 512 Ko : la découpe sortait tronquée (113 s, 105 s, 98 s au lieu de
+  // 120 s), sans erreur, et le replay avait des trous de sous-titres en fin
+  // de tronçon tant que le son complet n'était pas fini.
+  it.skipIf(!hasFfmpeg)('découpe pendant l’extraction : tronçon complet dès que la progression le couvre', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-full-'));
+    const prev = process.env.COMMENTARY_AUDIO_READRATE;
+    process.env.COMMENTARY_AUDIO_READRATE = '20';
+    try {
+      const src = path.join(tmp, 'match.wav');
+      // Bruit (le débit Opus d'une voix, pas d'un son pur trop compressible).
+      spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'anoisesrc=d=420:c=pink:r=16000:a=0.3', '-ac', '1', src]);
+      const out = path.join(tmp, 'full.ogg.part');
+      let done = 0;
+      const extraction = extractFullAudio(src, out, { onProgress: (s) => (done = Math.max(done, s)) });
+      for (const [start, length] of [
+        [0, 120],
+        [120, 120],
+      ]) {
+        while (done < start + length + 2) await new Promise((r) => setTimeout(r, 50));
+        const cut = path.join(tmp, `cut-${start}.ogg`);
+        await cutAudio(out, start, length, cut);
+        expect(probe(cut)).toBeGreaterThan(length - 1);
+      }
+      await extraction;
+    } finally {
+      if (prev === undefined) delete process.env.COMMENTARY_AUDIO_READRATE;
+      else process.env.COMMENTARY_AUDIO_READRATE = prev;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
