@@ -1,8 +1,7 @@
 //! File de traduction des commentaires des replays (équivalent de
-//! `src/lib/commentary.ts`) — portée en Rust à l'étape 6b, **pas encore
-//! branchée** : aucune route ni aucun job ne la construit ; Node fait
-//! toujours tourner sa file tant que les routes médias ne sont pas basculées
-//! ensemble.
+//! `src/lib/commentary.ts`) — portée en Rust à l'étape 6b ; le service est
+//! construit au démarrage (`state::Media`), servi par `routes_media` et
+//! alimenté par le cron (`scheduler`).
 //!
 //! TRADUCTION À LA DEMANDE, devant la tête de lecture : tronçons (1 à
 //! 2 min) à partir de la position du spectateur — audio (ffmpeg) → Whisper →

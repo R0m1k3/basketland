@@ -1,5 +1,5 @@
 //! Localisation ADAPTATIVE du bandeau de score et lecture d'une image
-//! (équivalent de `scoreboard.ts`), portée à l'étape 7, **pas encore branchée**.
+//! (équivalent de `scoreboard.ts`), portée à l'étape 7.
 //!
 //! Les replays viennent de diffuseurs différents : le bandeau change de place
 //! et de taille. Localisation, sur 8 à 12 images échantillons :

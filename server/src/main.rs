@@ -44,17 +44,21 @@ async fn main() {
         }
     };
     // Node n'est lancé qu'une fois le port public obtenu : jamais d'application orpheline.
+    let local = listener.local_addr().unwrap_or(addr);
     let mut child = match node::NodeConfig::from_env() {
-        Some(cfg) => match node::spawn(&cfg) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                eprintln!(
-                    "[serveur] impossible de lancer l'application Node ({}) : {e}",
-                    cfg.cmd.join(" ")
-                );
-                std::process::exit(1);
+        Some(mut cfg) => {
+            cfg.rust_url = Some(node::rust_url(local));
+            match node::spawn(&cfg) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    eprintln!(
+                        "[serveur] impossible de lancer l'application Node ({}) : {e}",
+                        cfg.cmd.join(" ")
+                    );
+                    std::process::exit(1);
+                }
             }
-        },
+        }
         None => None,
     };
 
@@ -65,7 +69,7 @@ async fn main() {
 
     let mut term = signal(SignalKind::terminate()).expect("signal SIGTERM");
     let mut int = signal(SignalKind::interrupt()).expect("signal SIGINT");
-    // Jobs d'ingestion portés (calendrier, stats, replays, VF) ; Node ne les lance plus.
+    // Tous les jobs (calendrier, stats, replays, VF, analyses, pré-traductions) ; Node n'en lance plus.
     cron::start(st.clone());
     let server = axum::serve(listener, app(st));
 

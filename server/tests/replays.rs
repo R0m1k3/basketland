@@ -4,11 +4,14 @@
 //! `tests/replay-route.test.ts` et de la part serveur de
 //! `tests/replay-watch.test.ts`. Là où Node remplace `fetch` ou `findReplay`,
 //! les requêtes partent ici vers le faux site (hôte d'origine dans
-//! `x-upstream-host`). L'application Node (files de traduction) est simulée
-//! elle aussi : on y lit les appels de `POST /api/internal/replays`.
+//! `x-upstream-host`). La file de traduction est la vraie, avec un exécuteur
+//! simulé qui ne rend jamais la main : on y lit les matchs mis en file.
 //!
 //! Les analyseurs sont aussi comparés aux sorties du code TypeScript
 //! (`fixtures/bv.expected.json`, produit par `node-fixtures-bv.mts`).
+
+#[path = "helpers/media_kit.rs"]
+mod media_kit;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -17,7 +20,7 @@ use axum::response::Response;
 use basketland_server::bv::{self, Bv, ListingEntry, ReplayMatch};
 use basketland_server::okru::parse_ok_embed;
 use basketland_server::replay::{self, Replays};
-use basketland_server::state::AppState;
+use basketland_server::state::{AppState, Media};
 use basketland_server::video::testkit::{embed_html_with, signed_master, signed_mp4};
 use basketland_server::video::{TestConfig, Video, TEST_HOST_HEADER};
 use basketland_server::{app, auth, db, proxy};
@@ -112,43 +115,8 @@ async fn serve(router: axum::Router) -> String {
     format!("http://{addr}")
 }
 
-/// Fausse application Node : enregistre les appels internes (jeton, corps).
-#[derive(Default)]
-struct FakeNode {
-    calls: Mutex<Vec<(Option<String>, Value)>>,
-}
-
-impl FakeNode {
-    fn calls(&self) -> Vec<(Option<String>, Value)> {
-        self.calls.lock().unwrap().clone()
-    }
-}
-
-async fn node_handler(State(n): State<Arc<FakeNode>>, req: Request) -> Response {
-    let path = req.uri().path().to_string();
-    let auth = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let b = req.into_body().collect().await.unwrap().to_bytes();
-    if path != replay::NODE_REPLAYS_PATH {
-        return Response::builder().status(404).body(Body::empty()).unwrap();
-    }
-    n.calls
-        .lock()
-        .unwrap()
-        .push((auth, serde_json::from_slice(&b).unwrap_or(Value::Null)));
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"ok":true}"#))
-        .unwrap()
-}
-
 struct H {
     f: Arc<Fake>,
-    node: Arc<FakeNode>,
-    node_url: String,
     video: Video,
     bv: Bv,
 }
@@ -163,26 +131,13 @@ async fn harness() -> H {
             .with_state(f.clone()),
     )
     .await;
-    let node = Arc::new(FakeNode::default());
-    let node_url = serve(
-        axum::Router::new()
-            .fallback(node_handler)
-            .with_state(node.clone()),
-    )
-    .await;
     let video = Video::for_tests(TestConfig {
         upstream: Some(url),
         env: HashMap::new(),
     });
     // Pas d'attente de 2 s entre deux pages (BV_RATE_MS=0 côté Node).
     let bv = Bv::with_rate(video.clone(), 0.0);
-    H {
-        f,
-        node,
-        node_url,
-        video,
-        bv,
-    }
+    H { f, video, bv }
 }
 
 const MONTHS: [&str; 12] = [
@@ -1062,16 +1017,39 @@ struct R {
     h: H,
     b: Base,
     replays: Replays,
+    media: Media,
 }
 
 impl R {
     fn app(&self) -> axum::Router {
         app(AppState {
             db: self.b.db.clone(),
-            upstream: proxy::Upstream::new(&self.h.node_url),
+            upstream: proxy::Upstream::new("http://127.0.0.1:9"),
             video: self.h.video.clone(),
             replays: self.replays.clone(),
+            media: self.media.clone(),
         })
+    }
+
+    /// Matchs en cours de traduction ou en file.
+    fn translating(&self) -> Vec<i64> {
+        let a = self.media.commentary.activity();
+        a.running
+            .map(|r| r.match_id)
+            .into_iter()
+            .chain(a.queued)
+            .collect()
+    }
+
+    /// Attend (2 s au plus) qu'un match soit mis en file de traduction.
+    async fn wait_translating(&self) -> Vec<i64> {
+        for _ in 0..100 {
+            if !self.translating().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        self.translating()
     }
 
     async fn send(
@@ -1126,7 +1104,13 @@ async fn route_harness(wait_ms: u64) -> R {
     // Match terminé il y a peu, sans replay, jamais vérifié.
     insert_match(&b, ID, Utc::now() - Days::hours(3));
     let replays = Replays::with_wait(h.bv.clone(), wait_ms);
-    R { h, b, replays }
+    let media = media_kit::test_media(&b.db, &h.video);
+    R {
+        h,
+        b,
+        replays,
+        media,
+    }
 }
 
 /// Le replay du match est publié (HLS, 8033 s, ok.ru/777777).
@@ -1207,7 +1191,7 @@ async fn replay_garde_fous() {
     );
     // Aucune recherche lancée.
     assert!(r.h.f.fetched().is_empty());
-    assert!(r.h.node.calls().is_empty());
+    assert!(r.translating().is_empty());
 }
 
 #[tokio::test]
@@ -1290,11 +1274,8 @@ async fn replay_trouve_enregistre_et_traduction_en_file() {
         ),
         (json!(1), json!("777777"), json!("hls"))
     );
-    // Node met la traduction de ce match en tête de file (jeton d'ingestion).
-    assert_eq!(
-        r.h.node.calls(),
-        vec![(Some(format!("Bearer {TOKEN}")), json!({ "match_id": ID }))]
-    );
+    // Traduction de ce match en tête de file (`prioritizeFoundReplay`).
+    assert_eq!(r.wait_translating().await, vec![ID]);
 }
 
 #[tokio::test]
@@ -1322,7 +1303,7 @@ async fn replay_pas_encore_publie() {
         "Pas encore de replay : pas encore publié sur le site des replays."
     );
     assert_eq!(r.b.video(ID)["checked"], true);
-    assert!(r.h.node.calls().is_empty());
+    assert!(r.translating().is_empty());
 }
 
 #[tokio::test]
@@ -1456,13 +1437,7 @@ async fn replay_recherche_trop_longue_202_puis_enregistree() {
         ["video", "checked", "pending", "message"]
     );
     // La recherche continue : replay enregistré, traduction mise en file.
-    for _ in 0..100 {
-        if !r.h.node.calls().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(r.h.node.calls().len(), 1);
+    assert_eq!(r.wait_translating().await, vec![ID]);
     assert_eq!(r.b.video(ID)["ok_id"], "777777");
 }
 
@@ -1485,7 +1460,7 @@ async fn ingest_sync_videos_en_rust() {
         json!({ "ok": true, "results": { "sync-videos": { "ok": true, "detail": "LAL@LAC: ok.ru/777777 hls (8033s)" } } })
     );
     // Comme côté Node : `runJob('sync-videos')` ne met rien en file.
-    assert!(r.h.node.calls().is_empty());
+    assert!(r.translating().is_empty());
 }
 
 #[tokio::test]
@@ -1493,6 +1468,7 @@ async fn chemins_internes_de_node_jamais_relayes() {
     let r = route_harness(20_000).await;
     for p in [
         "/api/internal/replays",
+        "/api/internal/page-state",
         "/api/%69nternal/replays",
         "//api/internal/replays/",
     ] {
@@ -1504,19 +1480,4 @@ async fn chemins_internes_de_node_jamais_relayes() {
         let (s, _, _) = r.send(req).await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{p}");
     }
-    assert!(r.h.node.calls().is_empty());
-}
-
-#[tokio::test]
-async fn signal_a_node_apres_le_job() {
-    let h = harness().await;
-    let up = proxy::Upstream::new(&h.node_url);
-    replay::notify_node(&up, None).await.unwrap();
-    assert_eq!(
-        h.node.calls(),
-        vec![(Some(format!("Bearer {TOKEN}")), json!({}))]
-    );
-    // Node absent : erreur, jamais de panique.
-    let down = proxy::Upstream::new("http://127.0.0.1:9");
-    assert!(replay::notify_node(&down, Some(1)).await.is_err());
 }

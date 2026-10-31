@@ -17,13 +17,15 @@ use std::future::Future;
 use std::sync::Mutex;
 
 /// Jobs lancés par le cron Rust, que le planificateur de Node saute
-/// (`BL_RUST_JOBS`). Analyses et traductions restent à Node.
-pub const RUST_JOBS: [&str; 5] = [
+/// (`BL_RUST_JOBS`) : tous, analyses vidéo et pré-traductions comprises.
+pub const RUST_JOBS: [&str; 7] = [
     "sync-schedule",
     "sync-season",
     "sync-stats",
     "sync-videos",
     "sync-subtitles",
+    "analyses",
+    "commentaries",
 ];
 
 /// Résultat d'un job (`{ ok, detail }`).

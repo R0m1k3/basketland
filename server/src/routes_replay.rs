@@ -25,6 +25,16 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::Value;
 
+/// Replay trouvé : traduction de ce match en tête de file (`prioritizeFoundReplay`).
+fn found_hook(st: &AppState) -> impl FnOnce(i64) + Send + 'static {
+    let (db, media) = (st.db.clone(), st.media.clone());
+    move |id| {
+        tokio::task::spawn_blocking(move || {
+            crate::scheduler::prioritize_found_replay(&db, &media, id)
+        });
+    }
+}
+
 pub async fn replay(
     State(st): State<AppState>,
     Path(raw): Path<String>,
@@ -73,7 +83,7 @@ pub async fn replay(
         }
         let (status, body) = match st
             .replays
-            .request_replay_check(&st.db, &st.upstream, m)
+            .request_replay_check(&st.db, found_hook(&st), m)
             .await
         {
             Ok(r) => r,

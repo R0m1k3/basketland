@@ -72,8 +72,8 @@ function resultMessage(r: ReplaySearchResult, video: MatchDto['video']): string 
  * Replay trouvé à la demande : traduction des commentaires de ce match en
  * tête de file (la fonction respecte la configuration et le backoff des
  * échecs), sauf si la traduction automatique est désactivée (clic
- * « Sous-titrer ce match »). Appelé ici, ou par le serveur Rust
- * (POST /api/internal/replays) quand c'est lui qui sert la recherche.
+ * « Sous-titrer ce match »). Équivalent Rust : `prioritize_found_replay`
+ * (server/src/scheduler.rs).
  * Renvoie true si la mise en file a été tentée sans erreur.
  */
 export function prioritizeFoundReplay(matchId: number): boolean {

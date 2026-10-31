@@ -1,5 +1,5 @@
 //! Requêtes de `db.ts` propres à l'analyse vidéo et au calage manuel
-//! (étape 7, non branchées) : matchs à analyser, ancres, offsets, profil
+//! (étape 7) : matchs à analyser, ancres, offsets, profil
 //! audio — mêmes requêtes et mêmes valeurs liées que Node (nombres liés en
 //! réels, comme `node:sqlite`).
 

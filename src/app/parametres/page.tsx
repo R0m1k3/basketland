@@ -9,7 +9,7 @@ import UsersAdmin from '@/components/settings/UsersAdmin';
 import VfModeSettings from '@/components/settings/VfModeSettings';
 import { currentSession } from '@/lib/authServer';
 import { listUsers } from '@/lib/db';
-import { dubDisabledReason } from '@/lib/dub';
+import { loadMediaState } from '@/lib/mediaState';
 import { autoTranslateEnabled, minimaxSettingsView, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView, vfMode } from '@/lib/settings';
 import { PARIS_TZ } from '@/lib/time';
 import { appVersion } from '@/lib/version';
@@ -82,7 +82,7 @@ export default async function SettingsPage() {
             Traduction des commentaires
           </SectionTitle>
           <AutoTranslateSettings initial={autoTranslateEnabled()} />
-          <VfModeSettings initial={vfMode()} voiceDisabledReason={await dubDisabledReason()} />
+          <VfModeSettings initial={vfMode()} voiceDisabledReason={(await loadMediaState({ dub: true })).dub_disabled_reason} />
           <MiniMaxSettings initial={minimaxSettingsView()} />
           <OpenAiSettings initial={openAiSettingsView()} placeholderModel={OPENAI_MODEL_PLACEHOLDER} />
         </section>

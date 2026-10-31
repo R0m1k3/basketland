@@ -26,6 +26,7 @@ import SpoilerToggle from '@/components/ui/SpoilerToggle';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { IconArrowRight, IconChevronLeft, IconChevronRight, IconClose } from '@/components/ui/Icons';
 import { spoilerMode } from '@/components/ui/spoilers';
+import { loadMediaState } from '@/lib/mediaState';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Calendrier' };
@@ -41,6 +42,7 @@ export default async function CalendarPage({ searchParams }: { searchParams: SP 
     return Array.isArray(v) ? v[0] : v;
   };
   const spoilers = await spoilerMode();
+  await loadMediaState(); // match en cours de traduction (VF des cartes), lu avant les requêtes
   const today = todayKey();
   const teamParam = one('team')?.toUpperCase();
   const team = teamParam && isNbaTeam(teamParam) ? teamParam : undefined;

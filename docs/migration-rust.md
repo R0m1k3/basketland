@@ -46,11 +46,11 @@ navigateur ──► basketland-server (Rust, :3012)
 | 3 | Comptes : `/api/auth/login`, `/logout`, `/setup`, `/api/account/password`, `/api/admin/users` (scrypt au même format, limitation des tentatives) | ✅ |
 | 4 | Proxy vidéo ok.ru `/api/video/[okId]/…` (`master.m3u8`, `playlist.m3u8`, `segment.ts`, `asset.ts`, `file.mp4`) : flux résolu en cache et rafraîchi avant expiration, cache de segments et préchargement, reprise des téléchargements bloqués, mêmes réglages (`SEGMENT_CACHE_MB`, `PREFETCH_*`, `SEGMENT_STALL_MS`, `SEGMENT_RETRIES`) | ✅ |
 | 5a | Synchronisation ESPN (calendrier, saison, stats + play-by-play), VF déterministe (`vf.ts`, `sync.ts`, `regenerateSubtitles`), cron interne de ces jobs, `POST /api/ingest` (`sync-videos` relayé à Node), `/stats` récupérées à la volée en Rust | ✅ |
-| 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus signalés aux files de Node par `POST /api/internal/replays` | ✅ |
-| 6a | Fondations médias en bibliothèque Rust, **pas encore branchées** (Node fait toujours tourner les files) : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
-| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | en cours : file de traduction et doublage portés (non branchés) |
-| 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`, calage de `/api/matches/[id]/sync`) | analyse vidéo/OCR portée (non branchée) : Tesseract natif dans l'image |
-| 8a | Données de chaque page en JSON servies par Rust (`GET /api/pages/…`) : portage de `queries.ts`, `teams.ts`, `linescore.ts`, `version.ts`, `currentSession`, `safeNextPath` ; état des files encore côté Node lu par `POST /api/internal/page-state` | ✅ |
+| 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus mis en file de traduction et d'analyse (par Node jusqu'à 6b, par Rust depuis) | ✅ |
+| 6a | Fondations médias en bibliothèque Rust : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
+| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `activity.ts`) et leurs routes (`/subtitles`, `/subtitles.vtt`, `/commentary`, `/watching`, `/dub`, `/dub/[idx]`, `/api/activity`), branchées ensemble avec l'étape 7 : les trois files tournent dans Rust, avec les jobs de fond | ✅ |
+| 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`, calage de `/api/matches/[id]/sync`) ; Tesseract natif dans l'image | ✅ |
+| 8a | Données de chaque page en JSON servies par Rust (`GET /api/pages/…`) : portage de `queries.ts`, `teams.ts`, `linescore.ts`, `version.ts`, `currentSession`, `safeNextPath` ; état des files lu dans les services Rust | ✅ |
 | 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export React) servis par Rust (règles d'accès des pages comprises), migrations SQL en Rust, Node retiré de l'image | à faire |
 
 ## Développement
@@ -84,15 +84,15 @@ Le cron Rust lance `sync-season` (base de moins de 50 matchs, 2 s après le
 démarrage), `sync-schedule` (toutes les 15 min, dès 5 s), `sync-stats`
 (5 min, dès 60 s) et `sync-subtitles` (60 min, dès 10 min), avec le même
 journal `ingest_log` et la même règle « déjà en cours » que Node. Il pose
-`BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles`
-pour l'application Node, dont le planificateur saute alors ces jobs et garde
-les siens (analyses, traductions). Node lancé à part
-(`BL_NODE_CMD=` vide) : poser soi-même `BL_RUST_JOBS` pour éviter que les
-jobs tournent deux fois.
+`BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles,analyses,commentaries`
+pour l'application Node, dont le planificateur saute alors ces jobs (depuis
+l'étape 6b, il n'en lance plus aucun : `analyses` et `commentaries` sont les
+mises en file de fond des analyses vidéo et des pré-traductions, voir plus
+bas). Node lancé à part (`BL_NODE_CMD=` vide) : poser soi-même
+`BL_RUST_JOBS` pour éviter que les jobs tournent deux fois.
 
-Node garde ses propres appels à `ingestMatchDetails` et `regenerateSubtitles`
-(analyse vidéo, ancrage manuel, replay trouvé) : les deux implémentations
-écrivent les mêmes lignes. Vérifié contre Node : parseurs ESPN, VF et
+`ingestMatchDetails` et `regenerateSubtitles` sont aussi appelés par
+l'analyse vidéo et l'ancrage manuel, servis par Rust depuis l'étape 6b. Vérifié contre Node : parseurs ESPN, VF et
 sous-titres sur les captures réelles (`server/tests/fixtures/*.expected.json`,
 produits par le code TypeScript), et `sync-schedule` + `sync-stats` en direct
 sur deux copies d'une même base (tables identiques à l'octet).
@@ -111,13 +111,14 @@ basketball-video au même rythme (`BV_RATE_MS`), cache des listes par saison
 minute), un seul scraping par match à la fois (job et demandes partagent la
 recherche), embed ok.ru lu par le client du proxy vidéo (étape 4).
 
-Les files de traduction et d'analyse restent côté Node (étapes 6b et 7). Un
-replay qui vient d'apparaître (ou de passer en HLS) leur est signalé par
-`POST /api/internal/replays`, appel interne avec le jeton d'ingestion :
-`{}` après un passage du job qui en a trouvé (`queueNewReplayWork`, même
-ligne `[cron] nouveaux replays : …` qu'avant), `{ match_id }` après une
-recherche à la demande (`prioritizeFoundReplay`). Le serveur Rust ne relaie
-jamais `/api/internal/…` depuis l'extérieur (404). Vérifié contre Node :
+Un replay qui vient d'apparaître (ou de passer en HLS) est mis en file :
+après un passage du job qui en a trouvé, traductions et analyses des
+replays récents (`queueNewReplayWork`, même ligne `[cron] nouveaux replays :
+…` que Node) ; après une recherche à la demande, traduction de ce match en
+tête de file (`prioritizeFoundReplay`). Jusqu'à l'étape 6b, ces files
+tournaient dans Node, prévenu par un appel interne (`POST
+/api/internal/replays`, supprimé depuis) ; le serveur Rust ne relaie jamais
+`/api/internal/…` depuis l'extérieur (404). Vérifié contre Node :
 analyseurs sur les captures réelles et des cas synthétiques
 (`server/tests/fixtures/bv.expected.json`, produit par
 `server/tests/node-fixtures-bv.mts`), et deux passages de `sync-videos` en
@@ -128,12 +129,11 @@ régénérés et `ingest_log` identiques.
 
 Les modules du traitement des médias sont portés en bibliothèque
 (`server/src/media/`, voir `media/mod.rs` pour la correspondance avec les
-fichiers TypeScript) mais **aucune route ni aucun job ne les appelle encore** :
-les files de traduction, de doublage et d'analyse partagent un état en mémoire
-(spectateurs, accès au GPU, son complet extrait, activité) et seront basculées
-ensemble (étapes 6b et 7). Seule `GET/POST /api/admin/settings` est servie par
-Rust : elle ne fait que lire et écrire la table `settings`, que Node relit à
-chaque usage (`server/src/settings.rs`, `routes_settings.rs`).
+fichiers TypeScript), utilisés par les files de traduction, de doublage et
+d'analyse (étapes 6b et 7), qui partagent un état en mémoire (spectateurs,
+accès au GPU, son complet extrait, activité). `GET/POST /api/admin/settings`
+est servie par Rust : elle ne fait que lire et écrire la table `settings`,
+relue à chaque usage (`server/src/settings.rs`, `routes_settings.rs`).
 
 Vérifié contre Node : sorties du code TypeScript (`server/tests/node-fixtures-media.mts`
 → `fixtures/media.expected.json`, 478 cas) — sous-titres, noms des joueurs,
@@ -148,7 +148,59 @@ comparé en direct (Node sur 127.0.0.1:3013, Rust sur 3012, même base) : 31
 requêtes (lecture, écritures valides, chaque erreur de validation, accès,
 origine, Content-Type), mêmes statuts, corps et lignes écrites.
 
-### File de traduction (étape 6b, non branchée)
+### Branchement des files médias (étapes 6b et 7)
+
+Les trois files tournent dans le serveur Rust, un service de chaque par
+processus (`state::Media` dans `AppState`, construit au démarrage) : la
+traduction (`Commentary`), le doublage (`Dub`, branché sur la traduction par
+ses crochets) et l'analyse vidéo (`Analysis`, mêmes spectateurs et même
+horloge que la traduction), le doublage lisant l'activité de l'analyse (il ne
+prend pas le GPU d'une analyse en cours). Node ne traduit, ne double et
+n'analyse plus rien.
+
+- **Routes** (`server/src/routes_media.rs`, session exigée) :
+  `GET /api/matches/[id]/subtitles?t=` et `/subtitles.vtt` (export WebVTT,
+  `toWebVtt` porté), `GET`/`POST /commentary`, `POST /watching`,
+  `GET`/`POST /dub`, `GET /dub/[idx]` (Range simple), `GET`/`POST /sync`
+  (`sync_route`, étape 7) et `GET /api/activity` (`activity.ts` porté dans
+  `server/src/activity.rs`). Autres méthodes relayées à Node (405 de Next).
+- **Jobs** (`server/src/cron.rs`, `server/src/scheduler.rs`) : mises en file
+  de fond des analyses vidéo (10 min, dès 4 min) et des pré-traductions
+  (10 min, dès 6 min), seulement avec la traduction automatique et dans la
+  fenêtre de nuit (`queueRecentWork`), mêmes journaux ; replays apparus mis
+  en file aussitôt (`queueNewReplayWork`, `prioritizeFoundReplay`). Node les
+  saute (`analyses`, `commentaries` dans `BL_RUST_JOBS`).
+- **Pages encore rendues par Node** (jusqu'à l'étape 8b) : l'accueil,
+  `/matchs`, `/equipes`, `/equipes/[abbr]` et `/parametres` affichent l'état
+  des files (activité, match en cours de traduction, raisons de
+  désactivation). Elles le lisent chez Rust, `POST /api/internal/media-state`
+  (jeton d'ingestion ; corps `{ dub }`, réponse `{ running_match_id,
+  activity, commentary_disabled_reason, dub_disabled_reason }`), par
+  `loadMediaState()` (`src/lib/mediaState.ts`) avant de se calculer ;
+  `BL_RUST_URL` (posé par `server/src/node.rs`) donne l'adresse du serveur
+  Rust. Sans `BL_RUST_URL` (Node lancé seul), l'état est celui des files de
+  Node. Les pages servies en JSON par Rust (`/api/pages/…`) lisent les
+  services directement (`routes_pages::media_state`).
+- Appels internes supprimés : `POST /api/internal/replays` et
+  `POST /api/internal/page-state` (Node), toujours en 404 depuis l'extérieur.
+
+Vérifié contre Node en direct : Node (seul, sur 127.0.0.1:3013) et Rust
+(sur 3012) sur deux copies d'une même base (fixture des pages, plus des
+sous-titres et un doublage avec ses fichiers), mêmes 173 requêtes envoyées
+aux deux (accès, chaque erreur de validation, sous-titres avec et sans `t`,
+exports WebVTT, statuts, manifestes, tronçons doublés et plages Range,
+lancements et relances, arrêt et reprise du doublage, signes de vie,
+activité, calage, méthodes non servies), une fois traduction non configurée
+et une fois configurée (travaux réellement lancés puis en échec réseau) :
+statuts, en-têtes utiles et corps identiques à l'octet (seules les dates
+d'écriture du calage diffèrent), mêmes journaux des travaux. Pages de Node
+lancées par le serveur Rust : état des files lu chez Rust (spectateur vu par
+l'accueil, raison du doublage sur la page Paramètres). Tests :
+`tests/media_routes.rs` (routes, export WebVTT, plages, mises en file de
+fond), `tests/pages.rs` (état des pages, `media-state`), `tests/replays.rs`
+(replay trouvé → traduction en tête de file).
+
+### File de traduction (étape 6b)
 
 `commentary.ts` est porté en bibliothèque (`server/src/media/commentary/`,
 requêtes des tables de la traduction dans `server/src/commentary_db.rs`) :
@@ -163,8 +215,7 @@ préemption, fiche quittée avec `viewerGone` / `nudgeCommentaryQueue`,
 lecture, rattrapage des lignes restées en anglais, publication), statuts,
 sous-titres servis et activité. Mêmes variables (`COMMENTARY_*`,
 `WHISPER_PROMPT`, `WHISPER_HOTWORDS`…), mêmes défauts et bornes, mêmes
-journaux. **Rien ne l'appelle encore** : Node fait toujours tourner sa file ;
-les routes médias, le cron et `AppState` seront basculés ensemble.
+journaux. Branchée avec les autres files (voir plus haut).
 
 Le service `Commentary` (un par processus, partagé par `Clone`, dans un
 runtime Tokio) se construit avec la base et le proxy vidéo
@@ -199,7 +250,7 @@ ordre des clés compris). Cas de `tests/commentary-queue.test.ts` et
 `tests/commentary-ondemand.test.ts` portés (`tests/commentary.rs`), son
 complet découpé par le vrai ffmpeg.
 
-### Doublage (étape 6b, porté, non branché)
+### Doublage (étape 6b)
 
 `dub.ts` est porté en bibliothèque (`server/src/media/dub/`, requêtes des
 tables `dub_tracks` et `dub_chunks` dans `server/src/dub_db.rs`,
@@ -218,8 +269,7 @@ chargé au premier besoin (`__dubEngine`, téléchargement des modèles hors GPU
 Mêmes variables (`DUB_DISABLED`, `DUB_SPEAKER_SIM`, `DUB_FEMALE_PROB`,
 `DUB_FEMALE_F0`, `DUB_MIN_NEW_SPEAKER_SEC`, `DUB_MAX_SPEAKERS`,
 `DUB_TIMEOUT_MS`, `DUB_REPUMP_MS`, `FFMPEG_PATH`), mêmes défauts et bornes,
-mêmes journaux. **Rien ne l'appelle encore** : Node fait toujours tourner sa
-file ; les routes médias, le cron et `AppState` seront basculés ensemble.
+mêmes journaux. Branché avec les autres files (voir plus haut).
 
 Le service `Dub` (un par processus, partagé par `Clone`, dans un runtime
 Tokio) se construit sur le service de traduction : `Dub::new(commentary,
@@ -243,17 +293,15 @@ video)`. Il partage sa base, sa table des spectateurs et son horloge, et
 | `release_gpu_for_translation(max_ms)`, `wants_audio(id)` | `releaseGpuForTranslation`, `__dubWantsAudio` | crochets de `Commentary` |
 | `run_dub(job, progress, signal, deps, ctl)` | `runDub` | exécuteur par défaut |
 | `set_runner`, `runner_with(deps)`, `set_engine(DubEngine)`, `idle` | `__setDubRunnerForTests`, `viaQueue`, `__setDubEngineForTests`, `__dubIdle` | tests |
-| `set_analysis_activity(Some(f))` | `analysisActivity` (import d'`analysis.ts`) | **à fournir par l'étape 7** |
+| `set_analysis_activity(Some(f))` | `analysisActivity` (import d'`analysis.ts`) | `state::Media::wire` (activité de `Analysis`) |
 
-Crochet de l'analyse vidéo : `analysis.ts` n'est pas encore porté (étape 7).
-Le doublage lit son activité par `Dub::set_analysis_activity(Some(Arc<dyn
+Crochet de l'analyse vidéo : le doublage lit son activité par `Dub::set_analysis_activity(Some(Arc<dyn
 Fn() -> AnalysisActivity>))` : `AnalysisActivity { running: [AnalysisRun {
 match_id, phase, done, total }], queued }`, comme `analysisActivity()` ; une
 analyse dont la phase est « en pause pendant la lecture » n'occupe pas le
 GPU. Sans crochet (défaut), aucune analyse ne tourne : le doublage ne cède la
-place qu'aux traductions. Tant que les analyses tournent dans Node, le
-branchement doit soit porter l'analyse en même temps, soit relayer son
-activité (sinon le doublage Rust et une analyse Node se partageraient la carte).
+place qu'aux traductions. Branché par `state::Media::wire` sur l'activité
+du service `Analysis`.
 
 Vérifié contre Node (`server/tests/node-fixtures-dub.mts` →
 `fixtures/dub.expected.json`, `tests/dub_node.rs`) : fonctions pures (moments
@@ -307,16 +355,13 @@ renouvellement glissant du cookie), sauf `/api/pages/session`.
 | `GET /api/pages/classement` | `/classement` | `{ conferences }` : cache de 30 min, sinon ESPN, cache périmé si ESPN échoue, `[]` faute de mieux (`loadStandings`). Titre fixe « Classement ». |
 | `GET /api/pages/parametres` | `/parametres` | `{ user, admin, admin_data, version: {commit, builtAt}, version_text }` ; `admin_data` (administrateur seul, sinon null) = `{ users, auto_translate, vf_mode, voice_disabled_reason, minimax, openai, openai_model_placeholder }`. Sans session : 401 (la page renvoyait vers `/login?next=/parametres`). |
 
-Ce que tiennent encore les files de Node — match en cours de traduction
-(`commentaryRunningMatchId`, état de la VF dans `toViews`), `currentActivity()`,
-`commentaryDisabledReason()`, `dubDisabledReason()` — n'est pas réimplémenté :
-Rust le lit par `POST /api/internal/page-state` (jeton d'ingestion, chemin
-public pour le middleware de Node, jamais relayé depuis l'extérieur), corps
-`{ dub }` (`dub: true` pour la page Paramètres d'un administrateur seulement).
-Appelé par `home`, `matchs`, `equipes`, `equipes/{abbr}` et `parametres`
-(admin) ; Node injoignable : **502** `{ error: "application Node injoignable
-(démarrage en cours ?)" }`. Le branchement des médias en Rust remplacera cet
-appel par la lecture directe des services Rust (`routes_pages::fetch_node_state`).
+L'état des files — match en cours de traduction (`commentaryRunningMatchId`,
+état de la VF dans `toViews`), `currentActivity()`, `commentaryDisabledReason()`,
+`dubDisabledReason()` (page Paramètres d'un administrateur seulement) — est
+lu dans les services Rust (`routes_pages::media_state`) par `home`, `matchs`,
+`equipes`, `equipes/{abbr}` et `parametres`. Jusqu'à l'étape 6b, ces files
+tournaient dans Node et Rust lisait leur état par un appel interne
+(`POST /api/internal/page-state`, supprimé depuis).
 
 À savoir pour 8b : côté Node, `defaultCalendarDay` ne prend jamais la branche
 « le matin » (`Number('20 h')` vaut NaN : `Intl` en français écrit l'heure
@@ -344,14 +389,13 @@ de Node (`INGEST_TOKEN=… npx -y tsx server/tests/node-fixtures-pages.mts
 --live <base> <url de Rust> <jeton de session> <url de Node>`, l'état des
 files étant lu chez Node comme le fait Rust).
 
-### Analyse vidéo et OCR (étape 7, non branchée)
+### Analyse vidéo et OCR (étape 7)
 
 `ocr.ts`, `scoreboard.ts` et `analysis.ts` sont portés en bibliothèque
 (`server/src/media/ocr.rs`, `scoreboard.rs`, `analysis.rs`, requêtes dans
 `server/src/analysis_db.rs`), ainsi que les gestionnaires de
-`GET`/`POST /api/matches/[id]/sync` (`server/src/sync_route.rs`). **Rien ne
-les appelle encore** : Node fait toujours tourner sa file d'analyse et sert la
-route ; ils seront basculés avec les autres files médias.
+`GET`/`POST /api/matches/[id]/sync` (`server/src/sync_route.rs`), branchés
+avec les autres files médias (voir « Branchement des files médias »).
 
 - `ocr.rs` : parseur du bandeau, scores du play-by-play, intervalle d'un
   chrono arrêté, `selectConsistentObservations`, extraction d'images et
@@ -391,7 +435,7 @@ machine chargée (mesuré : 68 s au lieu de 0,5 s pour une bande en psm 11) ;
 libgomp ne lit cette limite qu'au chargement du processus, elle doit donc venir
 de l'environnement (à poser aussi hors Docker).
 
-API que le branchement appellera :
+API appelée par le branchement :
 
 | Appelant | Rust | Équivalent Node |
 |----------|------|-----------------|

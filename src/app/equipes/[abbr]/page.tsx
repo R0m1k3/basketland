@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { CSSProperties } from 'react';
 import { cachedStandings, isUpcoming, latestSeason, teamGames, todayKey, type GameView } from '@/lib/queries';
+import { loadMediaState } from '@/lib/mediaState';
 import { isNbaTeam, teamInfo, teamLogoUrl } from '@/lib/teams';
 import { seasonLabel } from '@/lib/time';
 import GameRow from '@/components/schedule/GameRow';
@@ -88,6 +89,7 @@ export default async function TeamPage({ params }: { params: Promise<{ abbr: str
   const abbr = raw.toUpperCase();
   if (!ABBR_RE.test(abbr)) notFound();
 
+  await loadMediaState(); // match en cours de traduction (VF des cartes), lu avant les requêtes
   const all = teamGames(abbr);
   if (!all.length && !isNbaTeam(abbr)) notFound();
 

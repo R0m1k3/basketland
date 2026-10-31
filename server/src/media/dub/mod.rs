@@ -1,7 +1,6 @@
 //! Doublage français des commentaires (équivalent de `src/lib/dub.ts`) —
-//! porté en Rust à l'étape 6b, **pas encore branché** : aucune route ni
-//! aucun job ne le construit ; Node fait toujours tourner sa file tant que
-//! les routes médias ne sont pas basculées ensemble.
+//! porté en Rust à l'étape 6b ; le service est construit au démarrage
+//! (`state::Media`) et servi par `routes_media`.
 //!
 //! Les sous-titres traduits ([`super::commentary`]) sont dits par des voix
 //! de synthèse ([`super::voice_ai`], [`super::voice_minimax`]), tronçon par

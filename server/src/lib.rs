@@ -6,6 +6,7 @@
 //! (voir `docs/migration-rust.md`).
 
 pub mod accounts;
+pub mod activity;
 pub mod analysis_db;
 pub mod api;
 pub mod auth;
@@ -35,10 +36,12 @@ pub mod routes;
 pub mod routes_auth;
 pub mod routes_ingest;
 pub mod routes_match;
+pub mod routes_media;
 pub mod routes_pages;
 pub mod routes_replay;
 pub mod routes_settings;
 pub mod routes_video;
+pub mod scheduler;
 pub mod settings;
 pub mod state;
 pub mod sync_route;
@@ -121,6 +124,50 @@ pub fn app(state: state::AppState) -> Router {
         .route(
             "/api/ingest",
             post(routes_ingest::ingest).fallback(proxy::forward),
+        )
+        // Files médias (étapes 6b et 7).
+        .route(
+            "/api/matches/{id}/subtitles",
+            get(routes_media::subtitles).fallback(proxy::forward),
+        )
+        .route(
+            "/api/matches/{id}/subtitles.vtt",
+            get(routes_media::subtitles_vtt).fallback(proxy::forward),
+        )
+        .route(
+            "/api/matches/{id}/commentary",
+            get(routes_media::commentary_get)
+                .post(routes_media::commentary_post)
+                .fallback(proxy::forward),
+        )
+        .route(
+            "/api/matches/{id}/watching",
+            post(routes_media::watching).fallback(proxy::forward),
+        )
+        .route(
+            "/api/matches/{id}/dub",
+            get(routes_media::dub_get)
+                .post(routes_media::dub_post)
+                .fallback(proxy::forward),
+        )
+        .route(
+            "/api/matches/{id}/dub/{idx}",
+            get(routes_media::dub_chunk).fallback(proxy::forward),
+        )
+        .route(
+            "/api/matches/{id}/sync",
+            get(routes_media::sync_get)
+                .post(routes_media::sync_post)
+                .fallback(proxy::forward),
+        )
+        .route(
+            "/api/activity",
+            get(routes_media::activity).fallback(proxy::forward),
+        )
+        // État des files pour les pages de Node (jeton d'ingestion).
+        .route(
+            routes_media::MEDIA_STATE_PATH,
+            post(routes_media::media_state).fallback(relay),
         )
         // Données des pages (étape 8a) ; seule `/api/pages/session` est publique.
         .route(
