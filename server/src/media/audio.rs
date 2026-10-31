@@ -430,25 +430,74 @@ pub async fn extract_hls_chunk_parallel(
     o: &ExtractOptions,
 ) -> Result<String, String> {
     let t0 = std::time::Instant::now();
-    let ts = std::path::PathBuf::from(format!("{out_file}.src.ts"));
+    let src = std::path::PathBuf::from(format!("{out_file}.src.ts"));
     let stats = super::hls_fetch::fetch_range(
         source_url,
         start,
         length,
         &o.headers,
         o.signal.as_ref(),
-        &ts,
+        &src,
     )
     .await?;
+    cut_fetched(&src, stats, t0, start, length, out_file, o, "segment(s)").await
+}
+
+/// Tronçon du son SEUL d'ok.ru (manifeste DASH `mpd_url`, [`super::dash_audio`]) :
+/// fragments AAC téléchargés en parallèle puis découpés sur place. Rend le
+/// résumé du téléchargement (journal).
+pub async fn extract_dash_audio_chunk(
+    mpd_url: &str,
+    start: f64,
+    length: f64,
+    out_file: &str,
+    o: &ExtractOptions,
+) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
+    let src = std::path::PathBuf::from(format!("{out_file}.src.m4a"));
+    let stats = super::dash_audio::fetch_audio_range(
+        mpd_url,
+        start,
+        length,
+        &o.headers,
+        o.signal.as_ref(),
+        &src,
+    )
+    .await?;
+    cut_fetched(
+        &src,
+        stats,
+        t0,
+        start,
+        length,
+        out_file,
+        o,
+        "fragment(s) audio",
+    )
+    .await
+}
+
+/// Découpe exacte du fichier téléchargé `src` (supprimé ensuite) et résumé.
+#[allow(clippy::too_many_arguments)]
+async fn cut_fetched(
+    src: &std::path::Path,
+    stats: super::hls_fetch::FetchStats,
+    t0: std::time::Instant,
+    start: f64,
+    length: f64,
+    out_file: &str,
+    o: &ExtractOptions,
+    unit: &str,
+) -> Result<String, String> {
     let fetched = t0.elapsed().as_secs_f64();
-    let ts_s = ts.to_string_lossy().into_owned();
+    let src_s = src.to_string_lossy().into_owned();
     let cut = ExtractOptions {
         signal: o.signal.clone(),
         timeout: Some(Duration::from_secs(120)),
         ..Default::default()
     };
     let r = extract_chunk(
-        &ts_s,
+        &src_s,
         (start - stats.first_start).max(0.0),
         length,
         out_file,
@@ -456,11 +505,11 @@ pub async fn extract_hls_chunk_parallel(
         true,
     )
     .await;
-    let _ = std::fs::remove_file(&ts);
+    let _ = std::fs::remove_file(src);
     r?;
     let mb = stats.bytes as f64 / 1e6;
     Ok(format!(
-        "{} segment(s), {:.1} Mo en {:.1} s ({:.0} kb/s, {} connexions)",
+        "{} {unit}, {:.2} Mo en {:.1} s ({:.0} kb/s, {} connexions)",
         stats.segments,
         mb,
         fetched,

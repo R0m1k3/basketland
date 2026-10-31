@@ -53,6 +53,7 @@ fn mp4(names: &[&str]) -> Vec<Mp4Source> {
 
 fn stream(variants: Vec<Variant>, mp4: Vec<Mp4Source>) -> StreamInfo {
     StreamInfo {
+        dash_url: None,
         variants,
         mp4,
         duration: None,
@@ -1020,6 +1021,7 @@ async fn route_analyse_en_file_derriere_une_autre() {
 
 fn stream_ok() -> StreamInfo {
     StreamInfo {
+        dash_url: None,
         variants: vec![v("hd", "1280x720", 2.5e6), v("low", "640x360", 6e5)],
         mp4: vec![],
         duration: Some(8000.0),

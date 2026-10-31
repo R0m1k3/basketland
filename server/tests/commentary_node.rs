@@ -117,6 +117,7 @@ fn sous_titres_d_un_troncon_comme_node() {
 
 fn stream_of(v: &Value) -> StreamInfo {
     StreamInfo {
+        dash_url: None,
         variants: v["variants"]
             .as_array()
             .unwrap()

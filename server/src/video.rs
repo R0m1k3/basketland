@@ -436,6 +436,8 @@ pub struct OkStream {
     pub hls_error: bool,
     pub duration: Option<f64>,
     pub poster: Option<String>,
+    /// Manifeste DASH d'ok.ru (son seul disponible), s'il est annoncé.
+    pub dash_url: Option<String>,
 }
 
 pub fn pick_variant<'a>(stream: &'a OkStream, key: Option<&str>) -> Option<&'a Variant> {
@@ -1547,6 +1549,7 @@ impl Inner {
             hls_error,
             duration: embed.duration,
             poster: embed.poster,
+            dash_url: embed.dash_manifest_url,
         })
     }
 

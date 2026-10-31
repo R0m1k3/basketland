@@ -41,6 +41,8 @@ pub struct OkEmbedInfo {
     pub duration: Option<f64>,
     pub poster: Option<String>,
     pub hls_manifest_url: Option<String>,
+    /// Manifeste DASH (`metadataUrl`) : on y trouve le son SEUL (AAC, sans image).
+    pub dash_manifest_url: Option<String>,
     /// MP4 progressifs lisibles (qualités `disallowed` exclues), dans l'ordre d'ok.ru.
     pub mp4: Vec<Mp4Source>,
     pub status: String,
@@ -155,6 +157,7 @@ pub fn parse_ok_embed(html: &str, ok_id: &str) -> OkEmbedInfo {
         duration: None,
         poster: None,
         hls_manifest_url: None,
+        dash_manifest_url: None,
         mp4: Vec::new(),
         status: String::new(),
     };
@@ -176,6 +179,11 @@ pub fn parse_ok_embed(html: &str, ok_id: &str) -> OkEmbedInfo {
                 info.hls_manifest_url =
                     coalesce(md.get("hlsManifestUrl"), md.get("hlsMasterPlaylistUrl"))
                         .map(js_string);
+                info.dash_manifest_url = md
+                    .get("metadataUrl")
+                    .and_then(Value::as_str)
+                    .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
+                    .map(str::to_string);
                 info.mp4 = parse_ok_videos(md.get("videos"));
                 info.duration = movie
                     .and_then(|m| m.get("duration"))
