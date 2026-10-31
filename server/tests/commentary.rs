@@ -1195,3 +1195,123 @@ async fn demandes_concurrentes_dedoublonnees() {
         t.svc.idle().await;
     }
 }
+
+// ------------------------------------------------------------------ recouvrement transcription / traduction
+
+/// Faux transcripteur et traducteur lent, journal partagé des débuts et fins.
+fn timed_fake(translate_ms: u64) -> (CommentaryDeps, Arc<Mutex<Vec<String>>>) {
+    let (mut deps, _) = queue_fake(false, false);
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (inner_t, l1) = (deps.transcribe.clone(), log.clone());
+    deps.transcribe = Arc::new(move |file, prompt, signal| {
+        l1.lock()
+            .unwrap()
+            .push(format!("transcription {}", start_of(&file)));
+        inner_t(file, prompt, signal)
+    });
+    let (inner_m, l2) = (deps.translate.clone(), log.clone());
+    deps.translate = Arc::new(move |lines, context, cfg, o| {
+        let what = lines.first().map(|l| l.en.clone()).unwrap_or_default();
+        l2.lock().unwrap().push(format!("début {what}"));
+        let fut = inner_m(lines, context, cfg, o);
+        let l = l2.clone();
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(translate_ms)).await;
+            let r = fut.await;
+            l.lock().unwrap().push(format!("fin {what}"));
+            r
+        })
+    });
+    (deps, log)
+}
+
+fn published(db: &Db) -> Vec<(f64, String, String)> {
+    db.with(|c| cdb::get_commentary_cues(c, A))
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.start_ts, c.text_en, c.text_fr))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recouvrement_transcription_pendant_la_traduction() {
+    let _g = LOCK.lock().await;
+    // Référence : ordre de Node, un tronçon après l'autre.
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    let (deps, log) = timed_fake(150);
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    let sequential = published(&t.db);
+    assert_eq!(
+        log.lock().unwrap()[..4],
+        [
+            "transcription 0",
+            "début Play number 1 is good.",
+            "fin Play number 1 is good.",
+            "transcription 597"
+        ]
+    );
+
+    // Recouvrement : le tronçon suivant se transcrit pendant la traduction.
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    set_env("COMMENTARY_OVERLAP", "1");
+    let (deps, log) = timed_fake(150);
+    let t0 = std::time::Instant::now();
+    let (r, events) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    let elapsed = t0.elapsed();
+    set_env("COMMENTARY_OVERLAP", "0");
+    assert!(r.unwrap().ok);
+    let log = log.lock().unwrap().clone();
+    let pos = |s: &str| {
+        log.iter()
+            .position(|x| x == s)
+            .unwrap_or_else(|| panic!("{s} : {log:?}"))
+    };
+    assert!(
+        pos("transcription 597") < pos("fin Play number 1 is good."),
+        "{log:?}"
+    );
+    assert!(
+        pos("transcription 1197") < pos("fin Play number 2 is good."),
+        "{log:?}"
+    );
+    // Traductions toujours l'une après l'autre, dans l'ordre des tronçons.
+    assert!(
+        pos("fin Play number 1 is good.") < pos("début Play number 2 is good."),
+        "{log:?}"
+    );
+    assert!(
+        pos("fin Play number 2 is good.") < pos("début Play number 3 is good."),
+        "{log:?}"
+    );
+    // Mêmes sous-titres publiés, piste complète, avancement jusqu'au bout.
+    assert_eq!(published(&t.db), sequential);
+    assert_eq!(t.svc.status(A).to_json()["status"], "ready");
+    let last = events
+        .iter()
+        .rev()
+        .find(|p| p.phase == CommentaryPhase::Traduction)
+        .unwrap();
+    assert_eq!((last.done, last.total), (3.0, 3.0));
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recouvrement_echec_de_traduction() {
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    set_env("COMMENTARY_OVERLAP", "1");
+    let (deps, calls) = queue_fake(false, true);
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    set_env("COMMENTARY_OVERLAP", "0");
+    // L'échec de la traduction du tronçon 1 arrête le travail : rien de publié,
+    // au plus le tronçon suivant transcrit (son résultat reste en cache).
+    assert!(matches!(r, Err(CommentaryError::Service(_))));
+    assert!(published(&t.db).is_empty());
+    let n = calls.lock().unwrap().transcribe.len();
+    assert!((1..=2).contains(&n), "{n}");
+    assert_eq!(t.svc.status(A).to_json()["status"], "none");
+}

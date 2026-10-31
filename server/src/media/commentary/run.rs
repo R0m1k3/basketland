@@ -290,6 +290,26 @@ pub(crate) fn short(e: &str) -> String {
     js::slice_utf16(&jsre!(r"\s+").replace_all(e, " "), 160)
 }
 
+/// Fin d'une traduction lancée en tâche (une panique devient une erreur).
+async fn join_translation(
+    h: tokio::task::JoinHandle<Result<(), CommentaryError>>,
+) -> Result<(), CommentaryError> {
+    match h.await {
+        Ok(r) => r,
+        Err(e) => Err(CommentaryError::Other(format!(
+            "traduction interrompue : {e}"
+        ))),
+    }
+}
+
+/// `COMMENTARY_OVERLAP` (activé par défaut ; `0` le coupe) : le tronçon suivant
+/// est transcrit pendant que le courant se traduit, au lieu d'attendre la fin
+/// de sa traduction (le GPU de la transcription restait sinon inoccupé
+/// pendant chaque lot envoyé au traducteur).
+fn overlap_enabled() -> bool {
+    std::env::var("COMMENTARY_OVERLAP").ok().as_deref() != Some("0")
+}
+
 /// `maxLeadSec` : `COMMENTARY_MAX_LEAD_SEC` (5 min par défaut ; 0 : aucune avance maximale).
 fn max_lead_sec() -> f64 {
     match std::env::var("COMMENTARY_MAX_LEAD_SEC") {
@@ -1107,11 +1127,22 @@ impl Commentary {
         let mut prefetched: HashMap<usize, tokio::task::JoinHandle<Result<(), RunFail>>> =
             HashMap::new();
 
+        // Traduction du tronçon précédent, en cours pendant la transcription du suivant.
+        type Inflight = (usize, tokio::task::JoinHandle<Result<(), CommentaryError>>);
+        let mut inflight: Option<Inflight> = None;
+        // Tronçons faits, plus celui en cours de traduction (jamais choisi deux fois).
+        let taken = |inflight: &Option<Inflight>| {
+            let mut d = locked(&done).clone();
+            if let Some((i, _)) = inflight {
+                d.insert(*i);
+            }
+            d
+        };
         let outcome: Result<bool, RunFail> = async {
             let mut paused = false;
             loop {
                 ctx.check_aborted()?;
-                let plan = next_chunk(&plans, &locked(&done), (ctl.target)()).copied();
+                let plan = next_chunk(&plans, &taken(&inflight), (ctl.target)()).copied();
                 let Some(plan) = plan else { break };
                 if !(ctl.keep_going)() {
                     paused = true;
@@ -1122,14 +1153,14 @@ impl Commentary {
                 let lead = max_lead_sec();
                 if lead > 0.0
                     && ctl.playing.as_ref().is_some_and(|p| p())
-                    && covered_from(&plans, &locked(&done), target, duration) - target >= lead
+                    && covered_from(&plans, &taken(&inflight), target, duration) - target >= lead
                 {
                     pause(env_num_or("COMMENTARY_LEAD_POLL_MS", 5_000.0), &signal).await;
                     continue;
                 }
                 drop(ctx.open_mt());
                 // Pendant ce tronçon, l'audio du suivant probable se télécharge.
-                let mut with_current = locked(&done).clone();
+                let mut with_current = taken(&inflight);
                 with_current.insert(plan.index);
                 if let Some(next) = next_chunk(&plans, &with_current, (ctl.target)()).copied() {
                     if let Entry::Vacant(slot) = prefetched.entry(next.index) {
@@ -1147,7 +1178,22 @@ impl Commentary {
                         ..c
                     })
                     .collect();
-                ctx.translate_and_publish(&plan, cues).await?;
+                // Traductions publiées dans l'ordre : la précédente se termine d'abord.
+                if let Some((_, h)) = inflight.take() {
+                    join_translation(h).await?;
+                }
+                if overlap_enabled() {
+                    let c = ctx.clone();
+                    inflight = Some((
+                        plan.index,
+                        tokio::spawn(async move { c.translate_and_publish(&plan, cues).await }),
+                    ));
+                } else {
+                    ctx.translate_and_publish(&plan, cues).await?;
+                }
+            }
+            if let Some((_, h)) = inflight.take() {
+                join_translation(h).await?;
             }
             // Piste complète : les lignes restées en anglais lors d'un travail
             // précédent sont retentées pendant que le traducteur est chargé.
@@ -1177,6 +1223,11 @@ impl Commentary {
             Ok(paused)
         }
         .await;
+        // Arrêt sur erreur ou interruption : la traduction en cours ne survit pas au travail.
+        if let Some((_, h)) = inflight.take() {
+            h.abort();
+            let _ = h.await;
+        }
         for (_, h) in prefetched.drain() {
             let _ = h.await;
         }

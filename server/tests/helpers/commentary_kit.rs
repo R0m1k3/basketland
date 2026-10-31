@@ -80,6 +80,11 @@ pub fn env_setup() -> tempfile::TempDir {
     }
     std::env::set_var("TRANSCRIBE_URL", "http://gpu.local:8000/v1");
     std::env::set_var("TRANSLATE_URL", "http://gpu.local:11434/v1");
+    // Ordre des appels de Node (transcription puis traduction de chaque
+    // tronçon, l'une après l'autre) : les tests portés de Node et les
+    // comparaisons aux fixtures le supposent. Le recouvrement (par défaut en
+    // production) a ses propres tests (`recouvrement_*` dans commentary.rs).
+    std::env::set_var("COMMENTARY_OVERLAP", "0");
     let dir = tempfile::tempdir().unwrap();
     std::env::set_var("DATA_DIR", dir.path());
     dir

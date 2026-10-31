@@ -32,6 +32,8 @@ pub mod keys {
     /// Traduction des commentaires par MiniMax : '1' (activée) ; modèle texte.
     pub const MINIMAX_TRANSLATE: &str = "minimax_translate";
     pub const MINIMAX_TRANSLATE_MODEL: &str = "minimax_translate_model";
+    /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'nvidia' (Parakeet).
+    pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
 }
 
 /// Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire).
@@ -216,6 +218,23 @@ pub fn vf_mode(s: &Settings) -> &'static str {
         "doublage"
     } else {
         "sous-titres"
+    }
+}
+
+/// Moteurs de transcription embarqués proposés dans les Paramètres.
+pub const TRANSCRIBE_ENGINES: [&str; 2] = ["whisper", "nvidia"];
+
+/// Valeur acceptée pour `transcribeEngine`.
+pub fn is_transcribe_engine(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::String(s)) if TRANSCRIBE_ENGINES.contains(&s.as_str()))
+}
+
+/// Moteur de transcription embarqué : 'nvidia' (Parakeet), sinon 'whisper' (défaut).
+pub fn transcribe_engine(s: &Settings) -> &'static str {
+    if s.get(keys::TRANSCRIBE_ENGINE) == Some("nvidia") {
+        "nvidia"
+    } else {
+        "whisper"
     }
 }
 
@@ -413,6 +432,7 @@ pub fn settings_view(s: &Settings) -> Value {
         "minimax": minimax_settings_view(s),
         "autoTranslate": auto_translate_enabled(s),
         "vfMode": vf_mode(s),
+        "transcribeEngine": transcribe_engine(s),
     })
 }
 

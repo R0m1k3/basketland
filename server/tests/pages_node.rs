@@ -112,7 +112,22 @@ async fn pages_comme_node() {
                 ok(pages::classement(v))
             }
             "parametres" => match &session {
-                Some(s) => ok(pages::parametres(&c, s, &node).unwrap()),
+                Some(s) => {
+                    let mut v = pages::parametres(&c, s, &node).unwrap();
+                    // Réglage ajouté après le retrait de Node (moteur de
+                    // transcription) : absent de la référence TypeScript.
+                    if let Some(a) = v.get_mut("admin_data").and_then(Value::as_object_mut) {
+                        let e = a.shift_remove("transcribe_engine");
+                        assert!(
+                            matches!(
+                                e.as_ref().and_then(Value::as_str),
+                                Some("whisper" | "nvidia")
+                            ),
+                            "{e:?}"
+                        );
+                    }
+                    ok(v)
+                }
                 None => (401, serde_json::json!({ "error": "non connecté" })),
             },
             other => panic!("page inconnue {other}"),

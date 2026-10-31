@@ -66,6 +66,11 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     if body.contains_key("vfMode") && !s::is_vf_mode(body.get("vfMode")) {
         return Err("vfMode invalide (attendu : 'sous-titres' ou 'doublage')".into());
     }
+    if body.contains_key("transcribeEngine")
+        && !s::is_transcribe_engine(body.get("transcribeEngine"))
+    {
+        return Err("transcribeEngine invalide (attendu : 'whisper' ou 'nvidia')".into());
+    }
     if let Some(v) = body.get("minimaxTranslate") {
         let Some(b) = v.as_bool() else {
             return Err("minimaxTranslate invalide (attendu : true ou false)".into());
@@ -87,6 +92,9 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
             .and_then(Value::as_str)
             .unwrap_or_default();
         updates.push((keys::VF_MODE, Some(mode.to_string())));
+    }
+    if let Some(engine) = body.get("transcribeEngine").and_then(Value::as_str) {
+        updates.push((keys::TRANSCRIBE_ENGINE, Some(engine.to_string())));
     }
     Ok(updates)
 }
@@ -169,6 +177,36 @@ mod tests {
                 ("auto_translate", Some("0".into())),
                 ("vf_mode", Some("doublage".into())),
             ])
+        );
+    }
+
+    #[test]
+    fn moteur_de_transcription() {
+        for bad in [
+            json!({"transcribeEngine": "parakeet"}),
+            json!({"transcribeEngine": null}),
+        ] {
+            assert_eq!(
+                plan(bad),
+                Err("transcribeEngine invalide (attendu : 'whisper' ou 'nvidia')".into())
+            );
+        }
+        assert_eq!(
+            plan(json!({"transcribeEngine": "nvidia"})),
+            Ok(vec![("transcribe_engine", Some("nvidia".into()))])
+        );
+        let s = |v: Option<&str>| {
+            crate::settings::Settings::from_pairs(v.map(|v| ("transcribe_engine", v)))
+        };
+        assert_eq!(crate::settings::transcribe_engine(&s(None)), "whisper");
+        assert_eq!(
+            crate::settings::transcribe_engine(&s(Some("nvidia"))),
+            "nvidia"
+        );
+        assert_eq!(crate::settings::transcribe_engine(&s(Some("x"))), "whisper");
+        assert_eq!(
+            crate::settings::settings_view(&s(Some("nvidia")))["transcribeEngine"],
+            "nvidia"
         );
     }
 }

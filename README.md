@@ -189,6 +189,13 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   d'Ollama ; la transcription (Whisper) reste locale. La clé se crée sur
   platform.openai.com et est facturée à l'usage (ce n'est pas l'abonnement
   ChatGPT) ; elle n'est jamais réaffichée en entier.
+- **Moteur de transcription** : dans Paramètres › « Transcription des
+  commentateurs », un administrateur choisit Whisper (par défaut : reçoit la
+  liste des joueurs, les noms propres sont les mieux reconnus) ou NVIDIA
+  Parakeet TDT 0.6B (bien plus rapide sur la carte graphique : la traduction
+  prend plus d'avance sur la lecture ; les noms sont corrigés après coup).
+  Modèle téléchargé au premier usage dans `/data/models`. Vaut pour les
+  prochaines traductions (« Relancer la traduction » refait une piste).
 - **Mot de passe perdu** : depuis le NAS,
 
   ```bash
@@ -446,6 +453,10 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
+| `WHISPER_BEAM_SIZE` | `1` | Largeur du faisceau de Whisper (1 à 10). `1` (décodage glouton) : 1,5 à 2 fois plus rapide que `5`, presque aussi juste. |
+| `PARAKEET_PYTHON` | `/opt/parakeet/bin/python` | Python du moteur « NVIDIA Parakeet » (Paramètres › Transcription des commentateurs). |
+| `PARAKEET_QUANTIZATION` | `auto` | Précision de Parakeet : `auto` (modèle d'origine sur carte NVIDIA, `int8` sur processeur), `int8` ou `fp32`. |
+| `PARAKEET_BATCH_SIZE` | `8` | Passages de parole transcrits ensemble par Parakeet. |
 | `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama (et des voix du doublage, cache Hugging Face `hf/`). |
 | `TRANSLATE_MODEL` | `translategemma:12b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **TranslateGemma 12B** (Q4_K_M, ≈ 8,1 Go), le modèle de traduction de Google (voir plus bas). Alternatives : `gemma4:e4b` (1er du banc d'essai, plus léger), `gemma4:12b`, `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
@@ -458,6 +469,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
 | `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
 | `COMMENTARY_MAX_LEAD_SEC` | `300` (5 min) | Pendant la lecture (position qui avance), la traduction ne prend pas plus d'avance que cela (elle attend). Lecture en pause : aucun plafond, elle va jusqu'au bout du match. `0` : jamais de plafond. |
+| `COMMENTARY_OVERLAP` | `1` | Le tronçon suivant est transcrit pendant que le courant se traduit (la transcription n'attend plus le traducteur). `0` : l'un après l'autre. |
 | `COMMENTARY_FULL_AUDIO` | `1` | Le son de tout le match est extrait en une seule passe dès le début de la traduction ; traduction et doublage en découpent leurs tronçons sur place, sans relire le flux ok.ru pendant la lecture (gels de la vidéo). `0` : extraction tronçon par tronçon. |
 | `COMMENTARY_AUDIO_READRATE` | — | Vitesse maximale de cette extraction, en multiple du temps réel (ffmpeg `-readrate`), si elle gêne la lecture. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
