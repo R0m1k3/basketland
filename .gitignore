@@ -12,3 +12,6 @@ coverage/
 eng.traineddata
 ocr_scan.mjs
 scan_scoreboard.mjs
+
+# Serveur Rust (cargo)
+server/target/

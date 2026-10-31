@@ -41,6 +41,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Serveur Rust (passerelle devant Next.js).
+      - name: Rust tests
+        run: cargo test --manifest-path server/Cargo.toml --locked
+
       # L'image embarque Whisper, Ollama et Qwen3-TTS (torch et bibliothèques
       # CUDA compris) : plusieurs Go. On libère la place des outils
       # préinstallés inutiles (les étapes Node sont déjà passées).

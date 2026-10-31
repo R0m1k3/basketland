@@ -1,0 +1,299 @@
+//! Routes servies par Rust, sur une vraie base SQLite temporaire.
+
+use axum::body::Body;
+use axum::http::{header, Request, StatusCode};
+use basketland_server::{app, auth, db, proxy, state};
+use chrono::{Duration, Utc};
+use http_body_util::BodyExt;
+use rusqlite::Connection;
+use serde_json::Value;
+use tower::ServiceExt;
+
+const SCHEMA: &str = "
+CREATE TABLE matches (
+  id INTEGER PRIMARY KEY, espn_id TEXT UNIQUE NOT NULL, league TEXT NOT NULL DEFAULT 'nba', season INTEGER NOT NULL,
+  season_type TEXT NOT NULL, date_utc TEXT NOT NULL, home_abbr TEXT NOT NULL, home_name TEXT NOT NULL,
+  away_abbr TEXT NOT NULL, away_name TEXT NOT NULL, home_score INTEGER, away_score INTEGER, status TEXT NOT NULL,
+  status_detail TEXT DEFAULT '', period INTEGER DEFAULT 0, clock_display TEXT DEFAULT '', venue TEXT DEFAULT '',
+  broadcast TEXT DEFAULT '', slug TEXT, video_ok_id TEXT, video_duration INTEGER, video_available INTEGER DEFAULT 0,
+  video_checked_at TEXT, stats_synced_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, video_kind TEXT);
+CREATE TABLE ingest_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER DEFAULT 0, detail TEXT DEFAULT '');
+CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, password_hash TEXT NOT NULL);
+CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+";
+
+struct Env {
+    _dir: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+fn setup() -> Env {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("basketland.db");
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch(SCHEMA).unwrap();
+    let now = Utc::now();
+    let iso = |d: chrono::DateTime<Utc>| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let ins = "INSERT INTO matches (id, espn_id, season, season_type, date_utc, home_abbr, home_name, away_abbr, away_name, home_score, away_score, status, video_ok_id, video_available, video_duration, video_kind, created_at, updated_at)
+               VALUES (?1, ?2, 2026, 'regular', ?3, 'LAL', 'Lakers', 'BOS', 'Celtics', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'x', 'x')";
+    c.execute(
+        ins,
+        rusqlite::params![
+            1,
+            "e1",
+            iso(now - Duration::days(1)),
+            101,
+            99,
+            "final",
+            "ok1",
+            1,
+            8000,
+            Option::<String>::None
+        ],
+    )
+    .unwrap();
+    c.execute(
+        ins,
+        rusqlite::params![
+            2,
+            "e2",
+            iso(now + Duration::days(1)),
+            Option::<i64>::None,
+            Option::<i64>::None,
+            "scheduled",
+            Option::<String>::None,
+            0,
+            Option::<i64>::None,
+            Option::<String>::None
+        ],
+    )
+    .unwrap();
+    c.execute(
+        ins,
+        rusqlite::params![
+            3,
+            "e3",
+            iso(now + Duration::days(40)),
+            Option::<i64>::None,
+            Option::<i64>::None,
+            "scheduled",
+            "ok3",
+            1,
+            10,
+            "mp4"
+        ],
+    )
+    .unwrap();
+    c.execute("INSERT INTO ingest_log (task, started_at, finished_at, ok, detail) VALUES ('schedule', 'a', 'b', 1, 'fini')", []).unwrap();
+    c.execute(
+        "INSERT INTO users (id, username, role, password_hash) VALUES (1, 'michel', 'admin', 'x')",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO sessions VALUES (?1, 1, 'x', ?2)",
+        [
+            auth::hash_token("jeton-valide"),
+            iso(now + Duration::days(29) - Duration::hours(1)),
+        ],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO sessions VALUES (?1, 1, 'x', ?2)",
+        [
+            auth::hash_token("jeton-frais"),
+            iso(now + Duration::days(30)),
+        ],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO sessions VALUES (?1, 1, 'x', ?2)",
+        [
+            auth::hash_token("jeton-expire"),
+            iso(now - Duration::hours(1)),
+        ],
+    )
+    .unwrap();
+    Env { _dir: dir, path }
+}
+
+fn router(env: &Env) -> axum::Router {
+    // Port fermé : ce qui n'est pas servi par Rust échoue en 502.
+    app(state::AppState {
+        db: db::Db::new(env.path.clone()),
+        upstream: proxy::Upstream::new("http://127.0.0.1:9"),
+    })
+}
+
+async fn get(
+    env: &Env,
+    uri: &str,
+    cookie: Option<&str>,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    let mut b = Request::get(uri);
+    if let Some(c) = cookie {
+        b = b.header(header::COOKIE, format!("bl_session={c}"));
+    }
+    let res = router(env)
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let (parts, body) = res.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    (
+        parts.status,
+        parts.headers,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn sante_publique() {
+    let env = setup();
+    let (s, h, v) = get(&env, "/api/health", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h[header::CACHE_CONTROL], "no-store");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["db"], serde_json::json!({ "ok": true, "matches": 3 }));
+    assert_eq!(
+        v["last_sync"],
+        serde_json::json!({ "task": "schedule", "finished_at": "b", "detail": "fini" })
+    );
+    assert_eq!(
+        v["recent_jobs"],
+        serde_json::json!([{ "task": "schedule", "ok": true, "finished_at": "b" }])
+    );
+}
+
+#[tokio::test]
+async fn sante_sans_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = Env {
+        path: dir.path().join("absente.db"),
+        _dir: dir,
+    };
+    let (s, _, v) = get(&env, "/api/health", None).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(v["status"], "error");
+    assert!(!env.path.exists(), "la base n'est jamais créée par Rust");
+}
+
+#[tokio::test]
+async fn session_exigee() {
+    let env = setup();
+    for c in [None, Some("inconnu"), Some("jeton-expire")] {
+        let (s, h, v) = get(&env, "/api/matches", c).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{c:?}");
+        assert_eq!(v, serde_json::json!({ "error": "non connecté" }));
+        assert_eq!(h[header::CACHE_CONTROL], "no-store");
+    }
+    // Session expirée effacée, comme côté Node.
+    let c = Connection::open(&env.path).unwrap();
+    let n: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM sessions WHERE token_hash = ?1",
+            [auth::hash_token("jeton-expire")],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[tokio::test]
+async fn renouvellement_glissant() {
+    let env = setup();
+    let (s, h, _) = get(&env, "/api/schedule", Some("jeton-valide")).await;
+    assert_eq!(s, StatusCode::OK);
+    let set = h[header::SET_COOKIE].to_str().unwrap();
+    assert!(
+        set.starts_with("bl_session=jeton-valide; Path=/; Expires="),
+        "{set}"
+    );
+    assert!(
+        set.contains("HttpOnly; SameSite=lax") && !set.contains("Secure"),
+        "{set}"
+    );
+    // Session récente : pas de réécriture.
+    let (s, h, _) = get(&env, "/api/schedule", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(h.get(header::SET_COOKIE).is_none());
+}
+
+#[tokio::test]
+async fn liste_des_matchs() {
+    let env = setup();
+    let (s, _, v) = get(&env, "/api/matches?all=1", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["total"], 3);
+    assert_eq!(
+        v["filters"],
+        serde_json::json!({ "status": null, "season": null, "team": null, "date": null, "from": null })
+    );
+    let m = &v["matches"][0];
+    assert_eq!(m["id"], 1);
+    assert_eq!(
+        m["home"]["logo"],
+        "https://a.espncdn.com/i/teamlogos/nba/500/lal.png"
+    );
+    assert_eq!(m["video"]["kind"], "hls");
+    assert_eq!(m["video"]["src"], "/api/video/ok1/master.m3u8");
+    assert_eq!(m["video"]["master"], "/api/video/ok1/master.m3u8");
+    assert_eq!(m["stats_available"], true);
+    assert_eq!(v["matches"][1]["video"]["kind"], Value::Null);
+    assert_eq!(v["matches"][1]["home"]["score"], Value::Null);
+    assert_eq!(v["matches"][2]["video"]["src"], "/api/video/ok3/file.mp4");
+    assert_eq!(v["matches"][2]["video"]["master"], Value::Null);
+    // Par défaut : à partir d'aujourd'hui (Paris).
+    let (_, _, v) = get(&env, "/api/matches", Some("jeton-frais")).await;
+    assert_eq!(v["total"], 2);
+    assert!(v["filters"]["from"]
+        .as_str()
+        .unwrap()
+        .ends_with(":00:00.000Z"));
+    let (_, _, v) = get(
+        &env,
+        "/api/matches?status=final&season=2026&team=lal&order=desc",
+        Some("jeton-frais"),
+    )
+    .await;
+    assert_eq!(v["total"], 1);
+    assert_eq!(v["filters"]["season"], 2026);
+    assert_eq!(v["filters"]["team"], "lal");
+    let (s, _, v) = get(&env, "/api/matches?status=fini", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"], "status invalide (scheduled|live|final)");
+    let (s, _, _) = get(&env, "/api/matches?date=28-10-2026", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn calendrier_groupe_par_jour() {
+    let env = setup();
+    let (s, _, v) = get(&env, "/api/schedule", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["timezone"], "Europe/Paris");
+    let days = v["days"].as_array().unwrap();
+    // Le match dans 40 jours est hors plage (7 jours par défaut).
+    let ids: Vec<i64> = days
+        .iter()
+        .flat_map(|d| {
+            d["matches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["id"].as_i64().unwrap())
+        })
+        .collect();
+    assert_eq!(ids, vec![1, 2]);
+    assert!(days
+        .iter()
+        .all(|d| d["label"].as_str().unwrap().split(' ').count() == 4));
+}
+
+#[tokio::test]
+async fn le_reste_part_a_node() {
+    let env = setup();
+    let (s, _, v) = get(&env, "/api/matches/1", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY);
+    assert!(v["error"].as_str().unwrap().contains("Node"));
+}

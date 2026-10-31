@@ -18,13 +18,15 @@ Application web de replays NBA, conteneurisée pour Unraid : calendrier complet 
 ## Architecture
 
 ```
-Next.js 15 (App Router) · TypeScript · Tailwind · SQLite
+basketland-server (Rust) ── port 3012 : routes portées en Rust, le reste relayé ↓
+Next.js 15 (App Router) · TypeScript · Tailwind · SQLite   (127.0.0.1:3013)
         │
         ├── API ESPN           matchs, calendrier, boxscores, play-by-play
         ├── basketball-video   découverte des replays
         └── ok.ru (HLS)        résolution du flux, proxy segmenté
 ```
 
+- **Serveur en cours de migration vers Rust** ([`docs/migration-rust.md`](docs/migration-rust.md)) : le binaire `server/` écoute sur le port public, sert les routes déjà portées et relaie les autres à Next.js, qu'il lance lui-même.
 - **Aucun service externe à maintenir** : une seule image Docker, SQLite dans le volume `/data`.
 - **Pas de dépendance LLM à l'exécution** : la VF française est produite par un générateur déterministe embarqué.
 - **Le proxy vidéo re-résout le flux à chaque requête** : les URL de stream signées expirent, elles ne sont jamais stockées.
@@ -704,6 +706,7 @@ Next.js le signale à chaque démarrage).
 
 ## Documentation
 
+- [`docs/migration-rust.md`](docs/migration-rust.md) — migration du serveur en Rust : étapes, règles, variables du serveur Rust.
 - [`docs/SPEC.md`](docs/SPEC.md) — spécification technique : sources de données, schéma SQL, routes API, format des données, critères d'acceptation.
 - [`docs/reviews/`](docs/reviews/) — les trois revues de code indépendantes (Claude Opus 5.5) qui ont produit les corrections, avec les preuves `fichier:ligne` et les commandes de vérification.
 
