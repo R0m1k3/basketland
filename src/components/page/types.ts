@@ -138,6 +138,8 @@ export interface SettingsPage {
     auto_translate: boolean;
     vf_mode: VfMode;
     transcribe_engine: TranscribeEngine;
+    /** Pourquoi ce choix n'est pas appliqué (TRANSCRIBE_URL, TRANSCRIBE_MODEL…), sinon null. */
+    transcribe_engine_override: string | null;
     voice_disabled_reason: string | null;
     minimax: MinimaxSettingsView;
     openai: OpenAiSettingsView;

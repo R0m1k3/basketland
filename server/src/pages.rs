@@ -701,6 +701,7 @@ pub fn parametres(
             "auto_translate": settings::auto_translate_enabled(&s),
             "vf_mode": settings::vf_mode(&s),
             "transcribe_engine": settings::transcribe_engine(&s),
+            "transcribe_engine_override": crate::media::commentary_ai::transcribe_engine_override(&s),
             "voice_disabled_reason": media.dub_disabled_reason,
             "minimax": settings::minimax_settings_view(&s),
             "openai": settings::openai_settings_view(&s),

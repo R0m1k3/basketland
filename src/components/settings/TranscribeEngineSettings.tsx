@@ -26,10 +26,18 @@ const OPTIONS: { value: TranscribeEngine; title: string; text: string }[] = [
  * traductions ; une piste déjà faite garde son moteur (« Relancer la
  * traduction » la refait).
  */
-export default function TranscribeEngineSettings({ initial }: { initial: TranscribeEngine }) {
+export default function TranscribeEngineSettings({
+  initial,
+  override = null,
+}: {
+  initial: TranscribeEngine;
+  /** Raison pour laquelle le choix est ignoré par le serveur (variable d'environnement…). */
+  override?: string | null;
+}) {
   const [engine, setEngine] = useState<TranscribeEngine>(initial);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
+  const [overrideMsg, setOverrideMsg] = useState<string | null>(override);
 
   async function choose(next: TranscribeEngine) {
     if (next === engine || busy) return;
@@ -37,18 +45,19 @@ export default function TranscribeEngineSettings({ initial }: { initial: Transcr
     setBusy(true);
     setMsg(null);
     setEngine(next); // affichage immédiat, annulé si le serveur refuse
-    const r = await postJson<{ transcribeEngine: TranscribeEngine }>('/api/admin/settings', { transcribeEngine: next });
+    const r = await postJson<{ transcribeEngine: TranscribeEngine; transcribeEngineOverride?: string | null }>('/api/admin/settings', { transcribeEngine: next });
     setBusy(false);
     if (!r.ok) {
       setEngine(prev);
       return setMsg({ ok: false, text: r.error });
     }
     setEngine(r.data.transcribeEngine);
+    setOverrideMsg(r.data.transcribeEngineOverride ?? null);
     setMsg({
       ok: true,
       text:
         r.data.transcribeEngine === 'nvidia'
-          ? 'NVIDIA Parakeet choisi pour les prochaines traductions (modèle téléchargé au premier usage).'
+          ? 'NVIDIA Parakeet choisi pour les prochaines traductions. Le modèle est téléchargé au début de la première transcription (lignes « [parakeet] » dans les journaux du conteneur).'
           : 'Whisper choisi pour les prochaines traductions.',
     });
   }
@@ -100,6 +109,12 @@ export default function TranscribeEngineSettings({ initial }: { initial: Transcr
             );
           })}
         </div>
+
+        {overrideMsg && (
+          <p className="form-error" role="alert">
+            {overrideMsg}
+          </p>
+        )}
 
         <p className="border-t border-ink-700/60 pt-4 text-xs leading-relaxed text-paper-faint">
           Vaut pour les prochaines traductions : une piste déjà traduite garde son moteur (« Relancer la traduction » sur la fiche

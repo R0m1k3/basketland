@@ -74,7 +74,7 @@ function Settings({ d }: { d: SettingsData }) {
           </SectionTitle>
           <AutoTranslateSettings initial={a.auto_translate} />
           <VfModeSettings initial={a.vf_mode} voiceDisabledReason={a.voice_disabled_reason} />
-          <TranscribeEngineSettings initial={a.transcribe_engine} />
+          <TranscribeEngineSettings initial={a.transcribe_engine} override={a.transcribe_engine_override} />
           <MiniMaxSettings initial={a.minimax} />
           <OpenAiSettings initial={a.openai} placeholderModel={a.openai_model_placeholder} />
         </section>

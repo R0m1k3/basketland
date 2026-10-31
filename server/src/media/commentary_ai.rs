@@ -143,6 +143,58 @@ impl CommentaryConfig {
     }
 }
 
+impl CommentaryConfig {
+    /// Moteurs employés, pour le journal du démarrage d'une traduction :
+    /// « transcription : NVIDIA Parakeet (…) ; traduction : MiniMax (…) ».
+    pub fn engines_label(&self) -> String {
+        let asr = if self.transcribe_mode == ServiceMode::Remote {
+            format!(
+                "serveur externe {} ({})",
+                self.transcribe_url, self.transcribe_model
+            )
+        } else if super::local_ai::is_parakeet_model(&self.transcribe_model) {
+            format!("NVIDIA Parakeet embarqué ({})", self.transcribe_model)
+        } else {
+            format!("Whisper embarqué ({})", self.transcribe_model)
+        };
+        let mt = match self.translate_provider {
+            TranslateProvider::Minimax => "MiniMax",
+            TranslateProvider::Openai => "OpenAI",
+            TranslateProvider::Ollama if self.translate_mode == ServiceMode::Remote => {
+                "serveur externe"
+            }
+            TranslateProvider::Ollama => "Ollama embarqué",
+        };
+        format!(
+            "transcription : {asr} ; traduction : {mt} ({})",
+            self.translate_model
+        )
+    }
+}
+
+/// Pourquoi le moteur choisi dans les Paramètres (`transcribe_engine`) n'est
+/// PAS celui qui servira, ou `None` s'il est bien appliqué : serveur externe
+/// (`TRANSCRIBE_URL`), modèle imposé (`TRANSCRIBE_MODEL`), ou environnement
+/// Parakeet absent de l'image.
+pub fn transcribe_engine_override(s: &Settings) -> Option<String> {
+    if let Some(url) = env_trim("TRANSCRIBE_URL") {
+        return Some(format!(
+            "La transcription passe par un serveur externe (TRANSCRIBE_URL = {url}) : ce choix est sans effet."
+        ));
+    }
+    if let Some(model) = env_trim("TRANSCRIBE_MODEL") {
+        return Some(format!(
+            "La variable TRANSCRIBE_MODEL = {model} est définie dans le conteneur : elle l'emporte sur ce choix. Retirez-la pour utiliser le moteur choisi ici."
+        ));
+    }
+    if settings::transcribe_engine(s) == "nvidia" && !embedded_parakeet_available() {
+        return Some(
+            "Parakeet est absent de cette image (environnement /opt/parakeet introuvable) : mettez l'image à jour.".into(),
+        );
+    }
+    None
+}
+
 /// `intEnv` : entier borné d'une variable, `def` si absente, vide ou non numérique.
 pub(crate) fn int_env(name: &str, def: f64, min: f64, max: f64) -> f64 {
     match env(name) {
@@ -1607,6 +1659,37 @@ pub async fn translate_batch_mt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn libelle_des_moteurs() {
+        let mut c = CommentaryConfig {
+            transcribe_mode: ServiceMode::Embedded,
+            translate_mode: ServiceMode::Remote,
+            transcribe_url: String::new(),
+            transcribe_model: crate::media::local_ai::PARAKEET_MODEL.into(),
+            translate_url: "https://api.minimax.io/v1".into(),
+            translate_model: "MiniMax-M2".into(),
+            translate_engine: TranslateEngine::Chat,
+            translate_provider: TranslateProvider::Minimax,
+            translate_api_key: String::new(),
+            batch: 1,
+            parallel: 1,
+            chunk_sec: 120,
+            disabled_reason: None,
+        };
+        assert_eq!(
+            c.engines_label(),
+            "transcription : NVIDIA Parakeet embarqué (nemo-parakeet-tdt-0.6b-v2) ; traduction : MiniMax (MiniMax-M2)"
+        );
+        c.transcribe_model = "deepdml/faster-whisper-large-v3-turbo-ct2".into();
+        c.translate_mode = ServiceMode::Embedded;
+        c.translate_provider = TranslateProvider::Ollama;
+        c.translate_model = "qwen".into();
+        assert_eq!(
+            c.engines_label(),
+            "transcription : Whisper embarqué (deepdml/faster-whisper-large-v3-turbo-ct2) ; traduction : Ollama embarqué (qwen)"
+        );
+    }
 
     #[test]
     fn reponses_du_llm() {

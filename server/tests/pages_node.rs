@@ -118,6 +118,7 @@ async fn pages_comme_node() {
                     // transcription) : absent de la référence TypeScript.
                     if let Some(a) = v.get_mut("admin_data").and_then(Value::as_object_mut) {
                         let e = a.shift_remove("transcribe_engine");
+                        a.shift_remove("transcribe_engine_override");
                         assert!(
                             matches!(
                                 e.as_ref().and_then(Value::as_str),
