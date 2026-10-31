@@ -18,11 +18,11 @@ async fn main() {
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", node::node_port()));
 
-    let st = state::AppState {
-        db: db::Db::new(db::default_db_path()),
-        upstream: proxy::Upstream::new(&node_url),
-        video: video::Video::new(),
-    };
+    let st = state::AppState::new(
+        db::Db::new(db::default_db_path()),
+        proxy::Upstream::new(&node_url),
+        video::Video::new(),
+    );
     // Vérifications lentes faites une fois, hors des requêtes.
     tokio::task::spawn_blocking(|| {
         state::ffmpeg_available();
@@ -65,8 +65,8 @@ async fn main() {
 
     let mut term = signal(SignalKind::terminate()).expect("signal SIGTERM");
     let mut int = signal(SignalKind::interrupt()).expect("signal SIGINT");
-    // Jobs d'ingestion portés (calendrier, stats, VF) ; Node ne les lance plus.
-    cron::start(st.db.clone());
+    // Jobs d'ingestion portés (calendrier, stats, replays, VF) ; Node ne les lance plus.
+    cron::start(st.clone());
     let server = axum::serve(listener, app(st));
 
     let code = tokio::select! {

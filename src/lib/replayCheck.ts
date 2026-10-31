@@ -68,6 +68,25 @@ function resultMessage(r: ReplaySearchResult, video: MatchDto['video']): string 
   return `Pas encore de replay : ${humanReplayReason(r.lookup.reason)}.`;
 }
 
+/**
+ * Replay trouvé à la demande : traduction des commentaires de ce match en
+ * tête de file (la fonction respecte la configuration et le backoff des
+ * échecs), sauf si la traduction automatique est désactivée (clic
+ * « Sous-titrer ce match »). Appelé ici, ou par le serveur Rust
+ * (POST /api/internal/replays) quand c'est lui qui sert la recherche.
+ * Renvoie true si la mise en file a été tentée sans erreur.
+ */
+export function prioritizeFoundReplay(matchId: number): boolean {
+  if (!autoTranslateEnabled()) return false;
+  try {
+    prioritizeOnView(matchId);
+    return true;
+  } catch (e) {
+    console.error('[replay] mise en file de la traduction impossible :', (e as Error).message);
+    return false;
+  }
+}
+
 export async function requestReplayCheck(
   m: VideoMatchRow,
   o: { now?: number; waitMs?: number } = {},
@@ -103,16 +122,7 @@ export async function requestReplayCheck(
   remember(m.id, now);
 
   const work = searchReplay(m, { fresh: true }).then((r) => {
-    // Replay trouvé : traduction des commentaires en tête de file (la
-    // fonction respecte la configuration et le backoff des échecs), sauf
-    // si la traduction automatique est désactivée (clic « Sous-titrer ce match »).
-    if (r.changed && autoTranslateEnabled()) {
-      try {
-        prioritizeOnView(m.id);
-      } catch (e) {
-        console.error('[replay] mise en file de la traduction impossible :', (e as Error).message);
-      }
-    }
+    if (r.changed) prioritizeFoundReplay(m.id);
     return r;
   });
   let timer: NodeJS.Timeout | undefined;

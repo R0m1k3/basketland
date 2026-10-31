@@ -61,6 +61,45 @@ impl Upstream {
     }
 }
 
+impl Upstream {
+    /// Appel interne à l'application Node (pas un relais) : POST JSON avec
+    /// jeton, réponse JSON. Sert aux traitements restés côté Node (files de
+    /// traduction et d'analyse).
+    pub async fn post_json(
+        &self,
+        path: &str,
+        bearer: &str,
+        body: &serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<(u16, serde_json::Value), String> {
+        let uri: Uri = format!("{}{path}", self.base)
+            .parse()
+            .map_err(|_| "URL invalide".to_string())?;
+        let mut b = axum::http::Request::post(uri.clone())
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        if let Some(a) = uri.authority() {
+            b = b.header(header::HOST, a.as_str());
+        }
+        let req = b
+            .body(Body::from(body.to_string()))
+            .map_err(|e| e.to_string())?;
+        let res = tokio::time::timeout(timeout, async {
+            let res = self.client.request(req).await.map_err(|e| e.to_string())?;
+            let status = res.status().as_u16();
+            let bytes = http_body_util::BodyExt::collect(res.into_body())
+                .await
+                .map_err(|e| e.to_string())?
+                .to_bytes();
+            Ok::<_, String>((status, bytes))
+        })
+        .await
+        .map_err(|_| "délai dépassé".to_string())??;
+        let v = serde_json::from_slice(&res.1).unwrap_or(serde_json::Value::Null);
+        Ok((res.0, v))
+    }
+}
+
 /// En-têtes propres à une connexion : jamais relayés.
 fn strip_hop_by_hop(h: &mut HeaderMap) {
     // Les en-têtes nommés dans `Connection` le sont aussi.

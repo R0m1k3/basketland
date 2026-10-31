@@ -391,12 +391,28 @@ mod route {
     const TOKEN: &str = "jeton-ingest";
 
     fn router(path: &std::path::Path) -> axum::Router {
+        router_with(path, basketland_server::video::Video::new())
+    }
+
+    fn router_with(path: &std::path::Path, video: basketland_server::video::Video) -> axum::Router {
         std::env::set_var("INGEST_TOKEN", TOKEN);
-        // Node injoignable (port fermé) : `sync-videos` relayé échoue proprement.
-        app(state::AppState {
-            db: db::Db::new(path.to_path_buf()),
-            upstream: proxy::Upstream::new("http://127.0.0.1:9"),
-            video: basketland_server::video::Video::new(),
+        // Node injoignable (port fermé) : rien n'y est relayé.
+        app(state::AppState::new(
+            db::Db::new(path.to_path_buf()),
+            proxy::Upstream::new("http://127.0.0.1:9"),
+            video,
+        ))
+    }
+
+    /// Faux basketball-video : liste de saison vide (aucun replay publié).
+    async fn empty_site() -> basketland_server::video::Video {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let r = axum::Router::new().fallback(|| async { "<p>vide</p>" });
+        tokio::spawn(async move { axum::serve(l, r).await.unwrap() });
+        basketland_server::video::Video::for_tests(basketland_server::video::TestConfig {
+            upstream: Some(format!("http://{addr}")),
+            env: Default::default(),
         })
     }
 
@@ -462,10 +478,10 @@ mod route {
     }
 
     #[tokio::test]
-    async fn vf_en_rust_videos_relayees_a_node() {
+    async fn vf_et_videos_en_rust() {
         let (_d, p) = seeded();
         let (s, v) = post(
-            router(&p),
+            router_with(&p, empty_site().await),
             Some(&format!("bearer   {TOKEN} ")),
             r#"{"jobs":["sync-subtitles","sync-videos","sync-subtitles"]}"#,
         )
@@ -474,10 +490,10 @@ mod route {
         assert_eq!(
             v,
             json!({
-                "ok": false,
+                "ok": true,
                 "results": {
                     "sync-subtitles": { "ok": true, "detail": "1 matchs" },
-                    "sync-videos": { "ok": false, "detail": "application Node injoignable (démarrage en cours ?)" },
+                    "sync-videos": { "ok": true, "detail": "POR@LAL: replay non listé" },
                 }
             })
         );
@@ -494,6 +510,7 @@ mod route {
             ),
             json!([
                 { "task": "sync-subtitles", "ok": 1, "detail": "1 matchs", "fini": 1 },
+                { "task": "sync-videos", "ok": 1, "detail": "POR@LAL: replay non listé", "fini": 1 },
                 { "task": "sync-subtitles", "ok": 1, "detail": "1 matchs", "fini": 1 },
             ])
         );

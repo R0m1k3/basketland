@@ -1,11 +1,15 @@
 //! Cron interne des jobs portés (équivalent de la part de
 //! `src/lib/scheduler.ts` qui les concerne) : mêmes délais initiaux, mêmes
-//! intervalles. Calendrier 15 min, stats 5 min, VF 60 min ; base presque
-//! vide au démarrage (< 50 matchs) : saison complète. `DISABLE_CRON=1` le
-//! désactive. Node ne lance plus ces jobs (`BL_RUST_JOBS`, voir `node.rs`).
+//! intervalles. Calendrier 15 min, stats 5 min, replays 20 min, VF 60 min ;
+//! base presque vide au démarrage (< 50 matchs) : saison complète.
+//! `DISABLE_CRON=1` le désactive. Node ne lance plus ces jobs
+//! (`BL_RUST_JOBS`, voir `node.rs`) et garde ses files de traduction et
+//! d'analyse : un replay apparu pendant `sync-videos` lui est signalé
+//! aussitôt (`replay::notify_node`), comme le faisait son cron.
 
 use crate::db::{self, Db, MatchFilters};
-use crate::ingest;
+use crate::state::AppState;
+use crate::{ingest, replay};
 use std::future::Future;
 use std::time::Duration;
 
@@ -49,25 +53,26 @@ async fn schema_ready(db: &Db) -> bool {
 
 /// Démarre les jobs (à appeler depuis le runtime tokio) une fois la base
 /// prête : mêmes délais qu'avant, comptés à partir de ce moment.
-pub fn start(db: Db) {
+pub fn start(st: AppState) {
     if std::env::var("DISABLE_CRON").as_deref() == Ok("1") {
         return;
     }
     tokio::spawn(async move {
         let t0 = std::time::Instant::now();
         let mut warned = false;
-        while !schema_ready(&db).await {
+        while !schema_ready(&st.db).await {
             if !warned && t0.elapsed() > Duration::from_secs(30) {
                 eprintln!("[cron] base pas encore créée par l'application Node : jobs en attente");
                 warned = true;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        schedule(db);
+        schedule(st);
     });
 }
 
-fn schedule(db: Db) {
+fn schedule(st: AppState) {
+    let db = st.db.clone();
     println!(
         "[cron] démarrage des jobs internes : {}",
         ingest::RUST_JOBS.join(", ")
@@ -108,6 +113,29 @@ fn schedule(db: Db) {
             let d = d.clone();
             async move {
                 ingest::sync_stats(&d, 15).await;
+            }
+        },
+    );
+    // Recherche des replays ; un replay qui vient d'apparaître est signalé à
+    // Node, qui le met en file de traduction et d'analyse tout de suite
+    // (pas d'attente de ses jobs de 10 min).
+    every(
+        Duration::from_millis(replay::VIDEO_JOB_INTERVAL_MS as u64),
+        Duration::from_secs(3 * MIN),
+        move || {
+            let st = st.clone();
+            async move {
+                let (_, changed) = st.replays.sync_videos(&st.db, 20).await;
+                if changed > 0 {
+                    match replay::notify_node(&st.upstream, None).await {
+                        Ok(_) => println!(
+                            "[cron] sync-videos : {changed} replay(s) nouveau(x) ou passé(s) en HLS, signalé(s) à l'application Node"
+                        ),
+                        Err(e) => {
+                            eprintln!("[cron] nouveaux replays : mise en file impossible ({e})")
+                        }
+                    }
+                }
             }
         },
     );

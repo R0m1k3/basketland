@@ -12,6 +12,21 @@ pub struct AppState {
     pub upstream: Upstream,
     /// Proxy vidéo ok.ru (caches de flux, playlists et segments).
     pub video: crate::video::Video,
+    /// Recherche des replays basketball-video (cache des listes, recherches en vol).
+    pub replays: crate::replay::Replays,
+}
+
+impl AppState {
+    /// État complet ; la recherche des replays passe par le client du proxy vidéo.
+    pub fn new(db: Db, upstream: Upstream, video: crate::video::Video) -> Self {
+        let replays = crate::replay::Replays::new(crate::bv::Bv::new(video.clone()));
+        AppState {
+            db,
+            upstream,
+            video,
+            replays,
+        }
+    }
 }
 
 /// ffmpeg présent sur le serveur (vérifié une fois, comme `ffmpegAvailable`).

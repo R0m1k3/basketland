@@ -1,13 +1,11 @@
 //! `POST /api/ingest` (chemin public, jeton propre) : lance des jobs
-//! d'ingestion. Les jobs portés tournent en Rust ; `sync-videos` (recherche
-//! des replays, encore côté Node) est relayé à Node.
+//! d'ingestion, tous servis par Rust (`sync-videos` compris).
 
 use crate::api::{error, ok};
 use crate::ingest;
 use crate::state::AppState;
-use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
@@ -24,54 +22,9 @@ fn latin1(v: &HeaderValue) -> String {
     v.as_bytes().iter().map(|&b| b as char).collect()
 }
 
-/// `sync-videos` exécuté par Node : même jeton, résultat du job repris tel quel.
-async fn node_sync_videos(
-    st: &AppState,
-    host: Option<HeaderValue>,
-    auth: Option<HeaderValue>,
-) -> Value {
-    let mut b = axum::http::Request::builder()
-        .method(Method::POST)
-        .uri("/api/ingest")
-        .header(header::CONTENT_TYPE, "application/json");
-    if let Some(h) = host {
-        b = b.header(header::HOST, h);
-    }
-    if let Some(a) = auth {
-        b = b.header(header::AUTHORIZATION, a);
-    }
-    let Ok(req) = b.body(Body::from(r#"{"jobs":["sync-videos"]}"#)) else {
-        return json!({ "ok": false, "detail": "requête vers Node invalide" });
-    };
-    let res = crate::proxy::forward(State(st.clone()), req).await;
-    let status = res.status();
-    let body = axum::body::to_bytes(res.into_body(), 4 << 20)
-        .await
-        .ok()
-        .and_then(|b| crate::jsval::js_parse(&String::from_utf8_lossy(&b)));
-    match body {
-        Some(v) if status.is_success() => v
-            .get("results")
-            .and_then(|r| r.get("sync-videos"))
-            .cloned()
-            .unwrap_or_else(
-                || json!({ "ok": false, "detail": "réponse de Node sans résultat sync-videos" }),
-            ),
-        Some(v) => json!({
-            "ok": false,
-            "detail": v.get("error").and_then(Value::as_str).map(str::to_string)
-                .unwrap_or_else(|| format!("application Node : HTTP {}", status.as_u16())),
-        }),
-        None => {
-            json!({ "ok": false, "detail": format!("application Node : HTTP {}", status.as_u16()) })
-        }
-    }
-}
-
 /// Corps `{ "jobs": [...], "season": 2026 }` ; jeton `Authorization: Bearer <INGEST_TOKEN>`.
 pub async fn ingest(State(st): State<AppState>, req: Request) -> Response {
     let auth = req.headers().get(header::AUTHORIZATION).cloned();
-    let host = req.headers().get(header::HOST).cloned();
     match tokio::task::spawn_blocking({
         let a = auth.as_ref().map(latin1);
         move || ingest::check_ingest_auth(a.as_deref())
@@ -134,9 +87,9 @@ pub async fn ingest(State(st): State<AppState>, req: Request) -> Response {
     let mut results = Map::new();
     for j in &jobs {
         let name = j.as_str().unwrap_or_default();
-        let r = match ingest::run_job(&st.db, name, season).await {
+        let r = match ingest::run_job(&st.db, &st.replays, name, season).await {
             Some(r) => r.to_json(),
-            None => node_sync_videos(&st, host.clone(), auth.clone()).await,
+            None => json!({ "ok": false, "detail": format!("job inconnu : {name}") }),
         };
         results.insert(name.to_string(), r);
     }

@@ -81,6 +81,17 @@ pub fn is_origin_allowed(h: &HeaderMap, allowed: &[String]) -> bool {
     allowed.contains(&bare)
 }
 
+/// Content-Type `application/json` (essence, paramètres ignorés) : une requête
+/// « simple » text/plain n'est pas préflightée par le navigateur.
+pub fn is_json_content_type(headers: &HeaderMap) -> bool {
+    let ct = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let essence = ct.to_ascii_lowercase();
+    essence.split(';').next().unwrap_or("").trim() == "application/json"
+}
+
 /// `readJsonWrite` : corps JSON objet d'une écriture autorisée, sinon la réponse d'erreur.
 pub async fn read_json_write(
     headers: &HeaderMap,
@@ -92,13 +103,7 @@ pub async fn read_json_write(
             "origine non autorisée pour cette écriture",
         ));
     }
-    let ct = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let essence = ct.to_ascii_lowercase();
-    let essence = essence.split(';').next().unwrap_or("").trim();
-    if essence != "application/json" {
+    if !is_json_content_type(headers) {
         return Err(error(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "Content-Type application/json requis",
