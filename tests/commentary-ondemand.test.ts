@@ -11,6 +11,7 @@ import {
   __commentaryIdle,
   __setCommentaryRunnerForTests,
   chunkCues,
+  commentaryLeftoversPending,
   commentaryReady,
   commentaryStatus,
   coveredFrom,
@@ -78,7 +79,7 @@ const chunkIndex = (file: string) => PLANS.findIndex((p) => p.start === Number(/
 const expected = (idx: number) => chunkCues(PLANS[idx], fakeTranscript(idx));
 const published = () => db.getCommentaryCues(A).map((c) => ({ seq: c.seq, start: c.start_ts, end: c.end_ts, text: c.text_en, fr: c.text_fr }));
 
-function fakeDeps(o: { failTranscribeAt?: number; failExtractAt?: number; afterChunk?: (idx: number) => void } = {}) {
+function fakeDeps(o: { failTranscribeAt?: number; failExtractAt?: number; afterChunk?: (idx: number) => void; untranslatable?: RegExp } = {}) {
   const calls = { extract: [] as number[], transcribe: [] as number[], translated: [] as number[], events: [] as string[] };
   const deps: CommentaryDeps = {
     resolveStream: async () => ({ variants: [{ key: 'low', bandwidth: 600_000, resolution: '640x360', url: 'https://vd.okcdn.ru/low.m3u8' }], duration: DURATION }),
@@ -98,7 +99,7 @@ function fakeDeps(o: { failTranscribeAt?: number; failExtractAt?: number; afterC
     translate: async (lines) => {
       calls.events.push(`traduction ${lines.length}`);
       calls.translated.push(...lines.map((l) => l.i));
-      const res = lines.map((l) => ({ i: l.i, fr: `FR ${l.en}`, untranslated: false }));
+      const res = lines.map((l) => (o.untranslatable?.test(l.en) ? { i: l.i, fr: l.en, untranslated: true } : { i: l.i, fr: `FR ${l.en}`, untranslated: false }));
       const idx = Math.floor(lines[0].i / 100_000) - 1;
       queueMicrotask(() => o.afterChunk?.(idx));
       return res;
@@ -301,6 +302,71 @@ describe('runCommentary à la demande', () => {
     const again = fakeDeps();
     expect((await runCommentary({ matchId: A, force: true }, () => {}, signal(), again.deps)).ok).toBe(true);
     expect(again.calls.transcribe).toEqual([0, 1, 2]);
+  });
+});
+
+// ------------------------------------------------------------------ lignes restées en anglais
+
+describe('lignes restées en anglais', () => {
+  const TIMEOUT = /^Timeout/;
+  const servedTexts = async () => {
+    const res = await getSubtitles(new Request(`http://localhost/api/matches/${A}/subtitles`), { params: Promise.resolve({ id: String(A) }) });
+    return ((await res.json()) as { subtitles: { text: string }[] }).subtitles.map((x) => x.text);
+  };
+
+  it('jamais servies en anglais ; déjà tentées pendant le travail : pas de rattrapage en plus', async () => {
+    const { deps, calls } = fakeDeps({ untranslatable: TIMEOUT });
+    const res = await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps);
+    expect(res).toMatchObject({ ok: true, reason: expect.stringContaining('(1 sans traduction, non affichés)') });
+    expect(db.getCommentaryTrack(A)).toMatchObject({ complete: 1, cues: 6, untranslated: 1 });
+    // Une seule demande par ligne : le rattrapage final ne redemande pas ce qui vient d'échouer.
+    expect(calls.translated).toHaveLength(6);
+    expect(commentaryLeftoversPending(A)).toBe(false);
+    const texts = await servedTexts();
+    expect(texts).toHaveLength(5);
+    expect(texts.every((t) => t.startsWith('FR '))).toBe(true);
+    expect(commentaryStatus(A)).toMatchObject({ status: 'ready', reason: '1 ligne(s) sans traduction (non affichées)' });
+  });
+
+  it('reprise d’une piste partielle : la ligne restée en anglais au travail précédent est retentée à la fin', async () => {
+    let watching = true;
+    const first = fakeDeps({ untranslatable: TIMEOUT, afterChunk: () => (watching = false) });
+    await runCommentary({ matchId: A, force: false }, () => {}, signal(), first.deps, ctl(() => 0, () => watching));
+    expect(db.getCommentaryTrack(A)).toMatchObject({ complete: 0, untranslated: 1 });
+
+    const second = fakeDeps();
+    expect((await runCommentary({ matchId: A, force: false }, () => {}, signal(), second.deps)).ok).toBe(true);
+    const timeoutSeq = db.getCommentaryCues(A).find((c) => TIMEOUT.test(c.text_en))!.seq;
+    expect(second.calls.translated.at(-1)).toBe(timeoutSeq);
+    expect(second.calls.events.slice(-2)).toEqual(['whisper fermé', 'ollama fermé']);
+    expect(db.getCommentaryTrack(A)).toMatchObject({ complete: 1, untranslated: 0 });
+    expect(await servedTexts()).toContain('FR Timeout on the floor, the Celtics lead by four.');
+  });
+
+  it('piste complète d’avant (jamais rattrapée) : travail court par la file, sans flux ni Whisper, la fiche reste « prête »', async () => {
+    await runCommentary({ matchId: A, force: false }, () => {}, signal(), fakeDeps({ untranslatable: TIMEOUT }).deps);
+    // Piste publiée avant le rattrapage : aucune trace d'essai.
+    db.kvSet(`commentary-leftovers:${A}`, { okId: 'ancien', model: 'ancien' });
+    expect(commentaryLeftoversPending(A)).toBe(true);
+
+    const fix = fakeDeps();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const translate = fix.deps.translate;
+    fix.deps.translate = async (...a) => (await gate, translate(...a));
+    __setCommentaryRunnerForTests((job, p, sig, c) => runCommentary(job, p, sig, fix.deps, c));
+    expect(enqueueCommentary(A)).toMatchObject({ queued: true });
+    expect(commentaryStatus(A).status).toBe('ready');
+    release();
+    await __commentaryIdle();
+
+    expect(fix.calls.extract).toEqual([]);
+    expect(fix.calls.transcribe).toEqual([]);
+    expect(fix.calls.events).toEqual(['ollama ouvert', 'traduction 1', 'ollama fermé']);
+    expect(db.getCommentaryTrack(A)).toMatchObject({ complete: 1, untranslated: 0 });
+    expect(commentaryLeftoversPending(A)).toBe(false);
+    expect(enqueueCommentary(A)).toMatchObject({ queued: false, message: 'Traduction des commentaires déjà prête' });
+    expect((await servedTexts())).toHaveLength(6);
   });
 });
 

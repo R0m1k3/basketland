@@ -83,6 +83,10 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Version affichée en bas de la page Paramètres.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           cache-from: type=gha
           # Image de plusieurs Go : on ne met en cache que les couches finales
           # (mode=min) et un échec d'export du cache (réseau du service de
