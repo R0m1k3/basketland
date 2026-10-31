@@ -725,9 +725,18 @@ async fn statuts_de_la_file_comme_node() {
         })
     };
     svc.set_runner(Some(runner.clone()));
+    // Le travail démarre dans une tâche : sa porte n'est pas forcément
+    // enregistrée quand on veut le terminer (charge de la machine).
     let resolve = |id: i64, o: CommentaryOutcome| {
-        let tx = gates.lock().unwrap().remove(&id).expect("travail en cours");
-        let _ = tx.send(o);
+        let gates = gates.clone();
+        async move {
+            wait_for("travail en cours", || {
+                gates.lock().unwrap().contains_key(&id)
+            })
+            .await;
+            let tx = gates.lock().unwrap().remove(&id).expect("travail en cours");
+            let _ = tx.send(o);
+        }
     };
     let progress = |p: cm::CommentaryProgress| (progress_of.lock().unwrap().clone().unwrap())(p);
     let statuses = want["statuses"].as_array().unwrap();
@@ -834,36 +843,37 @@ async fn statuts_de_la_file_comme_node() {
     snap("en file, spectateur à 1250", &abc);
     svc.touch_viewer(B, Some(700.0));
     snap("en file, spectateur à 700", &abc);
-    resolve(A, outcome(false, Some(FailureKind::Contenu), false, "vide"));
+    resolve(A, outcome(false, Some(FailureKind::Contenu), false, "vide")).await;
     pause().await;
     snap("A interrompu (remis en file), C en cours", &abc);
-    resolve(C, outcome(true, None, false, "ok"));
+    resolve(C, outcome(true, None, false, "ok")).await;
     pause().await;
     snap("B en cours, A explicite en attente", &abc);
-    resolve(B, outcome(false, None, true, "en pause"));
+    resolve(B, outcome(false, None, true, "en pause")).await;
     pause().await;
     snap("A attend la fin de la lecture de B", &abc);
     svc.set_runner(Some(runner.clone()));
     snap("file vidée", &abc);
     results.push(enq(A, false, true, false));
-    resolve(A, outcome(false, Some(FailureKind::Erreur), false, "boum"));
+    resolve(A, outcome(false, Some(FailureKind::Erreur), false, "boum")).await;
     svc.idle().await;
     results.push(enq(B, false, false, false));
-    resolve(B, outcome(false, Some(FailureKind::Reseau), false, "flux"));
+    resolve(B, outcome(false, Some(FailureKind::Reseau), false, "flux")).await;
     svc.idle().await;
     snap("échecs", &abc);
     results.push(enq(B, false, false, false));
     resolve(
         B,
         outcome(false, Some(FailureKind::Reseau), false, "flux 2"),
-    );
+    )
+    .await;
     svc.idle().await;
     results.push(enq(C, false, false, false));
-    resolve(C, outcome(false, None, false, "sans nature"));
+    resolve(C, outcome(false, None, false, "sans nature")).await;
     svc.idle().await;
     snap("échecs répétés", &abc);
     results.push(enq(A, false, true, false));
-    resolve(A, outcome(true, None, false, "ok"));
+    resolve(A, outcome(true, None, false, "ok")).await;
     svc.idle().await;
     let full = |id: i64, cues: &[cdb::CueInput]| {
         let meta = cdb::CommentaryTrackMeta {
@@ -888,7 +898,7 @@ async fn statuts_de_la_file_comme_node() {
     results.push(enq(A, false, false, false));
     results.push(enq(C, false, false, false));
     snap("rattrapage en cours (C prête à l’écran)", &abc);
-    resolve(C, outcome(true, None, false, "rattrapage"));
+    resolve(C, outcome(true, None, false, "rattrapage")).await;
     svc.idle().await;
     db.with(|c| {
         basketland_server::ingest_db::set_video(

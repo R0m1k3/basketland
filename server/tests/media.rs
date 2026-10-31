@@ -313,7 +313,7 @@ async fn configuration_des_services() {
             TranslateProvider::Openai,
             "https://api.openai.com/v1",
             "gpt-5.4-mini",
-            4
+            8
         )
     );
     let s = Settings::from_pairs([

@@ -14,6 +14,7 @@ stdout ne porte QUE le protocole ; les journaux vont sur stderr.
 """
 import argparse
 import json
+import os
 import sys
 import traceback
 
@@ -47,6 +48,26 @@ def load_model(name: str, device: str, compute_type: str, download_root: str):
         except Exception as e:  # bibliothèques CUDA absentes ou pilote trop ancien
             log(f"GPU inutilisable ({e}) : repli sur le processeur")
     return make("cpu", "int8" if compute_type == "auto" else compute_type), "cpu"
+
+
+def batch_size_for(device: str) -> int:
+    """
+    Taille des lots du mode « batched » de faster-whisper
+    (`WHISPER_BATCH_SIZE`, `auto` par défaut : 8 sur GPU, 0 sur processeur).
+
+    Les passages de parole repérés par le VAD sont transcrits par lots au lieu
+    d'un par un : 3 à 4 fois plus rapide sur GPU, même modèle. 0 : mode
+    séquentiel d'avant. Sur processeur, les lots n'accélèrent guère et
+    prennent plus de mémoire : séquentiel par défaut.
+    """
+    raw = (os.environ.get("WHISPER_BATCH_SIZE") or "auto").strip().lower()
+    if raw == "auto":
+        return 8 if device == "cuda" else 0
+    try:
+        return max(0, min(64, int(raw)))
+    except ValueError:
+        log(f"WHISPER_BATCH_SIZE invalide ({raw}) : réglage automatique")
+        return 8 if device == "cuda" else 0
 
 
 def to_verbose(segments, info) -> dict:
@@ -94,8 +115,17 @@ def main() -> int:
         send({"event": "error", "error": f"chargement du modèle {args.model} impossible : {e}"})
         traceback.print_exc()
         return 1
+    batch_size = batch_size_for(device)
+    engine = model
+    if batch_size > 0:
+        from faster_whisper import BatchedInferencePipeline
+
+        engine = BatchedInferencePipeline(model=model)
     send({"event": "ready", "device": device, "model": args.model})
-    log(f"modèle {args.model} prêt sur {device}")
+    log(
+        f"modèle {args.model} prêt sur {device}"
+        + (f", par lots de {batch_size}" if batch_size > 0 else ", séquentiel")
+    )
 
     for line in sys.stdin:
         line = line.strip()
@@ -105,7 +135,8 @@ def main() -> int:
         try:
             req = json.loads(line)
             req_id = req.get("id")
-            segments, info = model.transcribe(
+            extra = {"batch_size": batch_size} if batch_size > 0 else {}
+            segments, info = engine.transcribe(
                 req["file"],
                 language=req.get("language") or "en",
                 initial_prompt=req.get("prompt") or None,
@@ -120,6 +151,7 @@ def main() -> int:
                 # Saute les silences de plus de 2 s où Whisper « invente »
                 # (« Thank you », « I don't see you » pendant les pauses).
                 hallucination_silence_threshold=2.0,
+                **extra,
             )
             send({"id": req_id, "ok": True, "result": to_verbose(list(segments), info)})
         except Exception as e:

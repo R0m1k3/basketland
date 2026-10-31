@@ -181,8 +181,9 @@ export function commentaryConfig(): CommentaryConfig {
     translateProvider: minimax ? 'minimax' : openai ? 'openai' : 'ollama',
     translateApiKey: online ? online.key : process.env.TRANSLATE_API_KEY?.trim() || '',
     batch: intEnv('TRANSLATE_BATCH', 14, 1, 60),
-    // Les API en ligne encaissent plus de requêtes simultanées qu'un GPU de NAS.
-    parallel: online ? intEnv('TRANSLATE_PARALLEL', 4, 1, 16) : translateParallel(),
+    // Les API en ligne (MiniMax, OpenAI) encaissent bien plus de requêtes
+    // simultanées qu'un GPU de NAS : 8 lots à la fois par défaut.
+    parallel: online ? intEnv('TRANSLATE_PARALLEL', 8, 1, 16) : translateParallel(),
     chunkSec: intEnv('COMMENTARY_CHUNK_SEC', 120, 30, 3600),
     disabledReason,
   };
