@@ -992,19 +992,23 @@ export interface CommentaryControl {
   keepGoing(): boolean;
   target(): number;
   /**
-   * Quelqu'un regarde : la traduction ne prend pas plus de
-   * `COMMENTARY_MAX_LEAD_SEC` d'avance sur la lecture (elle attend), pour ne
-   * pas télécharger le flux ok.ru en concurrence avec le lecteur sans besoin.
+   * Quelqu'un regarde : avec `COMMENTARY_MAX_LEAD_SEC`, la traduction ne prend
+   * pas plus d'avance que cela sur la lecture (elle attend). Sans plafond par
+   * défaut : elle va jusqu'au bout du match, dans l'ordre de lecture.
    */
   watching?(): boolean;
 }
 
 const RUN_TO_END: CommentaryControl = { keepGoing: () => true, target: () => 0 };
 
-/** Avance maximale (s) de la traduction sur la lecture quand on regarde (5 min par défaut). */
+/**
+ * Avance maximale (s) de la traduction sur la lecture quand on regarde ;
+ * 0 (défaut) : aucune. Un plafond laissait le serveur à l'arrêt dès que la
+ * lecture était en pause (traduction et doublage bloqués à quelques minutes).
+ */
 function maxLeadSec(): number {
   const n = Number(process.env.COMMENTARY_MAX_LEAD_SEC);
-  return Number.isFinite(n) && n > 0 ? n : 300;
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 const pause = (ms: number, signal: AbortSignal) =>
@@ -1327,7 +1331,8 @@ export async function runCommentary(
       }
       // Assez d'avance sur la lecture : on attend que le spectateur avance.
       const target = ctl.target();
-      if (ctl.watching?.() && coveredFrom(plans, done, target, duration) - target >= maxLeadSec()) {
+      const lead = maxLeadSec();
+      if (lead > 0 && ctl.watching?.() && coveredFrom(plans, done, target, duration) - target >= lead) {
         await pause(Number(process.env.COMMENTARY_LEAD_POLL_MS) || 5_000, signal);
         continue;
       }

@@ -595,7 +595,8 @@ def main() -> int:
         return 1
     voices = list(engine.prompts)
     send({"event": "ready", "device": engine.device, "model": args.model, "voices": voices})
-    log(f"modèle {args.model} prêt sur {engine.device} · voix {', '.join(voices)}")
+    if not args.embed_only:
+        log(f"modèle {args.model} prêt sur {engine.device} · voix {', '.join(voices)}")
 
     for line in sys.stdin:
         line = line.strip()

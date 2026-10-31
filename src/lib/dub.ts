@@ -244,8 +244,17 @@ export const FEMALE_WINDOW_SEC = 30;
  * (`DUB_FEMALE_F0`) seulement si besoin.
  */
 export const femaleF0Hz = () => envNum('DUB_FEMALE_F0', Number.POSITIVE_INFINITY);
-/** Une réplique plus courte (s) ne crée jamais de nouveau locuteur (empreinte trop peu fiable). */
-const minNewSpeakerSec = () => envNum('DUB_MIN_NEW_SPEAKER_SEC', 1);
+/**
+ * Une réplique plus courte (s) ne crée jamais de nouveau locuteur (empreinte
+ * trop peu fiable) : 2 s. À 1 s, le son d'un match (public, musique) faisait
+ * naître des dizaines de « locuteurs » par tronçon, tous en troisième voix.
+ */
+const minNewSpeakerSec = () => envNum('DUB_MIN_NEW_SPEAKER_SEC', 2);
+/**
+ * Locuteurs au plus par match (commentateur, consultant, troisième voix,
+ * reporter) : au-delà, une réplique rejoint le locuteur le plus proche.
+ */
+export const maxSpeakers = () => Math.max(1, Math.trunc(envNum('DUB_MAX_SPEAKERS', 4)));
 
 /** Accélération maximale d'une réplique trop longue pour sa place. */
 export const MAX_TEMPO = 1.35;
@@ -308,7 +317,8 @@ export function median(xs: readonly number[]): number | null {
  * Regroupement en ligne des répliques d'un tronçon (modifie `state`) :
  * chaque empreinte rejoint le locuteur dont la moyenne est la plus proche si
  * la similarité cosinus atteint `threshold` (moyenne mise à jour), sinon crée
- * un nouveau locuteur — sauf réplique trop courte, rattachée au plus proche.
+ * un nouveau locuteur — sauf réplique trop courte, ou `maxSpeakers` déjà
+ * atteint : rattachée au plus proche.
  * Une réplique sans empreinte prend le locuteur de la précédente (à défaut,
  * de la suivante). Chaque locuteur cumule son temps de parole, ses hauteurs
  * de voix et, sur ses `FEMALE_WINDOW_SEC` premières secondes de parole, la
@@ -323,10 +333,11 @@ export function assignSpeakers(
   embeddings: readonly (readonly number[] | null)[],
   f0: readonly (number | null)[],
   female: readonly (number | null)[] = [],
-  o: { threshold?: number; minNewSec?: number } = {},
+  o: { threshold?: number; minNewSec?: number; maxSpeakers?: number } = {},
 ): (number | null)[] {
   const threshold = o.threshold ?? speakerSimThreshold();
   const minNewSec = o.minNewSec ?? minNewSpeakerSec();
+  const maxCount = o.maxSpeakers ?? maxSpeakers();
   const ids: (number | null)[] = [];
   for (let i = 0; i < durations.length; i++) {
     const e = embeddings[i];
@@ -348,7 +359,7 @@ export function assignSpeakers(
       b.centroid = b.centroid.map((x, k) => (x * b.n + e[k]) / (b.n + 1));
       b.n++;
       ids.push(b.id);
-    } else if (best && bestSim > -1 && durations[i] < minNewSec) {
+    } else if (best && bestSim > -1 && (durations[i] < minNewSec || state.speakers.length >= maxCount)) {
       ids.push(best.id);
     } else {
       const s: Speaker = { id: state.nextId++, centroid: [...e], n: 1, talk: 0, f0: [] };

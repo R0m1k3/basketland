@@ -269,6 +269,18 @@ describe('runCommentary à la demande', () => {
     expect(db.getCommentaryTrack(A)?.complete).toBe(1);
   });
 
+  it('par défaut, pas de plafond d’avance : lecture en pause au début, la traduction va quand même jusqu’au bout', async () => {
+    const { deps, calls } = fakeDeps();
+    const res = await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, {
+      target: () => 0,
+      watching: () => true,
+      keepGoing: () => true,
+    });
+    expect(res).toMatchObject({ ok: true });
+    expect(calls.transcribe).toEqual(PLANS.map((p) => p.index));
+    expect(db.getCommentaryTrack(A)?.complete).toBe(1);
+  });
+
   it('spectateur présent : pas plus de COMMENTARY_MAX_LEAD_SEC d’avance sur la lecture (la traduction attend)', async () => {
     process.env.COMMENTARY_MAX_LEAD_SEC = '500';
     process.env.COMMENTARY_LEAD_POLL_MS = '5';

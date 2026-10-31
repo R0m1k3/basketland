@@ -448,7 +448,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
 | `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
 | `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
-| `COMMENTARY_MAX_LEAD_SEC` | `300` (5 min) | Quand quelqu'un regarde, la traduction ne prend pas plus d'avance que cela sur la lecture : elle attend, au lieu de télécharger le flux ok.ru en concurrence avec le lecteur. |
+| `COMMENTARY_MAX_LEAD_SEC` | — (aucun plafond) | Si défini : quand quelqu'un regarde, la traduction ne prend pas plus d'avance que cela sur la lecture (elle attend). Par défaut, elle va jusqu'au bout du match, dans l'ordre de lecture, même lecture en pause. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
 | `OPENAI_API_KEY` | — | Clé API OpenAI : si définie (ou enregistrée dans la page Paramètres, prioritaire), la traduction passe par l'API OpenAI au lieu d'Ollama. La transcription reste locale. Facturée à l'usage par OpenAI (ce n'est pas l'abonnement ChatGPT). |
@@ -653,7 +653,8 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 | `TTS_LOAD_TIMEOUT_MS` | `600000` (10 min) | Délai de démarrage du moteur **sans nouvelles** de sa part : chaque étape du téléchargement du modèle le relance. |
 | `TTS_SYNTH_TIMEOUT_SEC` | auto | Délai max d'une prise (s). Auto : 20 s + 3 × la durée plausible maximale de la ligne sur GPU, 60 s + 60 × sur processeur. |
 | `DUB_SPEAKER_SIM` | `0.6` | Similarité (cosinus) minimale pour rattacher une réplique à un locuteur déjà connu ; en dessous, nouveau locuteur. |
-| `DUB_MIN_NEW_SPEAKER_SEC` | `1` | Une réplique plus courte ne crée jamais de nouveau locuteur (empreinte peu fiable). |
+| `DUB_MIN_NEW_SPEAKER_SEC` | `2` | Une réplique plus courte ne crée jamais de nouveau locuteur (empreinte peu fiable). |
+| `DUB_MAX_SPEAKERS` | `4` | Locuteurs au plus par match ; au-delà, une réplique rejoint le locuteur le plus proche. |
 | `DUB_FEMALE_PROB` | `0.85` | Probabilité moyenne « voix de femme » (classifieur, sur au moins 10 s de répliques dans les 30 premières secondes du locuteur) à partir de laquelle un locuteur prend la voix féminine `F`. Une valeur > 1 désactive la voix F automatique. |
 | `DUB_FEMALE_F0` | — (désactivé) | Repli si le classifieur manque (ou n'a pas assez entendu un nouveau locuteur) : hauteur de voix médiane (Hz) à partir de laquelle il prend `F`. Jamais contre le classifieur. |
 | `DUB_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail de doublage. |

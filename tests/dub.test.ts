@@ -279,6 +279,19 @@ describe('locuteurs et voix', () => {
     expect(st.speakers).toHaveLength(1);
   });
 
+  it('son de match bruité : pas plus de DUB_MAX_SPEAKERS locuteurs, ni de nouveau locuteur sur une réplique de moins de 2 s', () => {
+    const st = emptySpeakers();
+    // Six empreintes toutes différentes (bruit), longues : 4 locuteurs au plus, les suivantes rejoignent le plus proche.
+    const ids = assignSpeakers(st, [3, 3, 3, 3, 3, 3], [0, 1, 2, 3, 4, 5].map(basis), [110, 120, 130, 140, 150, 160], [], { threshold: 0.6 });
+    expect(st.speakers).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
+    // Réplique de 1,5 s inconnue : rattachée au plus proche (défaut : 2 s minimum pour un nouveau locuteur).
+    const st2 = emptySpeakers();
+    assignSpeakers(st2, [3, 1.5], [VEC.X, VEC.Y], [110, 120], [], { threshold: 0.6 });
+    expect(st2.speakers).toHaveLength(1);
+    expect(assignSpeakers(emptySpeakers(), [3, 3, 3], [VEC.X, VEC.Y, VEC.W], [1, 2, 3], [], { threshold: 0.6, maxSpeakers: 2 })).toEqual([0, 1, 0]);
+  });
+
   it('rôles : 1er temps de parole → A, 2e → B4, suivants → B1 ; stables ; nouveau locuteur → prochaine voix libre', () => {
     const st = emptySpeakers();
     assignSpeakers(st, [2, 5, 1, 4, 1], [VEC.X, VEC.Y, basis(5), VEC.Y, basis(5)], [110, 120, 100, 122, 101], [], { threshold: 0.6, minNewSec: 0.5 });
