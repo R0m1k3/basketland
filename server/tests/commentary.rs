@@ -1162,3 +1162,35 @@ async fn dossiers_de_travail_abandonnes_supprimes() {
     assert_eq!(cm::prune_work_dirs(Some(5.0), std::slice::from_ref(&b)), 1);
     assert!(!a.exists() && b.exists());
 }
+
+/// Garde-fou (la fenêtre de concurrence est trop courte pour être reproduite
+/// à coup sûr ; le correctif se vérifie à la lecture d'`enqueue`).
+/// Demandes concurrentes du même match (fils tokio en parallèle) : un seul
+/// travail démarre, jamais de doublon en file derrière celui qui tourne —
+/// même avec `force`, qui passe le contrôle « déjà prête ».
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn demandes_concurrentes_dedoublonnees() {
+    for _ in 0..20 {
+        let t = setup(&[A]);
+        let g = Gated::default();
+        t.svc.set_runner(Some(g.runner(false, None)));
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let svc = t.svc.clone();
+                let b = barrier.clone();
+                tokio::task::spawn_blocking(move || {
+                    b.wait();
+                    svc.enqueue(A, opts(true, true, false))
+                })
+            })
+            .collect();
+        for h in handles {
+            h.await.unwrap();
+        }
+        assert_eq!(g.started(), vec![A], "un seul démarrage");
+        assert_eq!(t.svc.queue_position(A), None, "aucun doublon en file");
+        g.resolve(A, ok("ok"));
+        t.svc.idle().await;
+    }
+}

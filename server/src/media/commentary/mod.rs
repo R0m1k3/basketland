@@ -1052,6 +1052,20 @@ impl Commentary {
         }
         let existed = {
             let mut st = self.st();
+            // Revérifié sous le verrou de la file : un appel concurrent a pu
+            // démarrer ce match depuis le premier contrôle (Node n'a qu'un fil :
+            // le contrôle et l'insertion y sont d'un seul tenant).
+            if let Some(r) = st.running.as_ref().filter(|r| r.job.match_id == match_id) {
+                if opts.explicit {
+                    r.job.explicit.store(true, Ordering::SeqCst);
+                }
+                return EnqueueResult {
+                    queued: false,
+                    started: true,
+                    position: None,
+                    message: "Traduction déjà en cours".into(),
+                };
+            }
             let existing = st.queue.iter().position(|j| j.match_id == match_id);
             let prev = existing.map(|i| st.queue[i].clone());
             let job = Job::with(
