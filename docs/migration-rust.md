@@ -49,7 +49,7 @@ navigateur ──► basketland-server (Rust, :3012)
 | 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus signalés aux files de Node par `POST /api/internal/replays` | ✅ |
 | 6a | Fondations médias en bibliothèque Rust, **pas encore branchées** (Node fait toujours tourner les files) : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
 | 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | en cours : file de traduction et doublage portés (non branchés) |
-| 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`) | à faire |
+| 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`, calage de `/api/matches/[id]/sync`) | analyse vidéo/OCR portée (non branchée) : Tesseract natif dans l'image |
 | 8a | Données de chaque page en JSON servies par Rust (`GET /api/pages/…`) : portage de `queries.ts`, `teams.ts`, `linescore.ts`, `version.ts`, `currentSession`, `safeNextPath` ; état des files encore côté Node lu par `POST /api/internal/page-state` | ✅ |
 | 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export React) servis par Rust (règles d'accès des pages comprises), migrations SQL en Rust, Node retiré de l'image | à faire |
 
@@ -75,6 +75,8 @@ Variables du serveur Rust :
 | `INGEST_TOKEN` | fichier `$DATA_DIR/ingest_token` | Jeton de `POST /api/ingest`, comme Node. |
 | `BL_ESPN_SITE` | API ESPN | Autre adresse de l'API ESPN (tests hors réseau). |
 | `BV_RATE_MS` | `2000` | Délai entre deux requêtes vers basketball-video, comme Node. |
+| `TESSDATA_PREFIX` | dossier de libtesseract | Dossier de `eng.traineddata` pour l'OCR natif (`/usr/share/basketland/tessdata` dans l'image, modèle de tesseract.js). |
+| `OMP_THREAD_LIMIT` | | `1` dans l'image : un seul fil OpenMP pour libtesseract (lu au lancement du processus). |
 
 ### Jobs d'ingestion (étape 5a)
 
@@ -341,3 +343,110 @@ cours chez Node) : 18 pages servies par Rust identiques à l'octet au calcul
 de Node (`INGEST_TOKEN=… npx -y tsx server/tests/node-fixtures-pages.mts
 --live <base> <url de Rust> <jeton de session> <url de Node>`, l'état des
 files étant lu chez Node comme le fait Rust).
+
+### Analyse vidéo et OCR (étape 7, non branchée)
+
+`ocr.ts`, `scoreboard.ts` et `analysis.ts` sont portés en bibliothèque
+(`server/src/media/ocr.rs`, `scoreboard.rs`, `analysis.rs`, requêtes dans
+`server/src/analysis_db.rs`), ainsi que les gestionnaires de
+`GET`/`POST /api/matches/[id]/sync` (`server/src/sync_route.rs`). **Rien ne
+les appelle encore** : Node fait toujours tourner sa file d'analyse et sert la
+route ; ils seront basculés avec les autres files médias.
+
+- `ocr.rs` : parseur du bandeau, scores du play-by-play, intervalle d'un
+  chrono arrêté, `selectConsistentObservations`, extraction d'images et
+  filtres ffmpeg (`grabFrame`, `filterImage`, `rawGray`, mêmes arguments et
+  délais), moteur OCR derrière le trait `OcrEngine`.
+- `scoreboard.rs` : jetons des mots, candidats chrono, vote, zones fixes,
+  cases claires, empreinte du bandeau, localisation (zones fixes puis bandes),
+  lecture « gabarit » (case de période retenue par localisation, comme le
+  `WeakMap` de Node), mêmes opérations flottantes (`Math.hypot` de V8 compris).
+- `analysis.rs` : file (`enqueueAnalysis`, `pump`, priorité, cooldown,
+  backoff et abandon, garde-fou `ANALYSIS_TIMEOUT_MS` hors pauses, pause des
+  analyses de fond pendant une lecture, abandon hors de la fenêtre de nuit),
+  `runAnalysis` (sonde du flux, balayage `video_scan` avec `OcrScan`, cache
+  `scoreboard:<okId>` au même JSON, ancres `auto`, audio, VF recalée par
+  `ingest::regenerate_subtitles`, play-by-play manquant récupéré par
+  `ingest::ingest_match_details`), statuts et activité. Backoff, sources et
+  `MAX_AUTO_FAILURES` repris de `media::commentary` (portés en 6b).
+
+Mêmes variables, défauts et bornes (`ANALYSIS_MAX_PARALLEL`,
+`ANALYSIS_MIN_INTERVAL_MS`, `ANALYSIS_TIMEOUT_MS`, `OCR_DISABLED`,
+`OCR_STEP_SEC`, `SYNC_WRITE_ORIGINS`, `COMMENTARY_NIGHT_WINDOW`), mêmes
+journaux (`[analyse] match … : …`, `[analyse] journalisation impossible : …`).
+
+**Moteur OCR** : Node utilise tesseract.js 7 (Tesseract 5.1 compilé en WASM)
+avec `@tesseract.js-data/eng` (`4.0.0_best_int`). Rust appelle libtesseract 5
+natif par son API C (`server/src/media/tesseract.rs`, sans `bindgen`), même
+moteur (LSTM seul), mêmes paramètres, PNG décodé par Leptonica comme
+tesseract.js. Il est derrière la fonction cargo `ocr` (désactivée par défaut :
+`cargo test` passe sans libtesseract ; sans elle, l'analyse échoue en « OCR
+indisponible »). L'image Docker l'active : étage Rust avec
+`libtesseract-dev libleptonica-dev`, `cargo build --features ocr` ; image
+finale avec `libtesseract5` et le **même** `eng.traineddata` que tesseract.js
+(copié de `node_modules`, décompressé dans `/usr/share/basketland/tessdata`,
+`TESSDATA_PREFIX`), et `OMP_THREAD_LIMIT=1` : tesseract.js n'a qu'un fil,
+libtesseract en lance plusieurs (OpenMP) qui s'attendent activement sur une
+machine chargée (mesuré : 68 s au lieu de 0,5 s pour une bande en psm 11) ;
+libgomp ne lit cette limite qu'au chargement du processus, elle doit donc venir
+de l'environnement (à poser aussi hors Docker).
+
+API que le branchement appellera :
+
+| Appelant | Rust | Équivalent Node |
+|----------|------|-----------------|
+| construction | `Analysis::new(db, video, commentary.viewers(), clock)` ou `Analysis::with_options(db, AnalysisDeps::defaults(db, video), AnalysisOptions::shared_with(&commentary))` | `globalThis.__analysisQueue` |
+| `GET`/`POST /api/matches/[id]/sync` | `sync_route::get(&db, &analysis, raw_id)`, `sync_route::post(&db, &analysis, raw_id, &headers, &body)` (après la session ; réponse complète) | `route.ts` |
+| cron `analyses` | `analysis.enqueue_recent(None, None)` | `enqueueRecentAnalyses()` |
+| `/api/activity`, doublage (`gpuHolder`) | `analysis.activity()` (`to_json()` : `{ running: [{ matchId, phase, done, total }], queued }`, phase de pause `PAUSED_PHASE`) | `analysisActivity()` |
+| replay trouvé, fiche | `analysis.enqueue(id, EnqueueOptions { … })`, `analysis.status(id)`, `start_video_analysis` | `enqueueAnalysis`, `analysisStatus`, `startVideoAnalysis` |
+| tests | `set_runner` (`__setAnalysisRunnerForTests`), `idle` (`__analysisIdle`) | |
+
+La file partage la table des spectateurs et l'horloge du service
+`Commentary` (un seul `viewers.ts` et un seul `Date.now()` côté Node).
+
+Vérifié contre Node (`server/tests/node-fixtures-ocr.mts` →
+`fixtures/ocr.expected.json`, `tests/ocr_node.rs`) : 2 776 textes et 189
+listes de mots réellement lus par tesseract.js (parseur, jetons, périodes et
+chronos déformés, candidats, recollage, cases de période), 46 votes, zones
+fixes, cases claires et empreintes sur les vignettes des vraies images
+(vignettes identiques à l'octet), 60 recadrages, scores et 12 jeux
+d'observations sur le play-by-play réel ; puis la localisation et la lecture
+des vraies images (`tests/real-frames.test.ts`, trois diffuseurs et les plans
+sans bandeau) et des images synthétiques (`tests/scoreboard.test.ts`) en
+rejouant les réponses enregistrées de tesseract.js : 537 appels OCR, tous
+retrouvés (mêmes images filtrées par ffmpeg), localisations au même JSON à
+l'octet, mêmes lectures, même nombre d'appels. Route de calage : 35 requêtes
+(`node-fixtures-analysis.mts` → `fixtures/analysis.expected.json`,
+`tests/analysis_node.rs`) — lecture, ancres, offsets, décalages, remise à
+zéro, chaque erreur de validation, origine, Content-Type, analyses demandées —
+mêmes statuts, corps (ordre des clés compris) et lignes `sync_anchors` /
+`sync_settings`. File : cas de `tests/analysis.test.ts` et
+`tests/sync-route.test.ts` portés (`tests/analysis.rs`), plus des analyses
+complètes avec de fausses dépendances (audio seul, flux inaccessible, moteur
+OCR absent, play-by-play manquant, pause pendant une lecture).
+
+Tesseract natif (libtesseract 5.3.4 ici ; 5.3.0 dans l'image bookworm) face à
+tesseract.js 7 (Tesseract 5.1 WASM), mêmes images et même modèle
+(`OMP_THREAD_LIMIT=1 cargo test --features ocr --test ocr_native -- --nocapture`) :
+- appel par appel (414 images filtrées distinctes des vraies images) : texte
+  identique pour 290 (70 %) — 234/258 en une ligne avec alphabet, 50/100 en
+  une ligne sans alphabet, 6/56 en texte épars (psm 11, bandeau entier :
+  écarts sur les logos et le bruit surtout) ; les écarts sont des glyphes
+  limites (« 1T »/« 17 », « G:57 »/« 6:57 », « 2nD »/« 2n0 ») ;
+- localisation : identique sur les 4 images synthétiques ; sur les vraies
+  images, même zone et même boîte du chrono, mais boîtes de période et de
+  scores différentes pour les trois diffuseurs (JSON du cache différent) ;
+- lectures finales : 33/36 (période, chrono) identiques à tesseract.js
+  (22 images avec bandeau, 14 plans sans bandeau, tous lus « rien » par les
+  deux) ; écarts : nybos t1800 (période non lue en natif), denokc t1700
+  (rien lu en natif), denokc t4700 (période 4 lue en natif, pas par
+  tesseract.js) ; avec les scores : 25/36 identiques ;
+- face à la vérité terrain (règles de `tests/real-frames.test.ts`, toutes
+  tenues) : période + chrono 17/19 en natif contre 18/19 pour tesseract.js,
+  aucun chrono faux dans les lectures finales, rien sur les plans sans
+  bandeau ; parmi les 22 lectures des images de localisation (réutilisées
+  comme observations), une lecture fausse en natif (nybos t1800 : 2:43 au
+  lieu de 2:13 ; tesseract.js lit 2:13) que la chaîne cohérente doit écarter ;
+- vitesse (machine de test chargée, build de débogage) : localisation 15-20 s
+  pour 6-9 images, lecture ≈ 1,7 s par image.

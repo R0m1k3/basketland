@@ -630,7 +630,7 @@ impl ScanDeps for Replay<'_> {
     async fn locate(
         &self,
         frames: &[Vec<u8>],
-        _progress: &dyn Fn(usize, usize),
+        _progress: &(dyn Fn(usize, usize) + Send + Sync),
     ) -> Result<LocateResult<Value>, String> {
         let readings = frames
             .iter()

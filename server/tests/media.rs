@@ -1977,3 +1977,71 @@ async fn extraction_audio_ffmpeg_reel() {
     std::env::remove_var("FFMPEG_PATH");
     assert_eq!(e, "spawn /nexiste/ffmpeg ENOENT");
 }
+
+/// Régression : les tronçons sont découpés PENDANT l'extraction du son
+/// complet, dès que la progression les couvre. ffmpeg n'écrivait le fichier
+/// que par blocs de 512 Ko : la découpe sortait tronquée (105 s au lieu de
+/// 120 s), sans erreur — trous de sous-titres en fin de tronçon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn decoupe_pendant_l_extraction_du_son_complet() {
+    if !has_opus() {
+        return;
+    }
+    let _g = clean_env().await;
+    set("COMMENTARY_AUDIO_READRATE", "20");
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("match.wav");
+    let st = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=d=420:c=pink:r=16000:a=0.3",
+            "-ac",
+            "1",
+        ])
+        .arg(&src)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let full = dir
+        .path()
+        .join("full.ogg.part")
+        .to_string_lossy()
+        .into_owned();
+    let done = Arc::new(Mutex::new(0.0f64));
+    let d2 = done.clone();
+    let src_s = src.to_string_lossy().into_owned();
+    let full2 = full.clone();
+    let extraction = tokio::spawn(async move {
+        let progress = move |s: f64| {
+            let mut m = d2.lock().unwrap();
+            *m = m.max(s);
+        };
+        extract_full_audio(
+            &src_s,
+            &full2,
+            &ExtractOptions::default(),
+            Some(&progress),
+            None,
+        )
+        .await
+    });
+    for (start, length) in [(0.0, 120.0), (120.0, 120.0)] {
+        while *done.lock().unwrap() < start + length + 2.0 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let cut = dir.path().join(format!("cut-{start}.ogg"));
+        cut_audio(&full, start, length, &cut.to_string_lossy(), None)
+            .await
+            .unwrap();
+        let d = probe(&cut).0;
+        assert!(
+            d > length - 1.0,
+            "tronçon {start} : {d} s au lieu de {length} s"
+        );
+    }
+    extraction.await.unwrap().unwrap();
+}

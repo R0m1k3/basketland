@@ -7,10 +7,11 @@
 //! 3. Affinage (2 tours au plus) : là où les ancres manquent ou se
 //!    contredisent, on resserre le pas (~30 s).
 //!
-//! L'OCR (`ocr.ts`, `scoreboard.ts`) sera porté à l'étape 7 : extraction
-//! d'image, lecture et localisation du bandeau, et choix des observations
-//! cohérentes sont fournis par l'appelant ([`ScanDeps`]). La planification
-//! ([`spread`], [`coarse_times`], [`plan_refinement`]) est portée à l'identique.
+//! Extraction d'image, lecture et localisation du bandeau, et choix des
+//! observations cohérentes sont fournis par l'appelant ([`ScanDeps`]) ;
+//! l'implémentation OCR (étape 7) est [`crate::media::analysis::OcrScan`].
+//! La planification ([`spread`], [`coarse_times`], [`plan_refinement`]) est
+//! portée à l'identique.
 
 use crate::js;
 use crate::vf_sync::{build_mapping, BreakInfo, ResolvedAnchor, TimedPlay};
@@ -241,7 +242,7 @@ pub trait ScanDeps {
     fn locate(
         &self,
         frames: &[Vec<u8>],
-        progress: &dyn Fn(usize, usize),
+        progress: &(dyn Fn(usize, usize) + Send + Sync),
     ) -> impl Future<Output = Result<LocateResult<Self::Location>, String>>;
     /// Ancres de la chaîne cohérente des observations.
     fn consistent(&self, observations: &[FrameObservation]) -> Vec<ResolvedAnchor>;
@@ -260,7 +261,7 @@ pub struct ScanOptions<'a, L> {
     pub sample_frames: Option<f64>,
     /// Tours d'affinage au plus (2).
     pub refine_rounds: Option<f64>,
-    pub on_progress: Option<&'a (dyn Fn(ScanPhase, usize, usize) + 'a)>,
+    pub on_progress: Option<&'a (dyn Fn(ScanPhase, usize, usize) + Send + Sync + 'a)>,
 }
 
 /// Résultat de [`scan_video`].
@@ -297,7 +298,7 @@ async fn read_at<D: ScanDeps>(
     st: &mut ScanState<D::Location>,
     times: &[f64],
     phase: ScanPhase,
-    progress: Option<&(dyn Fn(ScanPhase, usize, usize) + '_)>,
+    progress: Option<&(dyn Fn(ScanPhase, usize, usize) + Send + Sync + '_)>,
 ) {
     for (k, &t) in times.iter().enumerate() {
         st.scanned.push(t);
@@ -319,7 +320,7 @@ async fn localize<D: ScanDeps>(
     st: &mut ScanState<D::Location>,
     d: f64,
     sample_frames: Option<f64>,
-    progress: Option<&(dyn Fn(ScanPhase, usize, usize) + '_)>,
+    progress: Option<&(dyn Fn(ScanPhase, usize, usize) + Send + Sync + '_)>,
 ) -> Result<(), String> {
     let n = js::max(1.0, sample_frames.unwrap_or(10.0).trunc()) as i64;
     let sample_times = spread(d * 0.06, d * 0.94, n);

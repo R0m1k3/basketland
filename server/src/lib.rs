@@ -6,6 +6,7 @@
 //! (voir `docs/migration-rust.md`).
 
 pub mod accounts;
+pub mod analysis_db;
 pub mod api;
 pub mod auth;
 pub mod bv;
@@ -40,6 +41,7 @@ pub mod routes_settings;
 pub mod routes_video;
 pub mod settings;
 pub mod state;
+pub mod sync_route;
 pub mod teams;
 pub mod time;
 pub mod version;

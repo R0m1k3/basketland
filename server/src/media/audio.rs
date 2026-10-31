@@ -449,6 +449,11 @@ pub async fn extract_full_audio(
         args.extend(["-readrate".into(), js_number_string(readrate)]);
     }
     args.extend(["-i".into(), source_url.into()]);
+    // Chaque paquet écrit tout de suite sur le disque : le fichier est découpé
+    // PENDANT l'extraction dès que `out_time` couvre le tronçon ; sans ça,
+    // ffmpeg n'écrit que par blocs de 512 Ko (2 à 3 min) et la découpe sortait
+    // tronquée, sans erreur (même réglage que Node).
+    args.extend(["-flush_packets".into(), "1".into()]);
     args.extend(OPUS_ARGS.map(String::from));
     args.extend(["ogg".into(), "-y".into(), out_file.into()]);
     let mut child = Command::new(&bin)
