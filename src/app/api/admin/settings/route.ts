@@ -7,6 +7,7 @@ import {
   minimaxKeyError,
   minimaxModelError,
   minimaxSettingsView,
+  minimaxTranslateModelError,
   modelError,
   openAiSettingsView,
   parseMinimaxVoices,
@@ -35,7 +36,8 @@ export async function GET(req: Request) {
  * POST /api/admin/settings — administrateurs seulement.
  * { openaiApiKey?: string | null, openaiModel?: string | null, autoTranslate?: boolean,
  *   vfMode?: 'sous-titres' | 'doublage', minimaxApiKey?: string | null,
- *   minimaxModel?: string | null, minimaxVoices?: { A?, B4?, B1?, F? } | null }
+ *   minimaxModel?: string | null, minimaxVoices?: { A?, B4?, B1?, F? } | null,
+ *   minimaxTranslate?: boolean, minimaxTranslateModel?: string | null }
  * Champ absent = inchangé ; null ou chaîne vide = supprimé. Les clés ne sont
  * jamais renvoyées en clair : la réponse ne contient que leur forme masquée.
  */
@@ -52,6 +54,7 @@ export async function POST(req: Request) {
     ['openaiModel', SETTING_KEYS.openaiModel, modelError],
     ['minimaxApiKey', SETTING_KEYS.minimaxApiKey, minimaxKeyError],
     ['minimaxModel', SETTING_KEYS.minimaxModel, minimaxModelError],
+    ['minimaxTranslateModel', SETTING_KEYS.minimaxTranslateModel, minimaxTranslateModelError],
   ] as const) {
     if (!(field in body)) continue;
     const raw = body[field];
@@ -63,6 +66,10 @@ export async function POST(req: Request) {
   }
   if ('autoTranslate' in body && typeof body.autoTranslate !== 'boolean') return error(400, 'autoTranslate invalide (attendu : true ou false)');
   if ('vfMode' in body && !isVfMode(body.vfMode)) return error(400, "vfMode invalide (attendu : 'sous-titres' ou 'doublage')");
+  if ('minimaxTranslate' in body) {
+    if (typeof body.minimaxTranslate !== 'boolean') return error(400, 'minimaxTranslate invalide (attendu : true ou false)');
+    updates.push([SETTING_KEYS.minimaxTranslate, body.minimaxTranslate ? '1' : '0']);
+  }
   if ('minimaxVoices' in body) {
     const v = parseMinimaxVoices(body.minimaxVoices);
     if ('error' in v) return error(400, v.error);

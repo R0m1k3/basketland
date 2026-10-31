@@ -2,22 +2,32 @@
 
 import { useState, type FormEvent } from 'react';
 import type { MinimaxSettingsView } from '@/lib/settings';
-import { MINIMAX_FRENCH_VOICES, MINIMAX_MODELS, MINIMAX_ROLE_LABELS, MINIMAX_ROLES, type MinimaxRole } from '@/lib/minimaxCatalog';
+import {
+  MINIMAX_FRENCH_VOICES,
+  MINIMAX_MODELS,
+  MINIMAX_ROLE_LABELS,
+  MINIMAX_ROLES,
+  MINIMAX_TEXT_MODELS,
+  type MinimaxRole,
+} from '@/lib/minimaxCatalog';
 import { postJson } from '@/components/auth/client';
 import { IconKey } from '@/components/ui/Icons';
 
 type Msg = { ok: boolean; text: string } | null;
 
 /**
- * « Voix MiniMax » (administrateurs) : clé API MiniMax (en écriture seule —
+ * « MiniMax » (administrateurs) : clé API MiniMax (en écriture seule —
  * le serveur ne renvoie que sa forme masquée), modèle de voix et voix
- * française de chaque rôle du doublage.
+ * française de chaque rôle du doublage, et traduction des commentaires par
+ * un modèle texte MiniMax (même clé).
  */
 export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsView }) {
   const [view, setView] = useState(initial);
   const [key, setKey] = useState('');
   const [model, setModel] = useState(initial.model);
   const [voices, setVoices] = useState<Record<MinimaxRole, string>>(initial.voices);
+  const [translate, setTranslate] = useState(initial.translate);
+  const [translateModel, setTranslateModel] = useState(initial.translateModel);
   const [msg, setMsg] = useState<Msg>(null);
   const [busy, setBusy] = useState(false);
   const active = view.keySet || view.envKey;
@@ -31,13 +41,15 @@ export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsV
     setView(r.data.minimax);
     setModel(r.data.minimax.model);
     setVoices(r.data.minimax.voices);
+    setTranslate(r.data.minimax.translate);
+    setTranslateModel(r.data.minimax.translateModel);
     setKey('');
     setMsg({ ok: true, text: okText });
   }
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const body: Record<string, unknown> = { minimaxModel: model, minimaxVoices: voices };
+    const body: Record<string, unknown> = { minimaxModel: model, minimaxVoices: voices, minimaxTranslate: translate, minimaxTranslateModel: translateModel };
     if (key.trim()) body.minimaxApiKey = key;
     void save(body, 'Réglages MiniMax enregistrés : ils servent dès le prochain doublage.');
   }
@@ -45,10 +57,11 @@ export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsV
   return (
     <div className="panel overflow-hidden">
       <div className="space-y-2 border-b border-ink-700/70 p-5 text-sm leading-relaxed text-paper-dim sm:p-6">
-        <p className="font-display text-lg font-bold uppercase tracking-wide text-paper">Voix MiniMax</p>
+        <p className="font-display text-lg font-bold uppercase tracking-wide text-paper">MiniMax</p>
         <p>
           Si une clé est enregistrée, les voix du doublage passent par MiniMax (voix françaises de son catalogue) au lieu du
-          moteur local : rien à télécharger, et la carte graphique reste libre pour la traduction.
+          moteur local : rien à télécharger, et la carte graphique reste libre pour la traduction. La traduction peut aussi y
+          passer (interrupteur plus bas).
         </p>
         <p className="text-paper-mute">
           Une clé API se crée sur{' '}
@@ -142,7 +155,51 @@ export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsV
             </div>
           ))}
         </div>
-        {!active && <p className="field-hint">Modèle et voix servent une fois une clé enregistrée.</p>}
+
+        <div className="space-y-4 border-t border-ink-700/70 pt-5">
+          <div className="flex items-center gap-4">
+            <div className="min-w-0 flex-1">
+              <p id="minimax-translate-label" className="field-label !mb-0.5">
+                Traduction des commentaires par MiniMax
+              </p>
+              <p className="text-sm text-paper-mute">
+                La traduction passe par un modèle texte MiniMax (même clé) au lieu du modèle local ou d&apos;OpenAI. La transcription
+                (Whisper) reste locale.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={translate}
+              aria-labelledby="minimax-translate-label"
+              onClick={() => setTranslate((t) => !t)}
+              disabled={busy}
+              className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-wait disabled:opacity-70 ${
+                translate ? 'border-flame bg-flame' : 'border-ink-500 bg-ink-800'
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 rounded-full shadow-[0_1px_3px_rgba(0,0,0,.5)] transition-transform ${translate ? 'translate-x-[22px] bg-ink-950' : 'translate-x-[3px] bg-paper-dim'}`}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+          {translate && (
+            <div>
+              <label htmlFor="minimax-translate-model" className="field-label">
+                Modèle de traduction
+              </label>
+              <select id="minimax-translate-model" className="field" value={translateModel} onChange={(e) => setTranslateModel(e.target.value)}>
+                {MINIMAX_TEXT_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        {!active && <p className="field-hint">Voix et traduction MiniMax servent une fois une clé enregistrée.</p>}
 
         {msg && (
           <p className={msg.ok ? 'form-ok' : 'form-error'} role={msg.ok ? 'status' : 'alert'}>

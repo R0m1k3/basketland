@@ -181,10 +181,22 @@ describe('paramètres MiniMax (route)', () => {
       envKey: false,
       model: 'speech-2.8-hd',
       voices: { A: 'French_Male_Speech_New', B4: 'French_MaleNarrator', B1: 'French_CasualMan', F: 'French_FemaleAnchor' },
+      translate: false,
+      translateModel: 'MiniMax-M3.1-Flash',
     });
     const key = 'sk-api-MINISECRETMINISECRETMINISECRET-wxyz';
     const saved = await settingsPost(
-      post('/api/admin/settings', { minimaxApiKey: ` ${key} `, minimaxModel: 'speech-2.8-turbo', minimaxVoices: { A: 'French_CasualMan', F: 'French_MovieLeadFemale' } }, c),
+      post(
+        '/api/admin/settings',
+        {
+          minimaxApiKey: ` ${key} `,
+          minimaxModel: 'speech-2.8-turbo',
+          minimaxVoices: { A: 'French_CasualMan', F: 'French_MovieLeadFemale' },
+          minimaxTranslate: true,
+          minimaxTranslateModel: 'MiniMax-M3',
+        },
+        c,
+      ),
     );
     expect(saved.status).toBe(200);
     const text = await saved.text();
@@ -194,13 +206,23 @@ describe('paramètres MiniMax (route)', () => {
       keyMasked: 'sk-…wxyz',
       model: 'speech-2.8-turbo',
       voices: { A: 'French_CasualMan', B4: 'French_MaleNarrator', B1: 'French_CasualMan', F: 'French_MovieLeadFemale' },
+      translate: true,
+      translateModel: 'MiniMax-M3',
     });
     expect(db.settingGet('minimax_api_key')).toBe(key);
 
-    for (const bad of [{ minimaxModel: 'speech-9' }, { minimaxVoices: { Z: 'French_CasualMan' } }, { minimaxVoices: { A: 'x"<>' } }, { minimaxApiKey: 'court' }]) {
+    for (const bad of [
+      { minimaxModel: 'speech-9' },
+      { minimaxVoices: { Z: 'French_CasualMan' } },
+      { minimaxVoices: { A: 'x"<>' } },
+      { minimaxApiKey: 'court' },
+      { minimaxTranslate: 'oui' },
+      { minimaxTranslateModel: 'gpt-4' },
+    ]) {
       expect((await settingsPost(post('/api/admin/settings', { ...bad, minimaxModel: (bad as { minimaxModel?: string }).minimaxModel ?? 'speech-2.8-hd' }, c))).status).toBe(400);
     }
     expect(db.settingGet('minimax_tts_model')).toBe('speech-2.8-turbo');
+    expect(db.settingGet('minimax_translate')).toBe('1');
 
     const del = await settingsPost(post('/api/admin/settings', { minimaxApiKey: null, minimaxVoices: null }, c));
     expect((await del.json()).minimax).toMatchObject({ keySet: false, voices: { A: 'French_Male_Speech_New' } });

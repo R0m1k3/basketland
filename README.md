@@ -620,7 +620,7 @@ d'affilée dès ses premières répliques la prendrait ; certains noms (Shai,
 Jokic) gagneraient à un lexique de prononciation.
 
 **Voix MiniMax (en ligne, facultatif)** : avec une clé API MiniMax
-(page **Paramètres → Voix MiniMax**, ou variable `MINIMAX_API_KEY` ; la page
+(page **Paramètres → MiniMax**, ou variable `MINIMAX_API_KEY` ; la page
 l'emporte, et y règle aussi le modèle et la voix de chaque rôle), les répliques sont dites par les **voix françaises du
 catalogue MiniMax** (`speech-2.8-hd` par défaut) au lieu de Qwen3-TTS :
 meilleure qualité, rien à télécharger (2,5 Go en moins) et surtout **plus de
@@ -639,6 +639,8 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 | `DUB_DISABLED` | — | `1` désactive le doublage. |
 | `MINIMAX_API_KEY` | — | Clé API MiniMax : voix du doublage par MiniMax (voir plus haut). Sans clé (ni ici ni dans la page Paramètres), Qwen3-TTS embarqué. Clé, modèle et voix enregistrés dans la page Paramètres l'emportent sur les variables. |
 | `TTS_ENGINE` | auto | `minimax` ou `local` (Qwen3-TTS). Auto : MiniMax si `MINIMAX_API_KEY` est défini. |
+| `MINIMAX_TRANSLATE` | — | `1` : traduction des commentaires par MiniMax (même clé), comme l'interrupteur de la page Paramètres (qui l'emporte). Passe devant OpenAI et le modèle local ; Whisper reste local. |
+| `MINIMAX_TRANSLATE_MODEL` | `MiniMax-M3.1-Flash` | Modèle texte MiniMax de la traduction (`MiniMax-M3` : plus soigné, plus lent). |
 | `MINIMAX_TTS_MODEL` | `speech-2.8-hd` | Modèle de voix MiniMax (`speech-2.8-turbo` : plus rapide et moins cher). |
 | `MINIMAX_VOICE_A`, `MINIMAX_VOICE_B4`, `MINIMAX_VOICE_B1`, `MINIMAX_VOICE_F` | voix françaises ci-dessus | `voice_id` MiniMax de chaque rôle (liste « System Voice ID » de la documentation MiniMax) ; vide : rôle retiré (repli sur une autre voix). |
 | `MINIMAX_TTS_SPEED` | `1` | Débit de parole MiniMax (0,5 à 2). |
