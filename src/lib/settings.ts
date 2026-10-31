@@ -4,6 +4,14 @@
  * repartir vers le navigateur (voir `openAiSettingsView`).
  */
 import { settingGet, settingSet } from './db';
+import {
+  MINIMAX_DEFAULT_MODEL,
+  MINIMAX_DEFAULT_VOICES,
+  MINIMAX_FRENCH_VOICES,
+  MINIMAX_MODELS,
+  MINIMAX_ROLES,
+  type MinimaxRole,
+} from './minimaxCatalog';
 
 /** Clés connues. */
 export const SETTING_KEYS = {
@@ -13,6 +21,10 @@ export const SETTING_KEYS = {
   autoTranslate: 'auto_translate',
   /** « Version française » : 'sous-titres' (défaut) ou 'doublage'. */
   vfMode: 'vf_mode',
+  /** Voix du doublage par MiniMax : clé API, modèle, voix par rôle (JSON { A, B4, B1, F }). */
+  minimaxApiKey: 'minimax_api_key',
+  minimaxModel: 'minimax_tts_model',
+  minimaxVoices: 'minimax_voices',
 } as const;
 
 /** Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire). */
@@ -118,4 +130,72 @@ export function apiKeyError(key: string): string | null {
 export function modelError(model: string): string | null {
   if (model.length > 100 || !/^[A-Za-z0-9._:/-]+$/.test(model)) return 'Nom de modèle invalide.';
   return null;
+}
+
+// ------------------------------------------------------------------ MiniMax (voix du doublage)
+
+/** Voix MiniMax enregistrées (rôles absents : valeur par défaut ou variable d'environnement). */
+export function savedMinimaxVoices(): Partial<Record<MinimaxRole, string>> {
+  try {
+    const v = JSON.parse(getSetting(SETTING_KEYS.minimaxVoices) || '{}') as Record<string, unknown>;
+    const out: Partial<Record<MinimaxRole, string>> = {};
+    for (const r of MINIMAX_ROLES) if (typeof v[r] === 'string' && v[r]) out[r] = v[r] as string;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export interface MinimaxSettingsView {
+  /** Une clé est enregistrée dans la page Paramètres. */
+  keySet: boolean;
+  /** Forme masquée de la clé enregistrée, ou null. */
+  keyMasked: string | null;
+  /** Une clé est donnée par la variable MINIMAX_API_KEY (utilisée faute de clé enregistrée). */
+  envKey: boolean;
+  /** Modèle en service (enregistré, sinon MINIMAX_TTS_MODEL, sinon défaut). */
+  model: string;
+  /** Voix en service par rôle (enregistrée, sinon MINIMAX_VOICE_<rôle>, sinon défaut). */
+  voices: Record<MinimaxRole, string>;
+}
+
+/** Ce que l'interface peut afficher de la configuration MiniMax (jamais la clé complète). */
+export function minimaxSettingsView(): MinimaxSettingsView {
+  const key = getSetting(SETTING_KEYS.minimaxApiKey);
+  const saved = savedMinimaxVoices();
+  const voices = {} as Record<MinimaxRole, string>;
+  for (const r of MINIMAX_ROLES) voices[r] = saved[r] ?? (process.env[`MINIMAX_VOICE_${r}`]?.trim() || MINIMAX_DEFAULT_VOICES[r]);
+  return {
+    keySet: !!key,
+    keyMasked: key ? maskApiKey(key) : null,
+    envKey: !!process.env.MINIMAX_API_KEY?.trim(),
+    model: getSetting(SETTING_KEYS.minimaxModel) || process.env.MINIMAX_TTS_MODEL?.trim() || MINIMAX_DEFAULT_MODEL,
+    voices,
+  };
+}
+
+/** Clé MiniMax saisie (plus longue qu'une clé OpenAI : jusqu'à ~1 000 caractères). */
+export function minimaxKeyError(key: string): string | null {
+  if (key.length < 20 || key.length > 2000) return 'La clé API semble invalide (longueur inattendue).';
+  if (!/^[\x21-\x7e]+$/.test(key)) return 'La clé API ne doit contenir ni espace ni caractère accentué.';
+  return null;
+}
+
+export function minimaxModelError(model: string): string | null {
+  return MINIMAX_MODELS.some((m) => m.id === model) ? null : 'Modèle MiniMax inconnu.';
+}
+
+/** Voix par rôle saisies : rend la valeur à enregistrer (JSON), ou un message d'erreur. */
+export function parseMinimaxVoices(raw: unknown): { value: string | null } | { error: string } {
+  if (raw === null) return { value: null };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'minimaxVoices invalide' };
+  const out: Partial<Record<MinimaxRole, string>> = {};
+  for (const [role, id] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(MINIMAX_ROLES as readonly string[]).includes(role)) return { error: `Rôle de voix inconnu : ${role}` };
+    // Catalogue, ou identifiant de voix MiniMax plausible (voix venue d'une variable d'environnement).
+    const plausible = typeof id === 'string' && (MINIMAX_FRENCH_VOICES.some((v) => v.id === id) || /^[A-Za-z0-9_ ().-]{1,100}$/.test(id));
+    if (!plausible) return { error: `Voix MiniMax invalide pour ${role}` };
+    out[role as MinimaxRole] = id;
+  }
+  return { value: Object.keys(out).length ? JSON.stringify(out) : null };
 }

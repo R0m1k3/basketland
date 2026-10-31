@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { openVoiceSession, voiceConfig, voiceEngineName, voiceUsesGpu } from '../src/lib/voiceAi';
 import { MINIMAX_DEFAULT_VOICES, minimaxConfig, MinimaxVoiceSession, toWav, type Embedder } from '../src/lib/voiceMinimax';
+import { settingSet } from '../src/lib/db';
+import { freshDb } from './helpers/db';
 
 /**
  * Voix du doublage par l'API MiniMax : l'API est simulée (fetch remplacé),
@@ -64,6 +66,7 @@ const speech = (sec: number) => ({ ...ok, data: { audio: wav(sec).toString('hex'
 const noEmbedder = async (): Promise<Embedder> => Promise.reject(new Error('pas de Python en test'));
 
 beforeEach(() => {
+  freshDb();
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-minimax-'));
   process.env.MODELS_DIR = path.join(tmp, 'models');
   process.env.MINIMAX_RETRY_MS = '0,0,0';
@@ -108,6 +111,24 @@ describe('choix du moteur et réglages', () => {
     expect(c).toMatchObject({ speed: 1.1, url: 'https://api-uw.minimax.io' });
     process.env.MINIMAX_TTS_SPEED = '5';
     expect(minimaxConfig().speed).toBe(1);
+  });
+});
+
+describe('réglages de la page Paramètres', () => {
+  it('clé, modèle et voix enregistrés : prioritaires sur les variables d’environnement, et activent MiniMax', () => {
+    Object.assign(process.env, { MINIMAX_API_KEY: 'cle-variable', MINIMAX_TTS_MODEL: 'speech-2.6-hd', MINIMAX_VOICE_B4: 'French_CasualMan' });
+    settingSet('minimax_api_key', 'cle-page');
+    settingSet('minimax_tts_model', 'speech-2.8-turbo');
+    settingSet('minimax_voices', JSON.stringify({ A: 'French_MaleNarrator' }));
+    expect(minimaxConfig()).toMatchObject({
+      key: 'cle-page',
+      model: 'speech-2.8-turbo',
+      voices: { A: 'French_MaleNarrator', B4: 'French_CasualMan', B1: 'French_CasualMan', F: 'French_FemaleAnchor' },
+    });
+    delete process.env.MINIMAX_API_KEY;
+    expect(voiceEngineName()).toBe('minimax'); // clé de la page seule
+    settingSet('minimax_api_key', null);
+    expect(voiceEngineName()).toBe('local');
   });
 });
 

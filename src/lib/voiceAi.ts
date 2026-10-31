@@ -70,13 +70,14 @@ function workerPath(): string {
 }
 
 /**
- * Moteur choisi : `TTS_ENGINE` ('minimax' ou 'local'), sinon MiniMax dès que
- * `MINIMAX_API_KEY` est défini, sinon Qwen3-TTS embarqué.
+ * Moteur choisi : `TTS_ENGINE` ('minimax' ou 'local'), sinon MiniMax dès
+ * qu'une clé MiniMax est donnée (page Paramètres ou `MINIMAX_API_KEY`),
+ * sinon Qwen3-TTS embarqué.
  */
 export function voiceEngineName(): VoiceEngineName {
   const want = process.env.TTS_ENGINE?.trim().toLowerCase();
   if (want === 'minimax' || want === 'local') return want;
-  return process.env.MINIMAX_API_KEY?.trim() ? 'minimax' : 'local';
+  return minimaxConfig().key ? 'minimax' : 'local';
 }
 
 export function voiceConfig(): VoiceConfig {
@@ -150,8 +151,11 @@ const short = (e: unknown) => ((e as Error)?.message || String(e)).replace(/\s+/
 // ------------------------------------------------------------------ téléchargement des modèles (hors GPU)
 
 interface ModelsState {
-  /** Modèles présents dans le cache (vérifié une fois par processus serveur). */
-  ready: boolean;
+  /**
+   * Modèles présents dans le cache, par moteur (vérifié une fois par processus
+   * serveur) : ceux de Qwen3-TTS comprennent ceux de l'analyse des voix (MiniMax).
+   */
+  ready: Partial<Record<VoiceEngineName, boolean>>;
   /** Téléchargement (ou vérification du cache) en cours. */
   promise: Promise<void> | null;
   /** Octets téléchargés / attendus, seulement pendant un vrai téléchargement. */
@@ -159,7 +163,7 @@ interface ModelsState {
 }
 
 const gm = globalThis as unknown as { __voiceModels?: ModelsState };
-const models: ModelsState = (gm.__voiceModels ??= { ready: false, promise: null, progress: null });
+const models: ModelsState = (gm.__voiceModels ??= { ready: {}, promise: null, progress: null });
 
 /**
  * Met en cache les modèles du doublage (~2,5 Go au premier usage) SANS
@@ -171,9 +175,9 @@ const models: ModelsState = (gm.__voiceModels ??= { ready: false, promise: null,
  * entamés). Délai : `TTS_LOAD_TIMEOUT_MS` sans nouvelle du processus.
  */
 export function prepareVoiceModels(): Promise<void> {
-  if (models.ready) return Promise.resolve();
-  if (models.promise) return models.promise;
   const cfg = voiceConfig();
+  if (models.ready[cfg.engine]) return Promise.resolve();
+  if (models.promise) return models.promise;
   if (cfg.disabledReason) return Promise.reject(new Error(cfg.disabledReason));
   models.promise = new Promise<void>((resolve, reject) => {
     const hf = path.join(cfg.modelsDir, 'hf');
@@ -224,7 +228,7 @@ export function prepareVoiceModels(): Promise<void> {
       models.progress = null;
       models.promise = null;
       if (why === null) {
-        models.ready = true;
+        models.ready = cfg.engine === 'local' ? { local: true, minimax: true } : { ...models.ready, minimax: true };
         resolve();
       } else reject(new Error(why));
     };
@@ -240,7 +244,7 @@ export function prepareVoiceModels(): Promise<void> {
 
 /** Tests : modèles pas encore vérifiés. */
 export function __resetVoiceModelsForTests(): void {
-  Object.assign(models, { ready: false, promise: null, progress: null });
+  Object.assign(models, { ready: {}, promise: null, progress: null });
 }
 
 /** Téléchargement des modèles en cours : octets faits / attendus (total 0 : inconnu), sinon null. */
