@@ -823,6 +823,31 @@ describe('démarrage : téléchargement des voix hors GPU, étapes visibles', ()
     await __dubIdle();
   });
 
+  it('synthèse en ligne (MiniMax, pas de GPU) : le doublage tourne pendant une traduction, sans lui céder la place', async () => {
+    process.env.TRANSCRIBE_URL = 'http://gpu.local:8000/v1';
+    process.env.TRANSLATE_URL = 'http://gpu.local:11434/v1';
+    process.env.DUB_REPUMP_MS = '10';
+    publish(M, 0, CHUNK0);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    __setCommentaryRunnerForTests(async () => {
+      await gate;
+      return { ok: true, reason: 'ok' };
+    });
+    __setDubEngineForTests({ config: () => ({}), open: async () => fake().session, usesGpu: () => false });
+    const released: unknown[] = [];
+    const { deps, calls } = fake({ onSynth: () => released.push(releaseGpuForTranslation()) });
+    viaQueue(deps);
+    enqueueCommentary(M2, { priority: true }); // la traduction d'un autre match tient le GPU
+    expect(enqueueDub(M).started).toBe(true);
+    await __dubIdle();
+    expect(db.getDubChunks(M)).toHaveLength(1);
+    expect(calls.closed).toBe(1);
+    expect(released.length).toBeGreaterThan(0);
+    expect(released.every((r) => r === null)).toBe(true); // rien à rendre : la traduction démarre aussitôt
+    release();
+  });
+
   it('pendant le travail : l’étape en cours est dans le manifeste', async () => {
     publish(M, 0, CHUNK0);
     const steps: (string | undefined)[] = [];

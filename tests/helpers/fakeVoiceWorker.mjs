@@ -40,7 +40,10 @@ if (model === 'muet') {
   setInterval(() => undefined, 1000);
 } else {
   const order = ['A', 'B4', 'B1', 'F'];
-  const voices = fs
+  // Analyse des voix seule (synthèse MiniMax) : aucune voix de synthèse.
+  const voices = args.includes('--embed-only')
+    ? []
+    : fs
     .readdirSync(voicesDir)
     .filter((v) => fs.existsSync(path.join(voicesDir, v, 'reference.wav')))
     .sort((a, b) => order.indexOf(a) - order.indexOf(b));

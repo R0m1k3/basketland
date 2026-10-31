@@ -13,6 +13,11 @@ une requête JSON par ligne :
      "female": [p | null, …]}
   ← {"id": n, "ok": false, "error": "…"}   (le processus continue)
 
+`--embed-only` : analyse des voix seule (op `embed`), sans charger Qwen3-TTS ;
+la synthèse est faite par l'API MiniMax (src/lib/voiceMinimax.ts). Le
+processus est prêt avec `"voices": []`. Combiné à `--download-only`, seuls
+les petits modèles d'analyse sont téléchargés.
+
 `--download-only` : télécharge les modèles (Qwen3-TTS, empreintes vocales,
 classifieur homme/femme) dans le cache sans rien charger sur le GPU, puis
 s'arrête. Node le lance dès qu'un doublage est demandé, indépendamment de la
@@ -251,6 +256,14 @@ class Engine:
         self.device, self.dtype = pick_device(args.device)
         self.download_root = args.download_root
         self.model_name = args.model
+        self.encoder = None
+        self.gender = None  # classifieur homme/femme : None = pas encore chargé, False = indisponible
+        self.prompts = {}
+        self.fixed_timeout = 0.0
+        if args.embed_only:
+            # Voix synthétisées ailleurs (MiniMax) : seulement l'analyse des voix, sans Qwen3-TTS.
+            log(f"analyse des voix seule ({self.device}) : pas de modèle de synthèse")
+            return
         path = fetch_model(args.model)
         Qwen3TTSModel = import_quietly("qwen_tts").Qwen3TTSModel
 
@@ -260,7 +273,6 @@ class Engine:
         self.max_time = None
         self.talker_sec = 0.0
         self._install_deadline()
-        self.prompts = {}
         for vid in list_voice_dirs(args.voices_dir):
             d = os.path.join(args.voices_dir, vid)
             wav, txt = os.path.join(d, "reference.wav"), os.path.join(d, "reference.txt")
@@ -275,8 +287,6 @@ class Engine:
                 log(f"voix {vid} ignorée : {e}")
         if not self.prompts:
             raise RuntimeError(f"aucune voix utilisable dans {args.voices_dir} (reference.wav + reference.txt)")
-        self.encoder = None
-        self.gender = None  # classifieur homme/femme : None = pas encore chargé, False = indisponible
         try:
             self.fixed_timeout = max(0.0, float(os.environ.get("TTS_SYNTH_TIMEOUT_SEC") or 0))
         except ValueError:
@@ -325,6 +335,8 @@ class Engine:
         return 20.0 + 3.0 * max_sec if self.device == "cuda" else 60.0 + 60.0 * max_sec
 
     def synth(self, req: dict) -> dict:
+        if not self.prompts:
+            raise ValueError("synthèse indisponible : moteur lancé pour l'analyse des voix seule")
         import numpy as np
 
         torch = self.torch
@@ -527,7 +539,8 @@ def median_f0(x):
 def download_only(args) -> int:
     """Modèles mis en cache sans rien charger (ni GPU, ni voix) ; progression sur le protocole."""
     try:
-        fetch_model(args.model, lambda done, total: send({"event": "progress", "done": done, "total": total}))
+        if not args.embed_only:
+            fetch_model(args.model, lambda done, total: send({"event": "progress", "done": done, "total": total}))
         from huggingface_hub import hf_hub_download
 
         # Petits modèles de l'analyse des voix (≈ 150 Mo), chargés plus tard par la
@@ -558,6 +571,8 @@ def main() -> int:
     ap.add_argument("--download-root", default="")
     ap.add_argument("--voices-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "voices"))
     ap.add_argument("--download-only", action="store_true")
+    # Analyse des voix seule (empreintes, hauteur, genre) : la synthèse est faite ailleurs (MiniMax).
+    ap.add_argument("--embed-only", action="store_true")
     args = ap.parse_args()
 
     if args.download_root:
