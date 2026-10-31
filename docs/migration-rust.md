@@ -5,17 +5,22 @@ doublage, proxy vidéo, cron, OCR) ; l'**interface React reste telle
 quelle**, compilée en fichiers statiques servis par le binaire Rust. À la
 fin, plus de Node.js dans l'image.
 
-Méthode : **par étapes**. Le binaire Rust (`server/`) écoute sur le port
-public et reprend les routes une à une ; ce qui n'est pas encore porté est
-relayé à l'application Next.js, lancée par lui en sous-processus sur
-`127.0.0.1:3013`. Chaque étape est une PR déployable : l'application marche
-à tout moment.
+Méthode : **par étapes**. Le binaire Rust (`server/`) a écouté sur le port
+public et repris les routes une à une, en relayant ce qui n'était pas
+encore porté à l'application Next.js, lancée par lui en sous-processus sur
+`127.0.0.1:3013`. Chaque étape a été une PR déployable : l'application
+marchait à tout moment. **Migration terminée (étape 8b)** : Rust sert tout,
+l'interface est un export statique de Next, Node ne sert plus qu'au build
+de l'interface et aux tests de référence.
 
 ```
 navigateur ──► basketland-server (Rust, :3012)
-                 ├── routes portées : servies directement (SQLite partagée)
-                 └── tout le reste ──► Next.js (Node, 127.0.0.1:3013)
+                 ├── /api/… : API, files médias, cron (SQLite)
+                 └── le reste : export statique de l'interface (BL_STATIC_DIR=out/)
 ```
+
+Le relais vers Node reste dans le binaire pour le développement de
+l'interface (`next dev` derrière Rust, sans `BL_STATIC_DIR`).
 
 ## Règles de la migration
 
@@ -51,14 +56,16 @@ navigateur ──► basketland-server (Rust, :3012)
 | 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `activity.ts`) et leurs routes (`/subtitles`, `/subtitles.vtt`, `/commentary`, `/watching`, `/dub`, `/dub/[idx]`, `/api/activity`), branchées ensemble avec l'étape 7 : les trois files tournent dans Rust, avec les jobs de fond | ✅ |
 | 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`, calage de `/api/matches/[id]/sync`) ; Tesseract natif dans l'image | ✅ |
 | 8a | Données de chaque page en JSON servies par Rust (`GET /api/pages/…`) : portage de `queries.ts`, `teams.ts`, `linescore.ts`, `version.ts`, `currentSession`, `safeNextPath` ; état des files lu dans les services Rust | ✅ |
-| 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export React) servis par Rust (règles d'accès des pages comprises), migrations SQL en Rust, Node retiré de l'image | en cours : schéma et migrations de la base, récupération d'accès (`reset-password`) en Rust |
+| 8b | Pages en composants client lisant `/api/pages/…`, interface en fichiers statiques (export Next) servis par Rust (règles d'accès des pages comprises), migrations SQL et récupération d'accès en Rust, `/api/diag/stall`, Node retiré de l'image | ✅ |
 
 ## Développement
 
 ```bash
 cargo test --manifest-path server/Cargo.toml   # tests du serveur Rust
-npm run build                                  # application Next.js
-cd .next/standalone && ../../server/target/debug/basketland-server
+npm run build                                  # export statique de l'interface (out/)
+BL_STATIC_DIR=out server/target/debug/basketland-server   # ou `npm start`
+# interface avec rechargement à chaud : Next en développement derrière Rust
+npm run dev & BL_NODE_CMD= server/target/debug/basketland-server
 ```
 
 Variables du serveur Rust :
@@ -67,11 +74,12 @@ Variables du serveur Rust :
 |----------|--------|------|
 | `PORT` | `3012` | Port public. |
 | `BL_LISTEN_HOST` | `0.0.0.0` | Interface d'écoute. |
+| `BL_STATIC_DIR` | | Dossier de l'export statique de l'interface (`/app/out` dans l'image) : Rust le sert et ne lance pas Node. Sans lui, tout ce qui n'est pas routé est relayé à Node (développement). |
 | `BL_NODE_PORT` | `3013` | Port interne de Next.js. |
-| `BL_NODE_CMD` | `node --disable-warning=ExperimentalWarning server.js` | Commande de l'application Node ; vide : Node lancé à part (par ex. `npm run dev -- -p 3013`). |
+| `BL_NODE_CMD` | `node --disable-warning=ExperimentalWarning server.js` | Sans `BL_STATIC_DIR` : commande de l'application Node relayée ; vide : Node lancé à part (`npm run dev`, sur 3013). |
 | `BL_NODE_URL` | `http://127.0.0.1:$BL_NODE_PORT` | Adresse de l'application Node relayée. |
 | `DB_PATH`, `DATA_DIR` | comme Node | Emplacement de la base SQLite. |
-| `DISABLE_CRON` | | `1` : ni le cron Rust ni celui de Node ne tournent. |
+| `DISABLE_CRON` | | `1` : le cron ne tourne pas. |
 | `INGEST_TOKEN` | fichier `$DATA_DIR/ingest_token` | Jeton de `POST /api/ingest`, comme Node. |
 | `BL_ESPN_SITE` | API ESPN | Autre adresse de l'API ESPN (tests hors réseau). |
 | `BV_RATE_MS` | `2000` | Délai entre deux requêtes vers basketball-video, comme Node. |
@@ -170,17 +178,10 @@ n'analyse plus rien.
   fenêtre de nuit (`queueRecentWork`), mêmes journaux ; replays apparus mis
   en file aussitôt (`queueNewReplayWork`, `prioritizeFoundReplay`). Node les
   saute (`analyses`, `commentaries` dans `BL_RUST_JOBS`).
-- **Pages encore rendues par Node** (jusqu'à l'étape 8b) : l'accueil,
-  `/matchs`, `/equipes`, `/equipes/[abbr]` et `/parametres` affichent l'état
-  des files (activité, match en cours de traduction, raisons de
-  désactivation). Elles le lisent chez Rust, `POST /api/internal/media-state`
-  (jeton d'ingestion ; corps `{ dub }`, réponse `{ running_match_id,
-  activity, commentary_disabled_reason, dub_disabled_reason }`), par
-  `loadMediaState()` (`src/lib/mediaState.ts`) avant de se calculer ;
-  `BL_RUST_URL` (posé par `server/src/node.rs`) donne l'adresse du serveur
-  Rust. Sans `BL_RUST_URL` (Node lancé seul), l'état est celui des files de
-  Node. Les pages servies en JSON par Rust (`/api/pages/…`) lisent les
-  services directement (`routes_pages::media_state`).
+- **Pages** : leurs données (`/api/pages/…`) lisent les services
+  directement (`routes_pages::media_state`). Entre les étapes 6b et 8b, les
+  pages encore rendues par Node lisaient cet état chez Rust par un appel
+  interne (`POST /api/internal/media-state`), retiré avec Node.
 - Appels internes supprimés : `POST /api/internal/replays` et
   `POST /api/internal/page-state` (Node), toujours en 404 depuis l'extérieur.
 
@@ -320,6 +321,59 @@ démarre fait céder le doublage, `full.ogg` gardé pour le doublage puis
 effacé par lui) et le montage par le vrai ffmpeg. `tests/dub-player.test.ts`
 ne teste que le lecteur (client) : rien à porter côté serveur.
 
+### Interface statique et retrait de Node (étape 8b)
+
+L'interface est un **export statique de Next** (`output: 'export'`,
+`next build` → `out/`) : chaque page est un composant client
+(`src/components/pages/*Page.tsx`) qui lit ses données dans
+`GET /api/pages/…` (étape 8a) par `usePageData` (`src/components/page/pageData.tsx`),
+le layout dans `/api/pages/session` (`src/components/layout/SiteShell.tsx`).
+Les `page.tsx` ne gardent que les métadonnées statiques ; les titres
+dynamiques passent par `document.title` (même gabarit `%s · BasketLand`).
+`router.refresh()` (rafraîchissement périodique, match qui commence ou se
+termine, replay trouvé) relit le JSON de la page (`useReloadPage`), l'état
+des composants restant en place. Une session expirée pendant la visite
+(401 d'une route JSON) mène à `/login?next=…`, comme avant.
+
+Routes dynamiques : `generateStaticParams` n'exporte que le paramètre `_`
+(`out/matchs/_.html`, `out/equipes/_.html` et leurs `.txt`) ; Rust sert
+cette page pour tout identifiant, qui est lu dans l'adresse. Une fiche
+introuvable affiche l'interface 404 de Next, mais avec le statut HTTP 200
+de la page `_` (404 avant). Navigations client : Next demande
+`<chemin>.txt?<paramètres>&_rsc=…` (`/index.txt` pour l'accueil, en-tête
+`RSC: 1`), servi en `text/plain` ; toute autre réponse (HTML, 404,
+redirection) le fait recharger la page en entier. Sans session,
+`/matchs/<id>.txt` est redirigé vers `/login` (un rechargement de plus),
+les `.txt` à la racine étant publics comme les autres fichiers à la racine.
+
+Rust (`server/src/static_site.rs`, `BL_STATIC_DIR`) applique les règles
+d'accès de l'ancien middleware (`decideAccess` porté) avant de servir un
+fichier, avec le renouvellement glissant du cookie ; une méthode non servie
+répond 405, une API inconnue 401 (sans session) ou 404. `POST
+/api/diag/stall` est porté (`server/src/routes_diag.rs`). L'image finale
+part de `debian:bookworm-slim` (même glibc et même Python que les
+environnements Whisper et voix), avec l'utilisateur `node` (uid 1000) de
+toujours pour les volumes existants ; `HEALTHCHECK` : `basketland-server
+health`.
+
+Le code serveur TypeScript reste dans le dépôt comme **référence** : les
+gestionnaires de route (`src/api-routes/**`, sortis de `src/app` pour
+l'export), le middleware (`src/lib/middleware.ts`) et `src/lib/**`, testés
+par vitest et utilisés par les scripts de fixtures (`server/tests/node-fixtures-*.mts`)
+qui vérifient Rust contre Node. Ils ne sont plus dans l'image.
+
+Vérifié : interface avant (Next en serveur, derrière Rust) et après (export
+statique, `/api` servi par Rust) sur deux copies d'une même base, 46 pages
+(administrateur et utilisateur, accueil, calendrier avec date et équipe,
+cinq fiches de match dans tous les états, équipes, classement, paramètres,
+pages introuvables, scores masqués, connexion et premier démarrage hors
+session, redirections) : URL, titres, texte, liens, classes et HTML
+(canonique) identiques, captures identiques sauf la phase de l'animation des
+points « en direct » ; navigation client sans rechargement (match depuis
+l'accueil, retour, jour suivant, filtre équipe, fiche équipe…), session
+perdue en cours de visite, 404 dans le layout, replay apparu pendant la
+visite (la page passe au lecteur). Tests Rust : `tests/static_site.rs`.
+
 ### Schéma de la base et récupération d'accès (étape 8b)
 
 Le serveur Rust crée et migre la base au démarrage, avant de lancer Node
@@ -340,7 +394,7 @@ Récupération d'accès : `basketland-server reset-password <identifiant>
 sessions fermées, même empreinte scrypt, mêmes messages et codes de sortie,
 identité du propriétaire de la base reprise quand `docker exec` tourne en
 root). Test : `tests/reset_password.rs` (vrai binaire). Le script Node reste
-dans l'image tant que Node y est.
+dans le dépôt comme référence (testé par vitest), plus dans l'image.
 
 ### Données des pages (étape 8a)
 

@@ -31,8 +31,8 @@ import {
   type CommentaryProgress,
 } from '../src/lib/commentary';
 import type { AsrWord, Transcript } from '../src/lib/commentaryCues';
-import { GET as getSubtitles } from '../src/app/api/matches/[id]/subtitles/route';
-import { POST as postCommentary } from '../src/app/api/matches/[id]/commentary/route';
+import { GET as getSubtitles } from '../src/api-routes/matches/[id]/subtitles/route';
+import { POST as postCommentary } from '../src/api-routes/matches/[id]/commentary/route';
 import { freshDb, insertMatch } from './helpers/db';
 
 /**

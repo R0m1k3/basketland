@@ -18,15 +18,16 @@ Application web de replays NBA, conteneurisée pour Unraid : calendrier complet 
 ## Architecture
 
 ```
-basketland-server (Rust) ── port 3012 : routes portées en Rust, le reste relayé ↓
-Next.js 15 (App Router) · TypeScript · Tailwind · SQLite   (127.0.0.1:3013)
+basketland-server (Rust) ── port 3012 : API, files médias, cron, SQLite
+        │                  sert aussi l'interface : export statique Next.js 15
+        │                  (React, TypeScript, Tailwind) dans out/
         │
         ├── API ESPN           matchs, calendrier, boxscores, play-by-play
         ├── basketball-video   découverte des replays
         └── ok.ru (HLS)        résolution du flux, proxy segmenté
 ```
 
-- **Serveur en cours de migration vers Rust** ([`docs/migration-rust.md`](docs/migration-rust.md)) : le binaire `server/` écoute sur le port public, sert les routes déjà portées et relaie les autres à Next.js, qu'il lance lui-même.
+- **Serveur en Rust** ([`docs/migration-rust.md`](docs/migration-rust.md)) : le binaire `server/` sert toutes les API et l'interface (fichiers statiques produits par Next) ; plus de Node.js dans l'image.
 - **Aucun service externe à maintenir** : une seule image Docker, SQLite dans le volume `/data`.
 - **Pas de dépendance LLM à l'exécution** : la VF française est produite par un générateur déterministe embarqué.
 - **Le proxy vidéo re-résout le flux à chaque requête** : les URL de stream signées expirent, elles ne sont jamais stockées.
@@ -672,38 +673,27 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 
 ## Développement local
 
+L'application est un serveur Rust (`server/`) qui sert les API, les files
+médias, le cron et l'interface, celle-ci étant un export statique de Next
+(`out/`). Node ne sert qu'à construire l'interface et à lancer les tests.
+
 ```bash
 npm install
-npm run dev          # http://localhost:3012
-npm run build        # build de production
+npm run build        # export statique de l'interface dans out/
+npm start            # serveur Rust sur http://localhost:3012 (cargo run --release, BL_STATIC_DIR=out)
 npm run typecheck    # vérification TypeScript
-npm test             # 162 tests (dont 32 sur captures réelles)
+npm test             # tests vitest (code de référence TypeScript)
+cargo test --manifest-path server/Cargo.toml   # tests du serveur Rust
 ```
 
-Le build utilise `output: 'standalone'` (comme l'image Docker). Le serveur
-standalone est donc lancé par `npm start` — et **il exige `HOSTNAME=0.0.0.0`**,
-sans quoi il écoute sur le nom d'hôte de la machine au lieu de toutes les
-interfaces :
+Pour travailler sur l'interface avec le rechargement à chaud, lancer Next en
+mode développement sur le port interne et le serveur Rust devant lui, qui lui
+relaie tout ce qu'il ne sert pas lui-même (pages, fichiers de Next) :
 
 ```bash
-npm run build
-npm start
+npm run dev          # next dev sur 127.0.0.1:3013
+BL_NODE_CMD= cargo run --manifest-path server/Cargo.toml   # http://localhost:3012
 ```
-
-`npm start` passe par `scripts/start-standalone.mjs`, qui recopie `.next/static`
-et `public` dans `.next/standalone` avant de lancer le serveur : sans cette
-étape, les pages étaient servies **sans leur CSS ni leur JavaScript** (404 sur
-`/_next/static/...`), donc sans lecteur vidéo ni calibration. Le Dockerfile
-fait la même chose à la construction de l'image.
-
-> Après un `npm run build`, il faut **relancer** le serveur : une instance
-> déjà lancée continue de servir l'ancien `.next/static` et renvoie `400` sur
-> les CSS/JS (le fichier n'existe plus, son nom a changé avec le build).
-> C'est le symptôme d'une instance plus ancienne que le build, pas d'un bug
-> de l'application.
-
-`npm run start:next` lance `next start` (non compatible avec `standalone` :
-Next.js le signale à chaque démarrage).
 
 ## Documentation
 

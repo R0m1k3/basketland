@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { DayCount } from '@/lib/queries';
-import { shiftKey } from '@/lib/queries';
+import { shiftKey } from '@/lib/dayKeys';
 import { IconChevronLeft, IconChevronRight } from '@/components/ui/Icons';
 import ScrollToSelected from './ScrollToSelected';
 import { dayNumber, monthShort, monthYear, weekdayShort } from './dates';

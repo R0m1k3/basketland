@@ -41,7 +41,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Serveur Rust (passerelle devant Next.js).
+      # Serveur Rust (API, files médias, cron, interface statique).
       - name: Rust tests
         run: cargo test --manifest-path server/Cargo.toml --locked
 
