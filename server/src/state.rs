@@ -10,6 +10,8 @@ pub struct AppState {
     pub db: Db,
     /// Application Node, pour tout ce qui n'est pas encore servi par Rust.
     pub upstream: Upstream,
+    /// Proxy vidéo ok.ru (caches de flux, playlists et segments).
+    pub video: crate::video::Video,
 }
 
 /// ffmpeg présent sur le serveur (vérifié une fois, comme `ffmpegAvailable`).

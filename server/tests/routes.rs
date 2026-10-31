@@ -127,6 +127,7 @@ fn router(env: &Env) -> axum::Router {
     app(state::AppState {
         db: db::Db::new(env.path.clone()),
         upstream: proxy::Upstream::new("http://127.0.0.1:9"),
+        video: basketland_server::video::Video::new(),
     })
 }
 

@@ -1,4 +1,4 @@
-use basketland_server::{app, db, node, proxy, state};
+use basketland_server::{app, db, node, proxy, state, video};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
@@ -21,6 +21,7 @@ async fn main() {
     let st = state::AppState {
         db: db::Db::new(db::default_db_path()),
         upstream: proxy::Upstream::new(&node_url),
+        video: video::Video::new(),
     };
     // Vérifications lentes faites une fois, hors des requêtes.
     tokio::task::spawn_blocking(|| {
