@@ -48,7 +48,7 @@ navigateur ──► basketland-server (Rust, :3012)
 | 5a | Synchronisation ESPN (calendrier, saison, stats + play-by-play), VF déterministe (`vf.ts`, `sync.ts`, `regenerateSubtitles`), cron interne de ces jobs, `POST /api/ingest` (`sync-videos` relayé à Node), `/stats` récupérées à la volée en Rust | ✅ |
 | 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus signalés aux files de Node par `POST /api/internal/replays` | ✅ |
 | 6a | Fondations médias en bibliothèque Rust, **pas encore branchées** (Node fait toujours tourner les files) : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
-| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | en cours : file de traduction portée (non branchée) |
+| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | en cours : file de traduction et doublage portés (non branchés) |
 | 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`) | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
 
@@ -195,3 +195,76 @@ travail identiques) et 17 états de la file (statuts identiques à l'octet,
 ordre des clés compris). Cas de `tests/commentary-queue.test.ts` et
 `tests/commentary-ondemand.test.ts` portés (`tests/commentary.rs`), son
 complet découpé par le vrai ffmpeg.
+
+### Doublage (étape 6b, porté, non branché)
+
+`dub.ts` est porté en bibliothèque (`server/src/media/dub/`, requêtes des
+tables `dub_tracks` et `dub_chunks` dans `server/src/dub_db.rs`,
+`commentaryKey` et `getCommentaryChunks` dans `commentary_db.rs`) :
+locuteurs et voix (`assignSpeakers`, `assignRoles`, genre par le
+classifieur, bascule unique vers F, état `SpeakerState` relu et réécrit en
+base avec l'ordre des clés de Node), texte et calage (`emphasize`, `fitCue`,
+`placeClips`, `speechRanges`, `groupCues`, `cuesSignature`), montage ffmpeg
+(`assembleChunk`, mêmes arguments), `runDub` (son d'origine découpé dans le
+son complet de la traduction ou lu dans le flux, empreintes, synthèse,
+montage, publication), file (`enqueueDub`, `pump`, préemption, travail
+explicite ou de fond, `waitsForSubtitles`, `hasDubWork`, arrêt et reprise,
+GPU rendu à une traduction qui démarre, garde-fou `DUB_TIMEOUT_MS`,
+enregistrements `kv_cache` `dub:<id>`), manifeste, activité, moteur de voix
+chargé au premier besoin (`__dubEngine`, téléchargement des modèles hors GPU).
+Mêmes variables (`DUB_DISABLED`, `DUB_SPEAKER_SIM`, `DUB_FEMALE_PROB`,
+`DUB_FEMALE_F0`, `DUB_MIN_NEW_SPEAKER_SEC`, `DUB_MAX_SPEAKERS`,
+`DUB_TIMEOUT_MS`, `DUB_REPUMP_MS`, `FFMPEG_PATH`), mêmes défauts et bornes,
+mêmes journaux. **Rien ne l'appelle encore** : Node fait toujours tourner sa
+file ; les routes médias, le cron et `AppState` seront basculés ensemble.
+
+Le service `Dub` (un par processus, partagé par `Clone`, dans un runtime
+Tokio) se construit sur le service de traduction : `Dub::new(commentary,
+video)`. Il partage sa base, sa table des spectateurs et son horloge, et
+**pose lui-même les deux crochets** de `Commentary` en tenant le doublage par
+`Weak` : `set_gpu_gate` → `Dub::release_gpu_for_translation` et
+`set_dub_wants_audio` → `Dub::wants_audio`. Un seul `Dub` par `Commentary`
+(le dernier construit tient les crochets).
+
+| Méthode de `Dub` | Équivalent Node | Appelée par (branchement) |
+|------------------|-----------------|---------------------------|
+| `disabled_reason()` / `disabled_reason_sync()` | `dubDisabledReason` / `dubDisabledReasonSync` | GET et POST `/dub`, page des paramètres |
+| `manifest(id)` (`.to_json()`) | `dubManifest` | GET et POST `/dub` (contrat du lecteur) |
+| `prioritize_on_view(id)` | `prioritizeDubOnView` | GET `/dub?t=` (après `Commentary::touch_viewer`) |
+| `request(id, reset)` | `requestDub` | POST `/dub` `start` / `retry` (202 si en file, 409 si relance refusée) |
+| `stop(id)` | `stopDub` | POST `/dub` `stop` |
+| `chunk_path(id, idx)` | `dubChunkPath` | GET `/dub/[idx]` (Range simple) |
+| `activity()` (`.to_json()`) | `dubActivity` | `/api/activity` (`activity.ts`) |
+| `enqueue(id, DubEnqueueOptions)` | `enqueueDub` | interne, tests |
+| `queue_position`, `running_match_id`, `has_work`, `record`, `gpu_busy` | `dubQueuePosition`, `hasDubWork`, `getDubRecord`, `gpuBusy` | interne, tests |
+| `release_gpu_for_translation(max_ms)`, `wants_audio(id)` | `releaseGpuForTranslation`, `__dubWantsAudio` | crochets de `Commentary` |
+| `run_dub(job, progress, signal, deps, ctl)` | `runDub` | exécuteur par défaut |
+| `set_runner`, `runner_with(deps)`, `set_engine(DubEngine)`, `idle` | `__setDubRunnerForTests`, `viaQueue`, `__setDubEngineForTests`, `__dubIdle` | tests |
+| `set_analysis_activity(Some(f))` | `analysisActivity` (import d'`analysis.ts`) | **à fournir par l'étape 7** |
+
+Crochet de l'analyse vidéo : `analysis.ts` n'est pas encore porté (étape 7).
+Le doublage lit son activité par `Dub::set_analysis_activity(Some(Arc<dyn
+Fn() -> AnalysisActivity>))` : `AnalysisActivity { running: [AnalysisRun {
+match_id, phase, done, total }], queued }`, comme `analysisActivity()` ; une
+analyse dont la phase est « en pause pendant la lecture » n'occupe pas le
+GPU. Sans crochet (défaut), aucune analyse ne tourne : le doublage ne cède la
+place qu'aux traductions. Tant que les analyses tournent dans Node, le
+branchement doit soit porter l'analyse en même temps, soit relayer son
+activité (sinon le doublage Rust et une analyse Node se partageraient la carte).
+
+Vérifié contre Node (`server/tests/node-fixtures-dub.mts` →
+`fixtures/dub.expected.json`, `tests/dub_node.rs`) : fonctions pures (moments
+forts, 72 calages, positions, plages de parole, phrases d'une traite,
+empreintes, téléchargement en clair, 17 suites d'appels des locuteurs avec
+l'état complet après chacun, `voiceFor`), arguments de ffmpeg du montage
+(faux ffmpeg qui les écrit, `helpers/fake_ffmpeg.sh`) et métadonnées du
+fichier produit par le vrai ffmpeg, 17 scénarios de `runDub` avec le faux
+moteur de `tests/dub.test.ts` (résultat, avancement, appels, journaux, lignes
+de la base à l'octet, fichiers, manifeste) et 19 états de la file avec la
+traduction branchée (manifestes, activités, résultats des demandes,
+enregistrements, journaux). Cas de file de `tests/dub.test.ts` et cas du
+doublage de `tests/vf-mode.test.ts` portés (`tests/dub.rs`), dont la
+traduction et le doublage branchés par leurs crochets (une traduction qui
+démarre fait céder le doublage, `full.ogg` gardé pour le doublage puis
+effacé par lui) et le montage par le vrai ffmpeg. `tests/dub-player.test.ts`
+ne teste que le lecteur (client) : rien à porter côté serveur.

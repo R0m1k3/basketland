@@ -12,6 +12,7 @@ pub mod bv;
 pub mod commentary_db;
 pub mod cron;
 pub mod db;
+pub mod dub_db;
 pub mod espn;
 pub mod espn_events;
 pub mod hls;
