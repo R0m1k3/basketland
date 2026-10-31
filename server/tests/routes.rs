@@ -124,11 +124,11 @@ fn setup() -> Env {
 
 fn router(env: &Env) -> axum::Router {
     // Port fermé : ce qui n'est pas servi par Rust échoue en 502.
-    app(state::AppState {
-        db: db::Db::new(env.path.clone()),
-        upstream: proxy::Upstream::new("http://127.0.0.1:9"),
-        video: basketland_server::video::Video::new(),
-    })
+    app(state::AppState::new(
+        db::Db::new(env.path.clone()),
+        proxy::Upstream::new("http://127.0.0.1:9"),
+        basketland_server::video::Video::new(),
+    ))
 }
 
 async fn get(

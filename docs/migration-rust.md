@@ -46,7 +46,7 @@ navigateur ──► basketland-server (Rust, :3012)
 | 3 | Comptes : `/api/auth/login`, `/logout`, `/setup`, `/api/account/password`, `/api/admin/users` (scrypt au même format, limitation des tentatives) | ✅ |
 | 4 | Proxy vidéo ok.ru `/api/video/[okId]/…` (`master.m3u8`, `playlist.m3u8`, `segment.ts`, `asset.ts`, `file.mp4`) : flux résolu en cache et rafraîchi avant expiration, cache de segments et préchargement, reprise des téléchargements bloqués, mêmes réglages (`SEGMENT_CACHE_MB`, `PREFETCH_*`, `SEGMENT_STALL_MS`, `SEGMENT_RETRIES`) | ✅ |
 | 5a | Synchronisation ESPN (calendrier, saison, stats + play-by-play), VF déterministe (`vf.ts`, `sync.ts`, `regenerateSubtitles`), cron interne de ces jobs, `POST /api/ingest` (`sync-videos` relayé à Node), `/stats` récupérées à la volée en Rust | ✅ |
-| 5b | Recherche des replays basketball-video (`syncVideos`, `searchReplay`, `/api/matches/[id]/replay`) et son job `sync-videos`, après le proxy vidéo (étape 4) | à faire |
+| 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus signalés aux files de Node par `POST /api/internal/replays` | ✅ |
 | 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity`, `/api/admin/settings` | à faire |
 | 7 | Doublage (voix Qwen3-TTS / MiniMax) et OCR du bandeau de score | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
@@ -72,6 +72,7 @@ Variables du serveur Rust :
 | `DISABLE_CRON` | | `1` : ni le cron Rust ni celui de Node ne tournent. |
 | `INGEST_TOKEN` | fichier `$DATA_DIR/ingest_token` | Jeton de `POST /api/ingest`, comme Node. |
 | `BL_ESPN_SITE` | API ESPN | Autre adresse de l'API ESPN (tests hors réseau). |
+| `BV_RATE_MS` | `2000` | Délai entre deux requêtes vers basketball-video, comme Node. |
 
 ### Jobs d'ingestion (étape 5a)
 
@@ -79,9 +80,9 @@ Le cron Rust lance `sync-season` (base de moins de 50 matchs, 2 s après le
 démarrage), `sync-schedule` (toutes les 15 min, dès 5 s), `sync-stats`
 (5 min, dès 60 s) et `sync-subtitles` (60 min, dès 10 min), avec le même
 journal `ingest_log` et la même règle « déjà en cours » que Node. Il pose
-`BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-subtitles` pour
-l'application Node, dont le planificateur saute alors ces jobs et garde les
-siens (vidéos, analyses, traductions). Node lancé à part
+`BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles`
+pour l'application Node, dont le planificateur saute alors ces jobs et garde
+les siens (analyses, traductions). Node lancé à part
 (`BL_NODE_CMD=` vide) : poser soi-même `BL_RUST_JOBS` pour éviter que les
 jobs tournent deux fois.
 
@@ -94,3 +95,27 @@ sur deux copies d'une même base (tables identiques à l'octet).
 
 Si Node s'arrête, le serveur Rust s'arrête aussi (le conteneur redémarre le
 tout) ; un arrêt du serveur, même brutal, arrête Node.
+
+### Recherche des replays (étape 5b)
+
+`sync-videos` (toutes les 20 min, dès 3 min, mêmes fenêtres de
+revérification que `replayCadence.ts`), `POST /api/ingest` et
+`POST /api/matches/[id]/replay` (session, origine, Content-Type JSON,
+200/202/409/429 avec `Retry-After`) tournent en Rust : scraping de
+basketball-video au même rythme (`BV_RATE_MS`), cache des listes par saison
+(10 min, couverture des dates, relecture de la 1re page au plus une fois par
+minute), un seul scraping par match à la fois (job et demandes partagent la
+recherche), embed ok.ru lu par le client du proxy vidéo (étape 4).
+
+Les files de traduction et d'analyse restent côté Node (étapes 6 et 7). Un
+replay qui vient d'apparaître (ou de passer en HLS) leur est signalé par
+`POST /api/internal/replays`, appel interne avec le jeton d'ingestion :
+`{}` après un passage du job qui en a trouvé (`queueNewReplayWork`, même
+ligne `[cron] nouveaux replays : …` qu'avant), `{ match_id }` après une
+recherche à la demande (`prioritizeFoundReplay`). Le serveur Rust ne relaie
+jamais `/api/internal/…` depuis l'extérieur (404). Vérifié contre Node :
+analyseurs sur les captures réelles et des cas synthétiques
+(`server/tests/fixtures/bv.expected.json`, produit par
+`server/tests/node-fixtures-bv.mts`), et deux passages de `sync-videos` en
+direct sur deux copies d'une même base : colonnes vidéo, sous-titres
+régénérés et `ingest_log` identiques.

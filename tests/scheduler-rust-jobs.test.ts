@@ -73,6 +73,28 @@ describe('cron Node : jobs repris par le serveur Rust (BL_RUST_JOBS)', () => {
     expect(queued.commentaries).toHaveBeenCalled();
   });
 
+  it('replays repris par Rust (étape 5b) : plus de syncVideos, analyses et traductions toujours en file', async () => {
+    start('sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles');
+    await vi.advanceTimersByTimeAsync(3 * MIN + 1000);
+    expect(jobs.syncVideos).not.toHaveBeenCalled();
+    // Rien ne tourne encore à 3 min : ni recherche ni mise en file « nouveaux replays ».
+    expect(queued.analyses).not.toHaveBeenCalled();
+    expect(queued.commentaries).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(61 * MIN);
+    expect(jobs.syncVideos).not.toHaveBeenCalled();
+    expect(jobs.syncSchedule).not.toHaveBeenCalled();
+    expect(queued.analyses).toHaveBeenCalled();
+    expect(queued.commentaries).toHaveBeenCalled();
+  });
+
+  it('sans Rust : la recherche des replays est suivie de la mise en file des nouveaux replays', async () => {
+    start('sync-schedule,sync-stats,sync-subtitles,sync-season');
+    await vi.advanceTimersByTimeAsync(3 * MIN + 1000);
+    expect(jobs.syncVideos).toHaveBeenCalledTimes(1);
+    expect(queued.analyses).toHaveBeenCalledTimes(1);
+    expect(queued.commentaries).toHaveBeenCalledTimes(1);
+  });
+
   it('liste partielle : seuls les jobs nommés sont sautés', async () => {
     start('sync-stats');
     await vi.advanceTimersByTimeAsync(61 * MIN);

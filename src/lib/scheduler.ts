@@ -11,7 +11,9 @@
  * fond : un match n'est doublé que sur « Doubler ce match » (dub.ts).
  *
  * Jobs repris par le serveur Rust (`BL_RUST_JOBS`, posé par server/src/node.rs) :
- * Node ne les lance plus, voir `rustJobs`.
+ * Node ne les lance plus, voir `rustJobs`. Recherche des replays reprise par
+ * Rust : il signale les replays apparus par POST /api/internal/replays, qui
+ * appelle `queueNewReplayWork` comme le faisait ce cron après `syncVideos`.
  */
 import { countMatches } from './db';
 import { currentSeason } from './time';
@@ -40,10 +42,23 @@ export function queueRecentWork(what: { commentaries?: boolean; analyses?: boole
 }
 
 /**
+ * Après une recherche des replays : un replay qui vient d'apparaître est mis
+ * en file de traduction et d'analyse tout de suite (pas d'attente des jobs
+ * suivants). Appelé par le cron de Node après `syncVideos`, ou par le serveur
+ * Rust (POST /api/internal/replays) quand c'est lui qui cherche les replays.
+ */
+export function queueNewReplayWork(): { commentaries: number; analyses: number } {
+  const r = queueRecentWork({ commentaries: true, analyses: true });
+  if (r.commentaries || r.analyses)
+    console.log(`[cron] nouveaux replays : ${r.commentaries} traduction(s), ${r.analyses} analyse(s) mise(s) en file`);
+  return r;
+}
+
+/**
  * Jobs lancés par le cron du serveur Rust, que Node ne doit plus lancer :
- * `BL_RUST_JOBS=sync-schedule,sync-stats,sync-subtitles,sync-season`
+ * `BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles`
  * (`sync-season` : chargement de la saison au premier démarrage). Les autres
- * (vidéos, analyses, traductions) restent à Node.
+ * (analyses, traductions) restent à Node.
  */
 export function rustJobs(): Set<string> {
   return new Set(
@@ -92,15 +107,15 @@ export function startScheduler(): void {
   if (!rust.has('sync-stats')) every(5 * MIN, () => syncStats(), 60_000);
   // Recherche des replays ; un replay qui vient d'apparaître est mis en file
   // de traduction et d'analyse tout de suite (pas d'attente du job suivant).
-  every(
-    VIDEO_JOB_INTERVAL_MS,
-    async () => {
-      await syncVideos();
-      const { commentaries: c, analyses: a } = queueRecentWork({ commentaries: true, analyses: true });
-      if (c || a) console.log(`[cron] nouveaux replays : ${c} traduction(s), ${a} analyse(s) mise(s) en file`);
-    },
-    3 * MIN,
-  );
+  if (!rust.has('sync-videos'))
+    every(
+      VIDEO_JOB_INTERVAL_MS,
+      async () => {
+        await syncVideos();
+        queueNewReplayWork();
+      },
+      3 * MIN,
+    );
   if (!rust.has('sync-subtitles')) every(60 * MIN, () => syncSubtitles(), 10 * MIN);
   // Tâches de fond lourdes (analyse vidéo OCR, pré-traduction des
   // commentaires) : seulement si la traduction automatique est activée, et

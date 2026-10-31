@@ -438,3 +438,81 @@ pub fn video_duration(m: &MatchRow) -> Option<f64> {
         _ => None,
     }
 }
+
+// ---------------------------------------------------------------- replays
+
+/// Bornes (ISO) de `finalMatchesNeedingVideo` (`ReplayRecheckWindow`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplayRecheckWindow {
+    /// Coup d'envoi au plus tôt (21 jours).
+    pub since: String,
+    /// Coup d'envoi au plus tôt pour être « récent » (fin estimée < 12 h).
+    pub recent_since: String,
+    /// Match récent sans replay : vérifié avant cette date → à revérifier.
+    pub recent_recheck_before: String,
+    /// Autres : vérifié avant cette date → à revérifier.
+    pub recheck_before: String,
+}
+
+/// `finalMatchesNeedingVideo` : matchs terminés sans replay (ou en MP4 seul)
+/// dont la dernière vérification est assez ancienne, les plus récents d'abord.
+pub fn final_matches_needing_video(
+    c: &Connection,
+    w: &ReplayRecheckWindow,
+    limit: i64,
+) -> rusqlite::Result<Vec<MatchRow>> {
+    let mut st = c.prepare(
+        "SELECT * FROM matches WHERE status = 'final' AND (video_available = 0 OR video_kind = 'mp4') AND date_utc >= :since
+       AND (video_checked_at IS NULL OR video_checked_at < :recheck
+            OR (video_available = 0 AND date_utc >= :recentSince AND video_checked_at < :recentRecheck))
+     ORDER BY date_utc DESC LIMIT :limit",
+    )?;
+    let rows = st.query_map(
+        named_params! {
+            ":since": w.since,
+            ":recheck": w.recheck_before,
+            ":recentSince": w.recent_since,
+            ":recentRecheck": w.recent_recheck_before,
+            ":limit": limit,
+        },
+        match_row,
+    )?;
+    rows.collect()
+}
+
+/// Replay à enregistrer (`setVideo`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoUpdate {
+    pub slug: Option<String>,
+    pub ok_id: Option<String>,
+    pub duration: Option<f64>,
+    pub available: bool,
+    pub kind: Option<&'static str>,
+}
+
+/// `setVideo` : pas de type sans replay lisible (`hls` par défaut sinon).
+pub fn set_video(c: &Connection, match_id: i64, v: &VideoUpdate) -> rusqlite::Result<()> {
+    c.execute(
+        "UPDATE matches SET slug = :slug, video_ok_id = :okId, video_duration = :duration, video_available = :available,
+       video_kind = :kind, video_checked_at = :now, updated_at = :now WHERE id = :id",
+        named_params! {
+            ":id": match_id,
+            ":slug": v.slug,
+            ":okId": v.ok_id,
+            ":duration": opt_num(v.duration),
+            ":available": num(if v.available { 1.0 } else { 0.0 }),
+            ":kind": if v.available { Some(v.kind.unwrap_or("hls")) } else { None },
+            ":now": now_iso(),
+        },
+    )
+    .map(|_| ())
+}
+
+/// `markVideoChecked`.
+pub fn mark_video_checked(c: &Connection, match_id: i64) -> rusqlite::Result<()> {
+    c.execute(
+        "UPDATE matches SET video_checked_at = ?1 WHERE id = ?2",
+        params![now_iso(), match_id],
+    )
+    .map(|_| ())
+}

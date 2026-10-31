@@ -921,6 +921,28 @@ impl Video {
         self.0.download_settings()
     }
 
+    // -------------------------------------------------------------- pages et embeds
+
+    /// `fetchText` par le client du proxy (et son amont simulé en test) :
+    /// pages de basketball-video.
+    pub async fn fetch_text(
+        &self,
+        url: &str,
+        extra: Vec<(&'static str, String)>,
+        timeout_ms: u64,
+    ) -> Result<String, String> {
+        self.0
+            .fetch_text(url, extra, timeout_ms)
+            .await
+            .map_err(|e| e.msg)
+    }
+
+    /// `fetchOkEmbed` : embed ok.ru lu à chaque appel, hors du cache des flux
+    /// (comme `findReplay` côté Node, qui ne passe pas par `resolveOkStream`).
+    pub async fn fetch_ok_embed(&self, ok_id: &str) -> Result<okru::OkEmbedInfo, String> {
+        self.0.fetch_embed(ok_id).await.map_err(|e| e.msg)
+    }
+
     // -------------------------------------------------------------- routes
 
     /// `resolveOkStream`.
@@ -1434,25 +1456,42 @@ impl Inner {
 
     // -------------------------------------------------------------- résolution du flux
 
-    /// Page d'embed puis playlist maîtresse.
-    async fn do_resolve(&self, ok_id: &str) -> VResult<OkStream> {
-        if !okru::is_valid_ok_id(ok_id) {
-            return Err(VErr::plain(format!("okId invalide: {ok_id}")));
-        }
-        let url = format!("https://ok.ru/videoembed/{ok_id}");
+    /// `fetchText` : texte d'une URL (redirections suivies, 2 nouvelles
+    /// tentatives), erreur `HTTP <statut> pour <url>` hors 2xx.
+    async fn fetch_text(
+        &self,
+        url: &str,
+        extra: Vec<(&'static str, String)>,
+        timeout_ms: u64,
+    ) -> VResult<String> {
         let res = self
-            .fetch_with_retry(
-                true,
-                &url,
-                vec![("Referer", "https://basketball-video.com/".into())],
-                20_000,
-                2,
-            )
+            .fetch_with_retry(true, url, extra, timeout_ms, 2)
             .await?;
         if !res.ok() {
             return Err(VErr::plain(format!("HTTP {} pour {url}", res.status())));
         }
-        let embed = okru::parse_ok_embed(&res.text().await?, ok_id);
+        res.text().await
+    }
+
+    /// `fetchOkEmbed` : page d'embed ok.ru lue et analysée.
+    async fn fetch_embed(&self, ok_id: &str) -> VResult<okru::OkEmbedInfo> {
+        if !okru::is_valid_ok_id(ok_id) {
+            return Err(VErr::plain(format!("okId invalide: {ok_id}")));
+        }
+        let url = format!("https://ok.ru/videoembed/{ok_id}");
+        let html = self
+            .fetch_text(
+                &url,
+                vec![("Referer", "https://basketball-video.com/".into())],
+                20_000,
+            )
+            .await?;
+        Ok(okru::parse_ok_embed(&html, ok_id))
+    }
+
+    /// Page d'embed puis playlist maîtresse.
+    async fn do_resolve(&self, ok_id: &str) -> VResult<OkStream> {
+        let embed = self.fetch_embed(ok_id).await?;
         let mut master_text = String::new();
         let mut master_url = String::new();
         let mut variants = Vec::new();
@@ -2527,8 +2566,18 @@ pub mod testkit {
         videos: &[(&str, String, bool)],
         metadata_as_string: bool,
     ) -> String {
+        embed_html_with(6016, hls, videos, metadata_as_string)
+    }
+
+    /// `embedHtml({ duration, … })`.
+    pub fn embed_html_with(
+        duration: u64,
+        hls: Option<&str>,
+        videos: &[(&str, String, bool)],
+        metadata_as_string: bool,
+    ) -> String {
         let mut md = json!({
-            "movie": { "id": OK_ID, "duration": "6016", "title": ".", "status": "OK", "poster": "https://iv.okcdn.ru/i?x=1" },
+            "movie": { "id": OK_ID, "duration": duration.to_string(), "title": ".", "status": "OK", "poster": "https://iv.okcdn.ru/i?x=1" },
             "videos": videos.iter().map(|(n, u, d)| json!({ "seekSchema": 3, "disallowed": d, "name": n, "url": u })).collect::<Vec<_>>(),
         });
         if let Some(h) = hls {

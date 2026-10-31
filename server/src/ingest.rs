@@ -1,7 +1,8 @@
-//! Jobs d'ingestion (équivalent de `src/lib/ingest.ts`, hors recherche des
-//! replays) : calendrier, saison, stats + play-by-play, VF. Chaque job est
-//! isolé et journalisé dans `ingest_log` ; un job déjà en cours n'est pas
-//! relancé (« déjà en cours »).
+//! Jobs d'ingestion (équivalent de `src/lib/ingest.ts`) : calendrier,
+//! saison, stats + play-by-play, VF ; la recherche des replays
+//! (`sync-videos`) est dans [`crate::replay`]. Chaque job est isolé et
+//! journalisé dans `ingest_log` ; un job déjà en cours n'est pas relancé
+//! (« déjà en cours »).
 
 use crate::db::{self, Db, MatchFilters, MatchRow};
 use crate::espn_events::{self, espn_date, season_text, PlayRow};
@@ -15,11 +16,13 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Mutex;
 
-/// Jobs servis par Rust (`sync-videos` reste côté Node : recherche des replays).
-pub const RUST_JOBS: [&str; 4] = [
+/// Jobs lancés par le cron Rust, que le planificateur de Node saute
+/// (`BL_RUST_JOBS`). Analyses et traductions restent à Node.
+pub const RUST_JOBS: [&str; 5] = [
     "sync-schedule",
     "sync-season",
     "sync-stats",
+    "sync-videos",
     "sync-subtitles",
 ];
 
@@ -434,13 +437,19 @@ pub fn check_ingest_auth(header: Option<&str>) -> Result<bool, String> {
 }
 
 /// `runJob` pour les jobs portés.
-pub async fn run_job(db: &Db, name: &str, season: Option<f64>) -> Option<JobResult> {
+pub async fn run_job(
+    db: &Db,
+    replays: &crate::replay::Replays,
+    name: &str,
+    season: Option<f64>,
+) -> Option<JobResult> {
     Some(match name {
         "sync-schedule" => sync_schedule(db).await,
         "sync-season" => {
             sync_season(db, season.unwrap_or_else(|| f64::from(current_season()))).await
         }
         "sync-stats" => sync_stats(db, 15).await,
+        "sync-videos" => replays.sync_videos(db, 20).await.0,
         "sync-subtitles" => sync_subtitles(db, 50).await,
         _ => return None,
     })

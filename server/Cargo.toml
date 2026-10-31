@@ -30,6 +30,7 @@ url = "2"
 regex = "1"
 indexmap = "2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

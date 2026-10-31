@@ -8,6 +8,7 @@
 pub mod accounts;
 pub mod api;
 pub mod auth;
+pub mod bv;
 pub mod cron;
 pub mod db;
 pub mod espn;
@@ -22,10 +23,12 @@ pub mod node;
 pub mod okru;
 pub mod present;
 pub mod proxy;
+pub mod replay;
 pub mod routes;
 pub mod routes_auth;
 pub mod routes_ingest;
 pub mod routes_match;
+pub mod routes_replay;
 pub mod routes_video;
 pub mod state;
 pub mod time;
@@ -34,8 +37,36 @@ pub mod vf_sync;
 pub mod video;
 pub mod writes;
 
+use axum::extract::{Request, State};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
+
+/// Chemins internes de l'application Node (`/api/internal/…`), appelés par
+/// le serveur Rust seul (jeton d'ingestion) : jamais relayés depuis
+/// l'extérieur, quelle que soit leur écriture (casse, `%xx`, `//`).
+pub fn is_internal_path(path: &str) -> bool {
+    let decoded = percent_encoding::percent_decode_str(path)
+        .decode_utf8_lossy()
+        .to_ascii_lowercase()
+        .replace('\\', "/");
+    let mut p = String::with_capacity(decoded.len());
+    for c in decoded.chars() {
+        if !(c == '/' && p.ends_with('/')) {
+            p.push(c);
+        }
+    }
+    let p = p.trim_end_matches('/');
+    p == "/api/internal" || p.starts_with("/api/internal/")
+}
+
+/// Relais vers Node, sauf les chemins internes (404).
+async fn relay(st: State<state::AppState>, req: Request) -> Response {
+    if is_internal_path(req.uri().path()) {
+        return api::error(axum::http::StatusCode::NOT_FOUND, "introuvable");
+    }
+    proxy::forward(st, req).await
+}
 
 /// Routes servies par Rust ; tout le reste part à Node.
 pub fn app(state: state::AppState) -> Router {
@@ -67,9 +98,36 @@ pub fn app(state: state::AppState) -> Router {
         .route("/api/video/{ok_id}/asset.ts", get(routes_video::asset))
         .route("/api/video/{ok_id}/file.mp4", get(routes_video::file_mp4))
         .route(
+            "/api/matches/{id}/replay",
+            post(routes_replay::replay).fallback(proxy::forward),
+        )
+        .route(
             "/api/ingest",
             post(routes_ingest::ingest).fallback(proxy::forward),
         )
-        .fallback(proxy::forward)
+        .fallback(relay)
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_internal_path;
+
+    #[test]
+    fn chemins_internes_jamais_relayes() {
+        for p in [
+            "/api/internal/replays",
+            "/api/internal/replays/",
+            "/api/internal",
+            "/API/Internal/replays",
+            "//api//internal/replays",
+            "/api/%69nternal/replays",
+            "/api%2Finternal%2Freplays",
+        ] {
+            assert!(is_internal_path(p), "{p}");
+        }
+        for p in ["/api/internals", "/api/ingest", "/internal/replays"] {
+            assert!(!is_internal_path(p), "{p}");
+        }
+    }
 }

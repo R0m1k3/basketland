@@ -1,0 +1,1132 @@
+[
+ {
+  "fn": "parseServerBlocks",
+  "input": "<html><head><title>Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026</title></head><body>\n \n \n <div class=\"fullstory block_elem\">\n\n <div class=\"full_img\">\n <img src=\"/_pu/92/01225890.jpg\" alt=\"Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026 - NBA Full HD\" title=\"Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026\" style=\"max-width:100%;height:auto\">\n </div>\n \n \n <p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #1 (OK)</b></span></p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nhlgamestoday.com/nhl-games-on-tv-today-tuesday-april-30-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #2 (DM)</b></span></p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nhlgamestoday.com/nhl-games-on-tv-today-sunday-april-28-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #3 (FM)</b></span></p>\n\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nbaontv.com/nba-games-on-tv-today-saturday-may-4-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p>Disclaimer: Basketball-video is only a video-embedding website. All contents are third-party links available free on the Internet, and we do not stream, broadcast, or host any of the videos.</p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><strong><span style=\"font-size:16px;\">Portland Trail Blazers vs Los Angeles Lakers - October 27, 2026 - Full Game Replay </span></strong></p>\n\n<p style=\"text-align: center;\"><strong><span style=\"font-size:16px;\">NBA 2026-2027</span></strong></p>\n\n</body></html>",
+  "output": {
+   "ok": [
+    {
+     "n": 1,
+     "label": "OK",
+     "href": "https://nhlgamestoday.com/nhl-games-on-tv-today-tuesday-april-30-2024"
+    },
+    {
+     "n": 2,
+     "label": "DM",
+     "href": "https://nhlgamestoday.com/nhl-games-on-tv-today-sunday-april-28-2024"
+    },
+    {
+     "n": 3,
+     "label": "FM",
+     "href": "https://nbaontv.com/nba-games-on-tv-today-saturday-may-4-2024"
+    }
+   ]
+  }
+ },
+ {
+  "fn": "parseServerBlocks",
+  "input": "<html><body><div class=\"entry-content\"><p>NBA Games on TV Today</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16656495217324\" width=\"560\"></iframe>\n<p>---</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16655414594220\" width=\"560\"></iframe>\n<p>---</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16653824363180\" width=\"560\"></iframe>\n</div></body></html>",
+  "output": {
+   "ok": []
+  }
+ },
+ {
+  "fn": "parseServerBlocks",
+  "input": "<p>rien</p>",
+  "output": {
+   "ok": []
+  }
+ },
+ {
+  "fn": "parseServerBlocks",
+  "input": "<b>server # 2 (dm)</b><a href='https://b.example/x'>x</a><b>SERVER#1</b><a class=\"x\" href=\"https://a.example/y\">y</a>",
+  "output": {
+   "ok": [
+    {
+     "n": 1,
+     "label": "",
+     "href": "https://a.example/y"
+    },
+    {
+     "n": 2,
+     "label": "dm",
+     "href": "https://b.example/x"
+    }
+   ]
+  }
+ },
+ {
+  "fn": "parseServerBlocks",
+  "input": "<b>Server #1 (OK)</b><p>pas de lien</p><b>Server #1 (OK bis)</b><a href=\"https://a.example/1\">1</a><b>Server #3 (  FM  )</b><a href=\"/relatif\">r</a>",
+  "output": {
+   "ok": [
+    {
+     "n": 1,
+     "label": "OK bis",
+     "href": "https://a.example/1"
+    },
+    {
+     "n": 3,
+     "label": "FM",
+     "href": "/relatif"
+    }
+   ]
+  }
+ },
+ {
+  "fn": "parseServerBlocks",
+  "input": "<b>Server #02 (A<b)</b><a href=\"https://x.example/2\">2</a><b>Server #10</b><a  data-x href = \"https://x.example/10\">10</a><b>Server #9 (Z)</b><a href=\"https://x.example/9\">9</a>",
+  "output": {
+   "ok": [
+    {
+     "n": 2,
+     "label": "",
+     "href": "https://x.example/2"
+    },
+    {
+     "n": 9,
+     "label": "Z",
+     "href": "https://x.example/9"
+    },
+    {
+     "n": 10,
+     "label": "",
+     "href": "https://x.example/10"
+    }
+   ]
+  }
+ },
+ {
+  "fn": "parseServerBlocks",
+  "input": "<b>Server #1 (OK)</b><abbr href=\"https://faux.example\">a</abbr><a href=\"\">vide</a><a href=\"https://vrai.example\">v</a>",
+  "output": {
+   "ok": [
+    {
+     "n": 1,
+     "label": "OK",
+     "href": "https://vrai.example"
+    }
+   ]
+  }
+ },
+ {
+  "fn": "parseOkIframes",
+  "input": "<html><body><div class=\"entry-content\"><p>NBA Games on TV Today</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16656495217324\" width=\"560\"></iframe>\n<p>---</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16655414594220\" width=\"560\"></iframe>\n<p>---</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16653824363180\" width=\"560\"></iframe>\n</div></body></html>",
+  "output": {
+   "ok": [
+    "16656495217324",
+    "16655414594220",
+    "16653824363180"
+   ]
+  }
+ },
+ {
+  "fn": "parseFirstOkIframe",
+  "input": "<html><body><div class=\"entry-content\"><p>NBA Games on TV Today</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16656495217324\" width=\"560\"></iframe>\n<p>---</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16655414594220\" width=\"560\"></iframe>\n<p>---</p>\n<iframe allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen=\"\" class=\"yt-embed\" frameborder=\"0\" height=\"315\" src=\"//ok.ru/videoembed/16653824363180\" width=\"560\"></iframe>\n</div></body></html>",
+  "output": {
+   "ok": "16656495217324"
+  }
+ },
+ {
+  "fn": "parseOkIframes",
+  "input": "<html><head><title>Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026</title></head><body>\n \n \n <div class=\"fullstory block_elem\">\n\n <div class=\"full_img\">\n <img src=\"/_pu/92/01225890.jpg\" alt=\"Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026 - NBA Full HD\" title=\"Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026\" style=\"max-width:100%;height:auto\">\n </div>\n \n \n <p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #1 (OK)</b></span></p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nhlgamestoday.com/nhl-games-on-tv-today-tuesday-april-30-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #2 (DM)</b></span></p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nhlgamestoday.com/nhl-games-on-tv-today-sunday-april-28-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #3 (FM)</b></span></p>\n\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nbaontv.com/nba-games-on-tv-today-saturday-may-4-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p>Disclaimer: Basketball-video is only a video-embedding website. All contents are third-party links available free on the Internet, and we do not stream, broadcast, or host any of the videos.</p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><strong><span style=\"font-size:16px;\">Portland Trail Blazers vs Los Angeles Lakers - October 27, 2026 - Full Game Replay </span></strong></p>\n\n<p style=\"text-align: center;\"><strong><span style=\"font-size:16px;\">NBA 2026-2027</span></strong></p>\n\n</body></html>",
+  "output": {
+   "ok": []
+  }
+ },
+ {
+  "fn": "parseFirstOkIframe",
+  "input": "<html><head><title>Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026</title></head><body>\n \n \n <div class=\"fullstory block_elem\">\n\n <div class=\"full_img\">\n <img src=\"/_pu/92/01225890.jpg\" alt=\"Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026 - NBA Full HD\" title=\"Portland Trail Blazers vs Los Angeles Lakers - NBA - Full Game Replay - October 27, 2026\" style=\"max-width:100%;height:auto\">\n </div>\n \n \n <p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #1 (OK)</b></span></p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nhlgamestoday.com/nhl-games-on-tv-today-tuesday-april-30-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #2 (DM)</b></span></p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nhlgamestoday.com/nhl-games-on-tv-today-sunday-april-28-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><span style=\"font-size:28px;\"><b>Server #3 (FM)</b></span></p>\n\n\n<p style=\"text-align: center;\"><span style=\"font-size:36px;\"><strong><a class=\"su-button su-button-style-default\" href=\"https://nbaontv.com/nba-games-on-tv-today-saturday-may-4-2024\" rel=\"noopener noreferrer\" style=\"color:#FFFFFF;background-color:#2D89EF;border-color:#246ec0;border-radius:5px;-moz-border-radius:5px;-webkit-border-radius:5px\" target=\"_blank\"><span style=\"color: rgb(255, 255, 255); padding: 0px 16px; line-height: 26px; border-color: rgb(108, 173, 244); border-radius: 5px; text-shadow: none;\">Watch</span></a></strong></span></p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p>Disclaimer: Basketball-video is only a video-embedding website. All contents are third-party links available free on the Internet, and we do not stream, broadcast, or host any of the videos.</p>\n\n<p style=\"text-align: center;\">-------------------------------------</p>\n\n<p style=\"text-align: center;\"><strong><span style=\"font-size:16px;\">Portland Trail Blazers vs Los Angeles Lakers - October 27, 2026 - Full Game Replay </span></strong></p>\n\n<p style=\"text-align: center;\"><strong><span style=\"font-size:16px;\">NBA 2026-2027</span></strong></p>\n\n</body></html>",
+  "output": {
+   "ok": null
+  }
+ },
+ {
+  "fn": "parseOkIframes",
+  "input": "<iframe src=\"https://ok.ru/videoembed/16656495217324\"></iframe>",
+  "output": {
+   "ok": [
+    "16656495217324"
+   ]
+  }
+ },
+ {
+  "fn": "parseFirstOkIframe",
+  "input": "<iframe src=\"https://ok.ru/videoembed/16656495217324\"></iframe>",
+  "output": {
+   "ok": "16656495217324"
+  }
+ },
+ {
+  "fn": "parseOkIframes",
+  "input": "<IFRAME class=\"a\" SRC='//www.ok.ru/videoembed/123456789?autoplay=1'></IFRAME><iframe src=\"http://OK.RU/videoembed/987654321\"></iframe><iframe src=\"//ok.ru/videoembed/123456789\"></iframe>",
+  "output": {
+   "ok": [
+    "123456789",
+    "987654321"
+   ]
+  }
+ },
+ {
+  "fn": "parseFirstOkIframe",
+  "input": "<IFRAME class=\"a\" SRC='//www.ok.ru/videoembed/123456789?autoplay=1'></IFRAME><iframe src=\"http://OK.RU/videoembed/987654321\"></iframe><iframe src=\"//ok.ru/videoembed/123456789\"></iframe>",
+  "output": {
+   "ok": "123456789"
+  }
+ },
+ {
+  "fn": "parseOkIframes",
+  "input": "<iframe src=\"https://bysesukior.com/e/x\"></iframe><iframe data-src=\"//ok.ru/videoembed/1\" src=\"//ok.ru/videoembed/22222\"></iframe>",
+  "output": {
+   "ok": [
+    "22222"
+   ]
+  }
+ },
+ {
+  "fn": "parseFirstOkIframe",
+  "input": "<iframe src=\"https://bysesukior.com/e/x\"></iframe><iframe data-src=\"//ok.ru/videoembed/1\" src=\"//ok.ru/videoembed/22222\"></iframe>",
+  "output": {
+   "ok": "22222"
+  }
+ },
+ {
+  "fn": "parseOkIframes",
+  "input": "<iframe src=\"https://ok.ru/video/123\"></iframe><iframe src=\"//ok.ru/videoembed/\"></iframe>",
+  "output": {
+   "ok": []
+  }
+ },
+ {
+  "fn": "parseFirstOkIframe",
+  "input": "<iframe src=\"https://ok.ru/video/123\"></iframe><iframe src=\"//ok.ru/videoembed/\"></iframe>",
+  "output": {
+   "ok": null
+  }
+ },
+ {
+  "fn": "parseListing",
+  "input": "<html><body>\n<a href=\"https://basketball-video.com/atlanta-dream-vs-golden-state-valkyries-wnba-finals-game-5-full-game-replay-october-26-2026\">x</a>\n<a href=\"https://basketball-video.com/golden-state-valkyries-vs-atlanta-dream-wnba-finals-game-4-full-game-replay-october-24-2026--\">x</a>\n<a href=\"https://basketball-video.com/golden-state-valkyries-vs-atlanta-dream-wnba-finals-game-3-full-game-replay-october-21-2026\">x</a>\n<a href=\"https://basketball-video.com/atlanta-dream-vs-golden-state-valkyries-wnba-finals-game-2-full-game-replay-october-19-2026---\">x</a>\n<a href=\"https://basketball-video.com/atlanta-dream-vs-golden-state-valkyries-wnba-finals-game-1-full-game-replay-octobe-17-2026\">x</a>\n<a href=\"/los-angeles-lakers-vs-la-clippers-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/los-angeles-lakers-vs-la-clippers-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/houston-rockets-vs-milwaukee-bucks-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/houston-rockets-vs-milwaukee-bucks-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/golden-state-warriors-vs-minnesota-timberwolves-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/golden-state-warriors-vs-minnesota-timberwolves-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/denver-nuggets-vs-new-orleans-pelicans-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/denver-nuggets-vs-new-orleans-pelicans-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/orlando-magic-vs-toronto-raptors-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/orlando-magic-vs-toronto-raptors-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/philadelphia-76ers-vs-indiana-pacers-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/philadelphia-76ers-vs-indiana-pacers-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/washington-wizards-vs-cleveland-cavaliers-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/washington-wizards-vs-cleveland-cavaliers-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/miami-heat-vs-atlanta-hawks-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/miami-heat-vs-atlanta-hawks-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/charlotte-hornets-vs-detroit-pistons-nba-full-game-replay-october-28-2026\">x</a>\n<a href=\"/charlotte-hornets-vs-detroit-pistons-nba-full-game-replay-october-28-2026\" class=\"btn\">x</a>\n<a href=\"/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026\">x</a>\n<a href=\"/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026\" class=\"btn\">x</a>\n<a class=\"swchItem\" href=\"/2026-27?page2\"  onclick=\"spages('2', '2', this ); return false;\" >x</a>\n<a class=\"swchItem\" href=\"/2026-27?page3\"  onclick=\"spages('3', '2', this ); return false;\" >x</a>\n<a class=\"swchItem\" href=\"/2026-27?page13\"  onclick=\"spages('13', '2', this ); return false;\" >x</a>\n<a class=\"swchItem\" href=\"/2026-27?page14\"  onclick=\"spages('14', '2', this ); return false;\" >x</a>\n<a class=\"swchItem swchItem-next\" href=\"/2026-27?page2\"  onclick=\"spages('2', '2', this ); return false;\" >x</a>\n<a href=\"https://basketball-video.com/philadelphia-76ers-vs-new-york-knicks-nba-full-game-replay-october-20-2026\">x</a>\n<a href=\"https://basketball-video.com/oklahoma-city-thunder-vs-san-antonio-spurs-nba-full-game-replay-october-20-2026\">x</a>\n<a href=\"https://basketball-video.com/golden-state-warriors-vs-los-angeles-lakers-nba-full-game-replay-october-21-2026--\">x</a>\n<a href=\"https://basketball-video.com/cleveland-cavaliers-vs-philadelphia-76ers-nba-full-game-replay-october-22-2026--\">x</a>\n</body></html>",
+  "output": {
+   "ok": {
+    "entries": [
+     {
+      "url": "https://basketball-video.com/los-angeles-lakers-vs-la-clippers-nba-full-game-replay-october-28-2026",
+      "slug": "los-angeles-lakers-vs-la-clippers-nba-full-game-replay-october-28-2026",
+      "awaySlug": "los-angeles-lakers",
+      "homeSlug": "la-clippers",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/houston-rockets-vs-milwaukee-bucks-nba-full-game-replay-october-28-2026",
+      "slug": "houston-rockets-vs-milwaukee-bucks-nba-full-game-replay-october-28-2026",
+      "awaySlug": "houston-rockets",
+      "homeSlug": "milwaukee-bucks",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/golden-state-warriors-vs-minnesota-timberwolves-nba-full-game-replay-october-28-2026",
+      "slug": "golden-state-warriors-vs-minnesota-timberwolves-nba-full-game-replay-october-28-2026",
+      "awaySlug": "golden-state-warriors",
+      "homeSlug": "minnesota-timberwolves",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/denver-nuggets-vs-new-orleans-pelicans-nba-full-game-replay-october-28-2026",
+      "slug": "denver-nuggets-vs-new-orleans-pelicans-nba-full-game-replay-october-28-2026",
+      "awaySlug": "denver-nuggets",
+      "homeSlug": "new-orleans-pelicans",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/orlando-magic-vs-toronto-raptors-nba-full-game-replay-october-28-2026",
+      "slug": "orlando-magic-vs-toronto-raptors-nba-full-game-replay-october-28-2026",
+      "awaySlug": "orlando-magic",
+      "homeSlug": "toronto-raptors",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/philadelphia-76ers-vs-indiana-pacers-nba-full-game-replay-october-28-2026",
+      "slug": "philadelphia-76ers-vs-indiana-pacers-nba-full-game-replay-october-28-2026",
+      "awaySlug": "philadelphia-76ers",
+      "homeSlug": "indiana-pacers",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/washington-wizards-vs-cleveland-cavaliers-nba-full-game-replay-october-28-2026",
+      "slug": "washington-wizards-vs-cleveland-cavaliers-nba-full-game-replay-october-28-2026",
+      "awaySlug": "washington-wizards",
+      "homeSlug": "cleveland-cavaliers",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/miami-heat-vs-atlanta-hawks-nba-full-game-replay-october-28-2026",
+      "slug": "miami-heat-vs-atlanta-hawks-nba-full-game-replay-october-28-2026",
+      "awaySlug": "miami-heat",
+      "homeSlug": "atlanta-hawks",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/charlotte-hornets-vs-detroit-pistons-nba-full-game-replay-october-28-2026",
+      "slug": "charlotte-hornets-vs-detroit-pistons-nba-full-game-replay-october-28-2026",
+      "awaySlug": "charlotte-hornets",
+      "homeSlug": "detroit-pistons",
+      "date": "2026-10-28"
+     },
+     {
+      "url": "https://basketball-video.com/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026",
+      "slug": "portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026",
+      "awaySlug": "portland-trail-blazers",
+      "homeSlug": "los-angeles-lakers",
+      "date": "2026-10-27"
+     },
+     {
+      "url": "https://basketball-video.com/philadelphia-76ers-vs-new-york-knicks-nba-full-game-replay-october-20-2026",
+      "slug": "philadelphia-76ers-vs-new-york-knicks-nba-full-game-replay-october-20-2026",
+      "awaySlug": "philadelphia-76ers",
+      "homeSlug": "new-york-knicks",
+      "date": "2026-10-20"
+     },
+     {
+      "url": "https://basketball-video.com/oklahoma-city-thunder-vs-san-antonio-spurs-nba-full-game-replay-october-20-2026",
+      "slug": "oklahoma-city-thunder-vs-san-antonio-spurs-nba-full-game-replay-october-20-2026",
+      "awaySlug": "oklahoma-city-thunder",
+      "homeSlug": "san-antonio-spurs",
+      "date": "2026-10-20"
+     },
+     {
+      "url": "https://basketball-video.com/golden-state-warriors-vs-los-angeles-lakers-nba-full-game-replay-october-21-2026--",
+      "slug": "golden-state-warriors-vs-los-angeles-lakers-nba-full-game-replay-october-21-2026",
+      "awaySlug": "golden-state-warriors",
+      "homeSlug": "los-angeles-lakers",
+      "date": "2026-10-21"
+     },
+     {
+      "url": "https://basketball-video.com/cleveland-cavaliers-vs-philadelphia-76ers-nba-full-game-replay-october-22-2026--",
+      "slug": "cleveland-cavaliers-vs-philadelphia-76ers-nba-full-game-replay-october-22-2026",
+      "awaySlug": "cleveland-cavaliers",
+      "homeSlug": "philadelphia-76ers",
+      "date": "2026-10-22"
+     }
+    ],
+    "maxPage": 14
+   }
+  }
+ },
+ {
+  "fn": "parseListing",
+  "input": "<a href=\"https://basketball-video.com/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026\">W</a>\n   <a href='/2026-27/alpha-vs-omega-nba-full-game-replay-november-5-2026/'>W</a>\n   <a href=\"sacramento-kings-vs-san-antonio-spurs-nba-full-game-replay-october-27-2026\">W</a>\n   <a href=\"//autre.example/x-vs-y-nba-full-game-replay-may-1-2027\">W</a>\n   <a HREF = \"HTTPS://BASKETBALL-VIDEO.COM/a-vs-b-nba-full-game-replay-june-3-2027\">W</a>\n   <a href=\"/a b/é-vs-c-nba-full-game-replay-jan-02-2027?x=1#y\">W</a>\n   <a href=\"/x-vs-y-nba-playoffs-game-7-full-game-replay-sept-9-2026\">W</a>\n   <a href=\"/x-vs-y-nba-full-game-replay-foo-9-2026\">W</a>\n   <a href=\"/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026-2\">dup</a>\n   <a href=\"?page2\">2</a><a href=\"?page12\">12</a><a href=\"/2026-27?page7\">7</a><a href=\"?PAGE99\">x</a>",
+  "output": {
+   "ok": {
+    "entries": [
+     {
+      "url": "https://basketball-video.com/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026",
+      "slug": "portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026",
+      "awaySlug": "portland-trail-blazers",
+      "homeSlug": "los-angeles-lakers",
+      "date": "2026-10-27"
+     },
+     {
+      "url": "https://basketball-video.com/2026-27/alpha-vs-omega-nba-full-game-replay-november-5-2026/",
+      "slug": "2026-27/alpha-vs-omega-nba-full-game-replay-november-5-2026",
+      "awaySlug": "2026-27/alpha",
+      "homeSlug": "omega",
+      "date": "2026-11-05"
+     },
+     {
+      "url": "https://basketball-video.com/sacramento-kings-vs-san-antonio-spurs-nba-full-game-replay-october-27-2026",
+      "slug": "sacramento-kings-vs-san-antonio-spurs-nba-full-game-replay-october-27-2026",
+      "awaySlug": "sacramento-kings",
+      "homeSlug": "san-antonio-spurs",
+      "date": "2026-10-27"
+     },
+     {
+      "url": "https://autre.example/x-vs-y-nba-full-game-replay-may-1-2027",
+      "slug": "autre.example/x-vs-y-nba-full-game-replay-may-1-2027",
+      "awaySlug": "autre.example/x",
+      "homeSlug": "y",
+      "date": "2027-05-01"
+     },
+     {
+      "url": "https://basketball-video.com/a-vs-b-nba-full-game-replay-june-3-2027",
+      "slug": "HTTPS://BASKETBALL-VIDEO.COM/a-vs-b-nba-full-game-replay-june-3-2027",
+      "awaySlug": "HTTPS://BASKETBALL-VIDEO.COM/a",
+      "homeSlug": "b",
+      "date": "2027-06-03"
+     },
+     {
+      "url": "https://basketball-video.com/a%20b/%C3%A9-vs-c-nba-full-game-replay-jan-02-2027?x=1#y",
+      "slug": "a b/é-vs-c-nba-full-game-replay-jan-02-2027?x=1#y",
+      "awaySlug": "a b/é",
+      "homeSlug": "c",
+      "date": "2027-01-02"
+     },
+     {
+      "url": "https://basketball-video.com/x-vs-y-nba-playoffs-game-7-full-game-replay-sept-9-2026",
+      "slug": "x-vs-y-nba-playoffs-game-7-full-game-replay-sept-9-2026",
+      "awaySlug": "x",
+      "homeSlug": "y",
+      "date": "2026-09-09"
+     },
+     {
+      "url": "https://basketball-video.com/x-vs-y-nba-full-game-replay-foo-9-2026",
+      "slug": "x-vs-y-nba-full-game-replay-foo-9-2026",
+      "awaySlug": "x",
+      "homeSlug": "y",
+      "date": null
+     },
+     {
+      "url": "https://basketball-video.com/portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026-2",
+      "slug": "portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026-2",
+      "awaySlug": "portland-trail-blazers",
+      "homeSlug": "los-angeles-lakers",
+      "date": "2026-10-27"
+     }
+    ],
+    "maxPage": 12
+   }
+  }
+ },
+ {
+  "fn": "parseListing",
+  "input": "<p>vide</p>",
+  "output": {
+   "ok": {
+    "entries": [],
+    "maxPage": 1
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026",
+  "output": {
+   "ok": {
+    "slug": "portland-trail-blazers-vs-los-angeles-lakers-nba-full-game-replay-october-27-2026",
+    "awaySlug": "portland-trail-blazers",
+    "homeSlug": "los-angeles-lakers",
+    "date": "2026-10-27"
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "denver-nuggets-vs-los-angeles-lakers-nba-preseason-full-game-replay-october-16-2026",
+  "output": {
+   "ok": {
+    "slug": "denver-nuggets-vs-los-angeles-lakers-nba-preseason-full-game-replay-october-16-2026",
+    "awaySlug": "denver-nuggets",
+    "homeSlug": "los-angeles-lakers",
+    "date": "2026-10-16"
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "/golden-state-valkyries-vs-atlanta-dream-wnba-finals-game-4-full-game-replay-october-24-2026--",
+  "output": {
+   "ok": null
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "a-vs-b-vs-c-nba-full-game-replay-mayo-1-2027",
+  "output": {
+   "ok": {
+    "slug": "a-vs-b-vs-c-nba-full-game-replay-mayo-1-2027",
+    "awaySlug": "a",
+    "homeSlug": "b-vs-c",
+    "date": "2027-05-01"
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "a-vs-b-nba-full-game-replay-xyz-1-2027",
+  "output": {
+   "ok": {
+    "slug": "a-vs-b-nba-full-game-replay-xyz-1-2027",
+    "awaySlug": "a",
+    "homeSlug": "b",
+    "date": null
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "a-vs-b-nba-full-game-replay-ju-1-2027",
+  "output": {
+   "ok": {
+    "slug": "a-vs-b-nba-full-game-replay-ju-1-2027",
+    "awaySlug": "a",
+    "homeSlug": "b",
+    "date": null
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "//a-vs-b-nba-cup-final-full-game-replay-december-31-2026//",
+  "output": {
+   "ok": {
+    "slug": "a-vs-b-nba-cup-final-full-game-replay-december-31-2026",
+    "awaySlug": "a",
+    "homeSlug": "b",
+    "date": "2026-12-31"
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "2026-27/alpha-vs-omega-nba-full-game-replay-november-5-2026",
+  "output": {
+   "ok": {
+    "slug": "2026-27/alpha-vs-omega-nba-full-game-replay-november-5-2026",
+    "awaySlug": "2026-27/alpha",
+    "homeSlug": "omega",
+    "date": "2026-11-05"
+   }
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "some-random-page",
+  "output": {
+   "ok": null
+  }
+ },
+ {
+  "fn": "parseReplaySlug",
+  "input": "",
+  "output": {
+   "ok": null
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "LA Clippers",
+  "output": {
+   "ok": "la-clippers"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "Portland Trail Blazers",
+  "output": {
+   "ok": "portland-trail-blazers"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "Oklahoma City Thunder",
+  "output": {
+   "ok": "oklahoma-city-thunder"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "Atlético Ñandú",
+  "output": {
+   "ok": "atletico-nandu"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "  76ers!!",
+  "output": {
+   "ok": "76ers"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "Ünïcödé — Çà",
+  "output": {
+   "ok": "unicode-ca"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "İstanbul ΣΑΣ",
+  "output": {
+   "ok": "istanbul"
+  }
+ },
+ {
+  "fn": "teamSlug",
+  "input": "-x-",
+  "output": {
+   "ok": "x"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-10-28T03:00:00Z",
+  "output": {
+   "ok": "2026-10-27"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-10-27T23:30:00Z",
+  "output": {
+   "ok": "2026-10-27"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-10-28T19:00:00Z",
+  "output": {
+   "ok": "2026-10-28"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-03-08T06:59:00Z",
+  "output": {
+   "ok": "2026-03-08"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-03-08T07:00:00Z",
+  "output": {
+   "ok": "2026-03-08"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-11-01T04:30:00.000Z",
+  "output": {
+   "ok": "2026-11-01"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "2026-11-01T05:30Z",
+  "output": {
+   "ok": "2026-11-01"
+  }
+ },
+ {
+  "fn": "usDateKey",
+  "input": "pas une date",
+  "output": {
+   "err": "Invalid time value"
+  }
+ },
+ {
+  "fn": "seasonLabel",
+  "input": 2026,
+  "output": {
+   "ok": "2026-27"
+  }
+ },
+ {
+  "fn": "seasonLabel",
+  "input": 2025,
+  "output": {
+   "ok": "2025-26"
+  }
+ },
+ {
+  "fn": "seasonLabel",
+  "input": 2099,
+  "output": {
+   "ok": "2099-00"
+  }
+ },
+ {
+  "fn": "seasonLabel",
+  "input": 2008,
+  "output": {
+   "ok": "2008-09"
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [
+    {
+     "url": "u1",
+     "slug": "s1",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-29"
+    },
+    {
+     "url": "u2",
+     "slug": "s2",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-27"
+    },
+    {
+     "url": "u3",
+     "slug": "s3",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": null
+    },
+    {
+     "url": "u4",
+     "slug": "s4",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": "2026-10-28"
+    },
+    {
+     "url": "u5",
+     "slug": "s5",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-02-31"
+    },
+    {
+     "url": "u6",
+     "slug": "s6",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-03-04"
+    }
+   ],
+   "match": {
+    "away_name": "Portland Trail Blazers",
+    "home_name": "Los Angeles Lakers",
+    "date_utc": "2026-10-28T03:00:00Z"
+   }
+  },
+  "output": {
+   "ok": {
+    "url": "u2",
+    "slug": "s2",
+    "awaySlug": "portland-trail-blazers",
+    "homeSlug": "los-angeles-lakers",
+    "date": "2026-10-27"
+   }
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [
+    {
+     "url": "u1",
+     "slug": "s1",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-29"
+    },
+    {
+     "url": "u2",
+     "slug": "s2",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-27"
+    },
+    {
+     "url": "u3",
+     "slug": "s3",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": null
+    },
+    {
+     "url": "u4",
+     "slug": "s4",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": "2026-10-28"
+    },
+    {
+     "url": "u5",
+     "slug": "s5",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-02-31"
+    },
+    {
+     "url": "u6",
+     "slug": "s6",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-03-04"
+    }
+   ],
+   "match": {
+    "away_name": "Portland Trail Blazers",
+    "home_name": "Los Angeles Lakers",
+    "date_utc": "2026-10-30T03:00:00Z"
+   }
+  },
+  "output": {
+   "ok": {
+    "url": "u1",
+    "slug": "s1",
+    "awaySlug": "portland-trail-blazers",
+    "homeSlug": "los-angeles-lakers",
+    "date": "2026-10-29"
+   }
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [
+    {
+     "url": "u1",
+     "slug": "s1",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-29"
+    },
+    {
+     "url": "u2",
+     "slug": "s2",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-27"
+    },
+    {
+     "url": "u3",
+     "slug": "s3",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": null
+    },
+    {
+     "url": "u4",
+     "slug": "s4",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": "2026-10-28"
+    },
+    {
+     "url": "u5",
+     "slug": "s5",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-02-31"
+    },
+    {
+     "url": "u6",
+     "slug": "s6",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-03-04"
+    }
+   ],
+   "match": {
+    "away_name": "Portland Trail Blazers",
+    "home_name": "Los Angeles Lakers",
+    "date_utc": "2026-11-15T03:00:00Z"
+   }
+  },
+  "output": {
+   "ok": {
+    "url": "u3",
+    "slug": "s3",
+    "awaySlug": "los-angeles-lakers",
+    "homeSlug": "portland-trail-blazers",
+    "date": null
+   }
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [
+    {
+     "url": "u1",
+     "slug": "s1",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-29"
+    },
+    {
+     "url": "u2",
+     "slug": "s2",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-27"
+    },
+    {
+     "url": "u3",
+     "slug": "s3",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": null
+    },
+    {
+     "url": "u4",
+     "slug": "s4",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": "2026-10-28"
+    },
+    {
+     "url": "u5",
+     "slug": "s5",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-02-31"
+    },
+    {
+     "url": "u6",
+     "slug": "s6",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-03-04"
+    }
+   ],
+   "match": {
+    "away_name": "LA Clippers",
+    "home_name": "Los Angeles Lakers",
+    "date_utc": "2026-03-04T02:00:00Z"
+   }
+  },
+  "output": {
+   "ok": {
+    "url": "u5",
+    "slug": "s5",
+    "awaySlug": "la-clippers",
+    "homeSlug": "los-angeles-lakers",
+    "date": "2026-02-31"
+   }
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [
+    {
+     "url": "u1",
+     "slug": "s1",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-29"
+    },
+    {
+     "url": "u2",
+     "slug": "s2",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-27"
+    },
+    {
+     "url": "u3",
+     "slug": "s3",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": null
+    },
+    {
+     "url": "u4",
+     "slug": "s4",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": "2026-10-28"
+    },
+    {
+     "url": "u5",
+     "slug": "s5",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-02-31"
+    },
+    {
+     "url": "u6",
+     "slug": "s6",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-03-04"
+    }
+   ],
+   "match": {
+    "away_name": "LA Clippers",
+    "home_name": "Los Angeles Lakers",
+    "date_utc": "2026-03-05T22:00:00Z"
+   }
+  },
+  "output": {
+   "ok": {
+    "url": "u6",
+    "slug": "s6",
+    "awaySlug": "la-clippers",
+    "homeSlug": "los-angeles-lakers",
+    "date": "2026-03-04"
+   }
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [
+    {
+     "url": "u1",
+     "slug": "s1",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-29"
+    },
+    {
+     "url": "u2",
+     "slug": "s2",
+     "awaySlug": "portland-trail-blazers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-10-27"
+    },
+    {
+     "url": "u3",
+     "slug": "s3",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": null
+    },
+    {
+     "url": "u4",
+     "slug": "s4",
+     "awaySlug": "los-angeles-lakers",
+     "homeSlug": "portland-trail-blazers",
+     "date": "2026-10-28"
+    },
+    {
+     "url": "u5",
+     "slug": "s5",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-02-31"
+    },
+    {
+     "url": "u6",
+     "slug": "s6",
+     "awaySlug": "la-clippers",
+     "homeSlug": "los-angeles-lakers",
+     "date": "2026-03-04"
+    }
+   ],
+   "match": {
+    "away_name": "Boston Celtics",
+    "home_name": "Los Angeles Lakers",
+    "date_utc": "2026-10-28T03:00:00Z"
+   }
+  },
+  "output": {
+   "ok": null
+  }
+ },
+ {
+  "fn": "matchListingEntry",
+  "input": {
+   "entries": [],
+   "match": {
+    "away_name": "A",
+    "home_name": "B",
+    "date_utc": "invalide"
+   }
+  },
+  "output": {
+   "err": "Invalid time value"
+  }
+ },
+ {
+  "fn": "embedKind",
+  "input": "ok-embed.html",
+  "output": {
+   "ok": {
+    "kind": "hls",
+    "duration": 8033
+   }
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": null,
+  "output": {
+   "ok": "pas encore publié sur le site des replays"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "",
+  "output": {
+   "ok": "pas encore publié sur le site des replays"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "replay non listé",
+  "output": {
+   "ok": "pas encore publié sur le site des replays"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "iframe ok.ru introuvable",
+  "output": {
+   "ok": "la page du replay n’a pas encore de vidéo"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "vidéo trop courte (teaser)",
+  "output": {
+   "ok": "seul un résumé est en ligne pour l’instant"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "flux indisponible",
+  "output": {
+   "ok": "la vidéo est encore en cours de traitement"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "embed ok.ru illisible (HTTP 404 pour https://ok.ru/videoembed/1)",
+  "output": {
+   "ok": "la vidéo est momentanément illisible"
+  }
+ },
+ {
+  "fn": "humanReplayReason",
+  "input": "autre chose",
+  "output": {
+   "ok": "autre chose"
+  }
+ },
+ {
+  "fn": "replayRecheckWindow",
+  "input": "2026-10-29T12:00:00.000Z",
+  "output": {
+   "ok": {
+    "since": "2026-10-08T12:00:00.000Z",
+    "recentSince": "2026-10-28T21:30:00.000Z",
+    "recentRecheckBefore": "2026-10-29T11:45:00.000Z",
+    "recheckBefore": "2026-10-29T10:05:00.000Z"
+   }
+  }
+ },
+ {
+  "fn": "replayRecheckWindow",
+  "input": "2026-03-29T00:30:00.000Z",
+  "output": {
+   "ok": {
+    "since": "2026-03-08T00:30:00.000Z",
+    "recentSince": "2026-03-28T10:00:00.000Z",
+    "recentRecheckBefore": "2026-03-29T00:15:00.000Z",
+    "recheckBefore": "2026-03-28T22:35:00.000Z"
+   }
+  }
+ },
+ {
+  "fn": "replayRecheckWindow",
+  "input": "2027-01-01T00:00:00.000Z",
+  "output": {
+   "ok": {
+    "since": "2026-12-11T00:00:00.000Z",
+    "recentSince": "2026-12-31T09:30:00.000Z",
+    "recentRecheckBefore": "2026-12-31T23:45:00.000Z",
+    "recheckBefore": "2026-12-31T22:05:00.000Z"
+   }
+  }
+ }
+]

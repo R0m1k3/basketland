@@ -1602,11 +1602,11 @@ async fn flux_un_rafraichissement_en_echec_garde_le_flux_valable() {
 async fn routes_video_protegees_par_session() {
     use tower::ServiceExt;
     let h = harness(&[]).await;
-    let app = basketland_server::app(basketland_server::state::AppState {
-        db: h.db.clone(),
-        upstream: basketland_server::proxy::Upstream::new("http://127.0.0.1:9"),
-        video: h.v.clone(),
-    });
+    let app = basketland_server::app(basketland_server::state::AppState::new(
+        h.db.clone(),
+        basketland_server::proxy::Upstream::new("http://127.0.0.1:9"),
+        h.v.clone(),
+    ));
     let get = |uri: String, cookie: bool| {
         let mut b = axum::http::Request::get(uri);
         if cookie {
