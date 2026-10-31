@@ -449,13 +449,13 @@ async fn lancement_de_la_traduction() {
             JSON_WRITE.to_vec(),
             "null",
             400,
-            "action invalide (attendu : 'start' ou 'retry')",
+            "action invalide (attendu : 'start', 'retry' ou 'stop')",
         ),
         (
             JSON_WRITE.to_vec(),
-            r#"{"action":"stop"}"#,
+            r#"{"action":"pause"}"#,
             400,
-            "action invalide (attendu : 'start' ou 'retry')",
+            "action invalide (attendu : 'start', 'retry' ou 'stop')",
         ),
     ] {
         let res = send(&t, "POST", &p, Some("paul"), &h, body).await;
@@ -666,4 +666,94 @@ async fn mises_en_file_de_fond_et_replay_trouve() {
         t.media.analysis.activity().queued.len() + t.media.analysis.activity().running.len(),
         q.analyses
     );
+}
+
+/// Lancée depuis la fiche : jusqu'au bout, même lecture arrêtée ; « Arrêter
+/// la traduction » l'interrompt pour de bon (la lecture ne la relance plus),
+/// « Reprendre la traduction » la relance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn arret_et_reprise_de_la_traduction() {
+    let _g = LOCK.lock().await;
+    let t = setup();
+    let id = t.partial;
+    let p = format!("/api/matches/{id}/commentary");
+    let res = post(&t, &p, "paul", r#"{"action":"start"}"#).await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    wait_running(&t.media, id).await;
+    // Lancement à la lecture : travail explicite (mené jusqu'au bout).
+    assert!(t.media.commentary.activity().running.is_some());
+    let c = t.media.commentary.clone();
+    let explicit = tokio::task::spawn_blocking(move || c.status(id).to_json())
+        .await
+        .unwrap();
+    assert_eq!(explicit["status"], "running");
+
+    // Arrêt : interrompu, statut « none » marqué arrêté, message.
+    let res = post(&t, &p, "paul", r#"{"action":"stop"}"#).await;
+    assert_eq!(res.status, StatusCode::OK);
+    let v = res.json();
+    assert_eq!(
+        v["message"],
+        "Traduction arrêtée. Les sous-titres déjà traduits restent disponibles."
+    );
+    for _ in 0..200 {
+        if t.media.commentary.running_match_id().is_none() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(t.media.commentary.running_match_id(), None);
+    let v = get(&t, &p, "paul").await.json();
+    assert_eq!(v["commentary"]["status"], "none");
+    assert_eq!(v["commentary"]["stopped"], true);
+    // Ni la lecture ni le travail de fond ne la relancent.
+    let res = post(&t, &p, "paul", r#"{"action":"start"}"#).await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(
+        res.json()["message"],
+        "Traduction arrêtée : « Reprendre la traduction » la relance."
+    );
+    let (d, m) = (db::Db::new(t.path.clone()), t.media.clone());
+    tokio::task::spawn_blocking(move || {
+        scheduler::queue_recent_work(&d, &m, true, false);
+        scheduler::prioritize_found_replay(&d, &m, id);
+    })
+    .await
+    .unwrap();
+    let a = t.media.commentary.activity();
+    assert!(
+        a.running.as_ref().is_none_or(|r| r.match_id != id) && !a.queued.contains(&id),
+        "{a:?}"
+    );
+    // Arrêt sans travail : rien à interrompre, l'arrêt reste.
+    let res = post(&t, &p, "paul", r#"{"action":"stop"}"#).await;
+    assert_eq!(
+        res.json()["message"],
+        "Traduction arrêtée : elle ne reprendra que sur « Reprendre la traduction »."
+    );
+    // Reprise : demande explicite, l'arrêt est levé.
+    let res = post(&t, &p, "paul", r#"{"action":"start","manual":true}"#).await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    wait_running(&t.media, id).await;
+    let v = get(&t, &p, "paul").await.json();
+    assert!(v["commentary"].get("stopped").is_none(), "{v}");
+    // Arrêt d'un travail en file (pas encore lancé) : retiré de la file.
+    let other = t.full;
+    let res = post(
+        &t,
+        &format!("/api/matches/{other}/commentary"),
+        "admin",
+        r#"{"action":"retry"}"#,
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    assert!(t.media.commentary.activity().queued.contains(&other));
+    post(
+        &t,
+        &format!("/api/matches/{other}/commentary"),
+        "paul",
+        r#"{"action":"stop"}"#,
+    )
+    .await;
+    assert!(!t.media.commentary.activity().queued.contains(&other));
 }

@@ -151,6 +151,9 @@ pub struct CommentaryStatus {
     pub reason: Option<String>,
     /// (transcription, traduction).
     pub models: Option<(String, String)>,
+    /// Arrêtée à la demande (« Arrêter la traduction ») : ni lancement à la
+    /// lecture ni travail de fond, jusqu'à « Reprendre la traduction ».
+    pub stopped: bool,
 }
 
 impl CommentaryStatus {
@@ -164,6 +167,7 @@ impl CommentaryStatus {
             covered: None,
             reason: None,
             models: None,
+            stopped: false,
         }
     }
 
@@ -207,6 +211,9 @@ impl CommentaryStatus {
             if let Some(v) = models {
                 m.insert("models".into(), v);
             }
+        }
+        if self.stopped {
+            m.insert("stopped".into(), Value::Bool(true));
         }
         Value::Object(m)
     }
@@ -626,6 +633,8 @@ struct Running {
     signal: AbortSignal,
     /// Interrompu pour laisser passer un match regardé : remis en file, sans compter d'échec.
     preempted: bool,
+    /// Arrêté à la demande : ni remis en file ni compté comme un échec.
+    stopped: bool,
 }
 
 #[derive(Default)]
@@ -1011,6 +1020,14 @@ impl Commentary {
 
     /// `enqueueCommentary` : met un match en file.
     pub fn enqueue(&self, match_id: i64, opts: EnqueueOptions) -> EnqueueResult {
+        // Demande explicite (« Reprendre la traduction », « Sous-titrer ce
+        // match », « Doubler ce match »…) : la traduction n'est plus arrêtée.
+        if opts.explicit {
+            let _ = self
+                .0
+                .db
+                .with(|c| db::kv_delete(c, &Self::stopped_key(match_id)));
+        }
         if let Some(d) = self.disabled_reason() {
             return EnqueueResult {
                 queued: false,
@@ -1243,6 +1260,7 @@ impl Commentary {
                     progress: None,
                     signal: signal.clone(),
                     preempted: false,
+                    stopped: false,
                 });
                 start = Some((id, job, signal, st.queue.len()));
             }
@@ -1433,6 +1451,17 @@ impl Commentary {
         t0: std::time::Instant,
     ) {
         let match_id = job.match_id;
+        let stopped = self
+            .st()
+            .running
+            .as_ref()
+            .is_some_and(|r| r.id == id && r.stopped);
+        if stopped {
+            // Ni succès ni échec : ce qui est traduit reste publié.
+            let _ = self.log_end(log_id, true, "arrêtée à la demande");
+            println!("[commentaires] match {match_id} : traduction arrêtée à la demande");
+            return;
+        }
         let preempted = self
             .st()
             .running
@@ -1619,13 +1648,84 @@ impl Commentary {
         let mut s = CommentaryStatus::new("none");
         s.available_until = until;
         s.covered = covered;
+        s.stopped = self.stopped(match_id);
         s
+    }
+
+    fn stopped_key(match_id: i64) -> String {
+        format!("commentary-stopped:{match_id}")
+    }
+
+    /// Traduction arrêtée à la demande (enregistré en base : survit au redémarrage).
+    pub fn stopped(&self, match_id: i64) -> bool {
+        self.0
+            .db
+            .with(|c| db::kv_get(c, &Self::stopped_key(match_id), None))
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// « Arrêter la traduction » : retirée de la file ou interrompue ; ce qui
+    /// est traduit reste publié. Plus de lancement à la lecture ni de travail
+    /// de fond pour ce match jusqu'à une demande explicite (« Reprendre la
+    /// traduction », « Sous-titrer ce match », « Doubler ce match »).
+    pub fn stop(&self, match_id: i64) -> (bool, String) {
+        let saved = self.0.db.with(|c| {
+            db::kv_set(
+                c,
+                &Self::stopped_key(match_id),
+                &json!({ "at": iso_ms(self.now()) }),
+            )
+        });
+        if let Err(e) = saved {
+            eprintln!("[commentaires] journalisation impossible : {e}");
+        }
+        let (was_queued, was_running) = {
+            let mut st = self.st();
+            let before = st.queue.len();
+            st.queue.retain(|j| j.match_id != match_id);
+            let queued = st.queue.len() != before;
+            let running = match st.running.as_mut().filter(|r| r.job.match_id == match_id) {
+                Some(r) if !r.stopped => {
+                    r.stopped = true;
+                    r.signal.abort();
+                    true
+                }
+                _ => false,
+            };
+            (queued, running)
+        };
+        if !was_queued && !was_running {
+            return (
+                false,
+                "Traduction arrêtée : elle ne reprendra que sur « Reprendre la traduction »."
+                    .into(),
+            );
+        }
+        println!("[commentaires] match {match_id} : arrêt demandé");
+        self.0.idle.notify_waiters();
+        self.pump();
+        (
+            true,
+            "Traduction arrêtée. Les sous-titres déjà traduits restent disponibles.".into(),
+        )
     }
 
     /// `prioritizeOnView` : ouverture de la fiche : en tête de file si le
     /// match est terminé, a un replay, n'a pas de piste à jour, et que le
     /// backoff le permet.
     pub fn prioritize_on_view(&self, match_id: i64) {
+        self.prioritize_on_view_with(match_id, false);
+    }
+
+    /// [`Self::prioritize_on_view`] ; `explicit` : lancé depuis la fiche, le
+    /// travail va jusqu'au bout même si la lecture s'arrête ou que la fiche
+    /// est quittée (il ne cède la place qu'à la lecture d'un autre match).
+    pub fn prioritize_on_view_with(&self, match_id: i64, explicit: bool) {
+        if self.stopped(match_id) {
+            return;
+        }
         let Some(m) = self.get_match(match_id) else {
             return;
         };
@@ -1648,6 +1748,7 @@ impl Commentary {
             match_id,
             EnqueueOptions {
                 priority: true,
+                explicit,
                 ..Default::default()
             },
         );
@@ -1677,7 +1778,10 @@ impl Commentary {
             .with(|c| cdb::final_matches_needing_commentary(c, &since, limit, Some(&model)))
             .unwrap_or_default();
         for m in list {
-            if self.running_match_id() == Some(m.id) || self.queue_position(m.id).is_some() {
+            if self.running_match_id() == Some(m.id)
+                || self.queue_position(m.id).is_some()
+                || self.stopped(m.id)
+            {
                 continue;
             }
             if !commentary_retry_allowed(
@@ -1712,6 +1816,7 @@ impl Commentary {
             if self.running_match_id() == Some(m.id)
                 || self.queue_position(m.id).is_some()
                 || !self.leftovers_pending(m.id)
+                || self.stopped(m.id)
             {
                 continue;
             }

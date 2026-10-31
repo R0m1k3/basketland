@@ -189,6 +189,12 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   d'Ollama ; la transcription (Whisper) reste locale. La clé se crée sur
   platform.openai.com et est facturée à l'usage (ce n'est pas l'abonnement
   ChatGPT) ; elle n'est jamais réaffichée en entier.
+- **Traduction d'un match** : lancée à la lecture (ou par « Sous-titrer ce
+  match »), elle va jusqu'au bout, même si la vidéo est mise en pause ou la
+  fiche fermée ; elle ne cède la place qu'à la lecture d'un autre match.
+  « Arrêter la traduction » l'interrompt (les sous-titres déjà traduits
+  restent) et la lecture ne la relance plus ; « Reprendre la traduction » la
+  termine.
 - **Moteur de transcription** : dans Paramètres › « Transcription des
   commentateurs », un administrateur choisit Whisper (par défaut : reçoit la
   liste des joueurs, les noms propres sont les mieux reconnus) ou NVIDIA
@@ -468,7 +474,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
 | `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
 | `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
-| `COMMENTARY_MAX_LEAD_SEC` | `300` (5 min) | Pendant la lecture (position qui avance), la traduction ne prend pas plus d'avance que cela (elle attend). Lecture en pause : aucun plafond, elle va jusqu'au bout du match. `0` : jamais de plafond. |
+| `COMMENTARY_MAX_LEAD_SEC` | `0` | Avance maximale de la traduction sur la lecture (s). `0` (défaut) : aucune, la traduction va au bout du match d'une traite (utile pour doubler ensuite). Une valeur, p. ex. `300` : pendant la lecture, la traduction attend quand elle a cette avance. |
 | `COMMENTARY_OVERLAP` | `1` | Le tronçon suivant est transcrit pendant que le courant se traduit (la transcription n'attend plus le traducteur). `0` : l'un après l'autre. |
 | `COMMENTARY_FULL_AUDIO` | `1` | Le son de tout le match est extrait en une seule passe dès le début de la traduction ; traduction et doublage en découpent leurs tronçons sur place, sans relire le flux ok.ru pendant la lecture (gels de la vidéo). `0` : extraction tronçon par tronçon. |
 | `COMMENTARY_AUDIO_READRATE` | — | Vitesse maximale de cette extraction, en multiple du temps réel (ffmpeg `-readrate`), si elle gêne la lecture. |

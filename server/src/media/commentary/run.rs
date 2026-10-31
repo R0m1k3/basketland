@@ -310,7 +310,9 @@ fn overlap_enabled() -> bool {
     std::env::var("COMMENTARY_OVERLAP").ok().as_deref() != Some("0")
 }
 
-/// `maxLeadSec` : `COMMENTARY_MAX_LEAD_SEC` (5 min par défaut ; 0 : aucune avance maximale).
+/// `maxLeadSec` : `COMMENTARY_MAX_LEAD_SEC`, avance maximale sur la lecture
+/// (0 par défaut : aucune, la traduction va au bout du match d'une traite,
+/// pour qu'un doublage puisse partir de sous-titres complets).
 fn max_lead_sec() -> f64 {
     match std::env::var("COMMENTARY_MAX_LEAD_SEC") {
         Ok(raw) if !raw.is_empty() => {
@@ -318,10 +320,10 @@ fn max_lead_sec() -> f64 {
             if n.is_finite() && n >= 0.0 {
                 n
             } else {
-                300.0
+                0.0
             }
         }
-        _ => 300.0,
+        _ => 0.0,
     }
 }
 
