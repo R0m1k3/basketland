@@ -185,11 +185,6 @@ pub fn app(state: state::AppState) -> Router {
             "/api/activity",
             get(routes_media::activity).fallback(method_fallback),
         )
-        // État des files pour les pages de Node (jeton d'ingestion).
-        .route(
-            routes_media::MEDIA_STATE_PATH,
-            post(routes_media::media_state).fallback(relay),
-        )
         // Données des pages (étape 8a) ; seule `/api/pages/session` est publique.
         .route(
             routes_pages::PUBLIC_SESSION_PATH,

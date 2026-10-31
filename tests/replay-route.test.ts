@@ -10,7 +10,7 @@ vi.mock('../src/lib/commentary', async (orig) => ({
 }));
 
 import * as db from '../src/lib/db';
-import { POST } from '../src/app/api/matches/[id]/replay/route';
+import { POST } from '../src/api-routes/matches/[id]/replay/route';
 import { searchReplay } from '../src/lib/ingest';
 import { __resetReplayChecksForTests, requestReplayCheck } from '../src/lib/replayCheck';
 import { freshDb, insertMatch } from './helpers/db';

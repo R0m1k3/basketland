@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../src/lib/audio')>()), ffmpegAvailable: () => true }));
 import * as db from '../src/lib/db';
 import { createSession } from '../src/lib/auth';
-import { GET as settingsGet, POST as settingsPost } from '../src/app/api/admin/settings/route';
+import { GET as settingsGet, POST as settingsPost } from '../src/api-routes/admin/settings/route';
 import { autoTranslateEnabled, setAutoTranslate, SETTING_KEYS } from '../src/lib/settings';
 import { inNightWindow, inScheduleWindow } from '../src/lib/nightWindow';
 import {

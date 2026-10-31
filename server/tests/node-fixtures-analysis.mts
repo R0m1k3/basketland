@@ -1,6 +1,6 @@
 /**
  * Produit, avec le code Node, les réponses attendues de la route de calage
- * portée en Rust (étape 7 : src/app/api/matches/[id]/sync/route.ts →
+ * portée en Rust (étape 7 : src/api-routes/matches/[id]/sync/route.ts →
  * server/src/sync_route.rs, file d'analyse de src/lib/analysis.ts) :
  * server/tests/fixtures/analysis.expected.json, comparé par tests/analysis_node.rs.
  *
@@ -29,7 +29,7 @@ void audio;
 const db = await import(path.join(ROOT, 'src/lib/db.ts'));
 const helpers = await import(path.join(ROOT, 'tests/helpers/db.ts'));
 const analysis = await import(path.join(ROOT, 'src/lib/analysis.ts'));
-const route = await import(path.join(ROOT, 'src/app/api/matches/[id]/sync/route.ts'));
+const route = await import(path.join(ROOT, 'src/api-routes/matches/[id]/sync/route.ts'));
 console.log = () => {};
 console.error = () => {};
 

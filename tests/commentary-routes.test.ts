@@ -9,9 +9,9 @@ vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../
 
 import * as db from '../src/lib/db';
 import { DEFAULT_TRANSLATE_MODEL } from '../src/lib/commentaryAi';
-import { GET as getSubtitles } from '../src/app/api/matches/[id]/subtitles/route';
-import { GET as getVtt } from '../src/app/api/matches/[id]/subtitles.vtt/route';
-import { GET as getCommentary, POST as postCommentary } from '../src/app/api/matches/[id]/commentary/route';
+import { GET as getSubtitles } from '../src/api-routes/matches/[id]/subtitles/route';
+import { GET as getVtt } from '../src/api-routes/matches/[id]/subtitles.vtt/route';
+import { GET as getCommentary, POST as postCommentary } from '../src/api-routes/matches/[id]/commentary/route';
 import { __commentaryIdle, __setCommentaryRunnerForTests, commentaryQueuePosition, enqueueCommentary, type CommentaryRecord } from '../src/lib/commentary';
 import { createSession } from '../src/lib/auth';
 import { setAutoTranslate } from '../src/lib/settings';

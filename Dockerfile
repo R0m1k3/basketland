@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# ---------------------------------------------------------------- build
+# ---------------------------------------------------------------- interface
+# Export statique de Next (`out/`) : pages en fichiers statiques, servies par
+# le serveur Rust. Node ne sert qu'au build ; il n'est pas dans l'image finale.
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
@@ -13,8 +15,7 @@ COPY . .
 RUN npm run build
 
 # ---------------------------------------------------------------- serveur Rust
-# Passerelle HTTP (server/) : écoute sur le port public, sert les routes déjà
-# portées en Rust et relaie tout le reste à Next.js (port interne 3013).
+# Serveur HTTP (server/) : API, files médias, cron et interface statique.
 # Dépendances compilées dans une couche à part : un changement du code seul
 # ne refait pas leur compilation.
 #
@@ -87,38 +88,36 @@ RUN python3 -m venv /opt/tts \
  && rm /tmp/voice-requirements.txt
 
 # ---------------------------------------------------------------- runtime
-FROM node:22-bookworm-slim AS runner
+# Debian seule (la base des images `node`, donc la même glibc et le même
+# Python que les environnements /opt/whisper et /opt/tts construits plus haut).
+FROM debian:bookworm-slim AS runner
 WORKDIR /app
 
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
 ENV TZ=Europe/Paris
 ENV PORT=3012
-ENV HOSTNAME=0.0.0.0
 # GPU NVIDIA visible du conteneur (avec --runtime=nvidia côté hôte).
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# L'image officielle `node` fournit déjà l'utilisateur `node` (uid 1000) :
-# on l'utilise plutôt que d'en créer un — `chown user:group` exige que le
-# premier soit bien un utilisateur, sinon chown échoue.
+# Utilisateur `node` (uid 1000) : le même que dans les images précédentes,
+# basées sur l'image `node`, pour que les volumes /data existants (dont les
+# fichiers appartiennent à 1000:1000) restent inscriptibles.
 #
 # ffmpeg extrait l'audio des replays (transcription des commentateurs) et les
 # images du bandeau de score (positions des actions).
 #
 # `util-linux` fournit `setpriv`, utilisé par l'entrypoint pour lâcher les
-# privilèges root après avoir rendu /data à l'utilisateur `node`.
-# ATTENTION : `setpriv` n'est PAS présent dans node:22-bookworm-slim (ni
-# `su`, ni `runuser`) — vérifié en inspectant la couche système de l'image
-# officielle. Sans ce paquet, l'entrypoint échoue au démarrage et le
-# conteneur ne démarre pas du tout.
+# privilèges root après avoir rendu /data à l'utilisateur `node`. Sans ce
+# paquet, l'entrypoint échoue et le conteneur ne démarre pas.
 #
 # `libtesseract5` : OCR natif du serveur Rust (analyse vidéo), avec le MÊME
 # modèle de langue que tesseract.js (`eng.traineddata` 4.0.0_best_int de
 # @tesseract.js-data/eng, copié plus bas) : pas de paquet tesseract-ocr-eng.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 libtesseract5 \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 libtesseract5 tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 1000 node \
+ && useradd --uid 1000 --gid node --create-home --home-dir /home/node --shell /bin/sh node
 COPY --from=builder /app/node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz /usr/share/basketland/tessdata/
 RUN gunzip /usr/share/basketland/tessdata/eng.traineddata.gz
 # Un seul fil OpenMP, comme tesseract.js (WASM) : l'analyse est une tâche de
@@ -137,16 +136,14 @@ COPY --from=whisper /opt/whisper /opt/whisper
 COPY --from=tts /opt/tts /opt/tts
 COPY --from=rust /basketland-server /usr/local/bin/basketland-server
 
-COPY --from=builder --chown=node:node /app/.next/standalone ./
-COPY --from=builder --chown=node:node /app/.next/static ./.next/static
-COPY --from=builder --chown=node:node /app/public ./public
+# Interface : export statique de Next, servi par le serveur Rust.
+COPY --from=builder --chown=node:node /app/out ./out
+ENV BL_STATIC_DIR=/app/out
 COPY --chown=node:node scripts/whisper_worker.py ./scripts/whisper_worker.py
 COPY --chown=node:node scripts/voice_worker.py scripts/voice_gender.py ./scripts/
 # Voix figées du doublage (WAV de référence + transcription + voice.json).
 COPY --chown=node:node assets/voices ./assets/voices
 # Récupération d'accès : docker exec -it basketland basketland-server reset-password <identifiant> <mot-de-passe>
-# (ancien script Node, gardé tant que Node est dans l'image : node scripts/reset-password.mjs)
-COPY --chown=node:node scripts/reset-password.mjs ./scripts/reset-password.mjs
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]
@@ -164,11 +161,9 @@ ENV APP_COMMIT=$GIT_SHA APP_BUILT_AT=$BUILD_DATE
 EXPOSE 3012
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3012)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD ["basketland-server", "health"]
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-# Le serveur Rust écoute sur PORT (3012) et lance lui-même Next.js sur
-# 127.0.0.1:3013 (`BL_NODE_CMD`, voir server/src/node.rs), avec
-# `--disable-warning=ExperimentalWarning` : `node:sqlite` est encore marqué
-# expérimental par Node 22, sans ce drapeau chaque démarrage l'écrit dans les logs.
+# Le serveur Rust écoute sur PORT (3012) et sert tout : API, files médias,
+# cron et interface (`BL_STATIC_DIR`). Plus de Node dans l'image.
 CMD ["basketland-server"]

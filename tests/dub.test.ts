@@ -44,8 +44,8 @@ import {
   type DubDeps,
   type VoiceSessionLike,
 } from '../src/lib/dub';
-import { GET as getDub, POST as postDub } from '../src/app/api/matches/[id]/dub/route';
-import { GET as getDubAudio } from '../src/app/api/matches/[id]/dub/[idx]/route';
+import { GET as getDub, POST as postDub } from '../src/api-routes/matches/[id]/dub/route';
+import { GET as getDubAudio } from '../src/api-routes/matches/[id]/dub/[idx]/route';
 import { freshDb, insertMatch } from './helpers/db';
 
 /**

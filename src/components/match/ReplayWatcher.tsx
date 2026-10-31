@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useReloadPage } from '@/components/page/pageData';
 import { WATCH_POLL_MS, manualCheckWaitMs, replayStatusLine, replayWatchStep } from './watch';
 
 interface VideoState {
@@ -14,10 +14,11 @@ interface VideoState {
  * Match terminé sans replay : lance une recherche à l'ouverture, puis
  * surveille l'état (GET /api/matches/[id] toutes les 60 s, en pause quand
  * l'onglet est caché, arrêt au bout de 3 h). Dès que le replay est là,
- * `router.refresh()` : la page serveur affiche le lecteur, sans rechargement.
+ * les données de la page sont relues : elle affiche le lecteur, sans
+ * rechargement.
  */
 export default function ReplayWatcher({ matchId, dateUtc, checkedAt }: { matchId: number; dateUtc: string; checkedAt: string | null }) {
-  const router = useRouter();
+  const reload = useReloadPage();
   const [video, setVideo] = useState<VideoState>({ available: false, kind: null, checked_at: checkedAt });
   const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -33,10 +34,10 @@ export default function ReplayWatcher({ matchId, dateUtc, checkedAt }: { matchId
       setVideo(v);
       if (replayWatchStep({ available: v.available, startedAt: startedAt.current, now: Date.now() }) === 'refresh' && !refreshed.current) {
         refreshed.current = true;
-        router.refresh();
+        reload();
       }
     },
-    [router],
+    [reload],
   );
 
   const poll = useCallback(async () => {

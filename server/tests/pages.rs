@@ -1,7 +1,6 @@
 //! Routes `GET /api/pages/…` (étape 8a) : accès, 404, cookie « scores
 //! masqués », renouvellement de session, et l'état des files médias lu dans
-//! les services du processus (exécuteurs simulés), ainsi que
-//! `POST /api/internal/media-state` qui le sert aux pages de Node. La base
+//! les services du processus (exécuteurs simulés). La base
 //! est celle de `fixtures/pages.expected.json` (schéma réel, lignes écrites
 //! par Node) ; le contenu des pages lui-même est comparé à Node par
 //! `pages_node.rs`.
@@ -196,25 +195,6 @@ fn activity_match(env: &Env, id: i64) -> Value {
     .unwrap()
 }
 
-async fn post_state(r: &axum::Router, auth: Option<&str>, body: &str) -> (StatusCode, Value) {
-    let mut b = axum::http::Request::post("/api/internal/media-state")
-        .header(header::CONTENT_TYPE, "application/json");
-    if let Some(a) = auth {
-        b = b.header(header::AUTHORIZATION, a);
-    }
-    let res = r
-        .clone()
-        .oneshot(b.body(Body::from(body.to_string())).unwrap())
-        .await
-        .unwrap();
-    let status = res.status();
-    let bytes = res.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
-
 #[tokio::test]
 async fn etat_des_files_lu_dans_les_services() {
     let env = setup();
@@ -296,36 +276,6 @@ async fn etat_des_files_lu_dans_les_services() {
     ] {
         assert_eq!(get(&r, p, cookie).await.status, StatusCode::OK, "{p}");
     }
-
-    // État servi aux pages de Node : jeton d'ingestion exigé.
-    for auth in [None, Some("Bearer faux"), Some("")] {
-        let (s, v) = post_state(&r, auth, "{}").await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{auth:?}");
-        assert_eq!(v, json!({ "error": "jeton invalide" }));
-    }
-    let bearer = format!("Bearer {TOKEN}");
-    let expected = |dub: Value| {
-        json!({
-            "running_match_id": running,
-            "activity": { "tasks": [task.clone()], "queued": [], "watching": false },
-            "commentary_disabled_reason": null,
-            "dub_disabled_reason": dub,
-        })
-    };
-    for body in ["{}", "", "nul", r#"{"dub":1}"#] {
-        assert_eq!(
-            post_state(&r, Some(&bearer), body).await,
-            (StatusCode::OK, expected(Value::Null)),
-            "{body}"
-        );
-    }
-    assert_eq!(
-        post_state(&r, Some(&bearer), r#"{"dub":true}"#).await,
-        (
-            StatusCode::OK,
-            expected(json!("doublage désactivé (DUB_DISABLED=1)"))
-        )
-    );
 }
 
 #[tokio::test]

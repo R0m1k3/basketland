@@ -7,9 +7,6 @@ pub struct NodeConfig {
     /// Commande (`BL_NODE_CMD`), découpée sur les espaces.
     pub cmd: Vec<String>,
     pub port: u16,
-    /// Adresse du serveur Rust vue de Node (`BL_RUST_URL`) : ses pages y
-    /// lisent l'état des files médias (`/api/internal/media-state`).
-    pub rust_url: Option<String>,
 }
 
 impl NodeConfig {
@@ -24,24 +21,8 @@ impl NodeConfig {
         Some(NodeConfig {
             cmd,
             port: node_port(),
-            rust_url: None,
         })
     }
-}
-
-/// Adresse locale du serveur Rust pour Node : une écoute sur toutes les
-/// interfaces est jointe par la boucle locale.
-pub fn rust_url(addr: std::net::SocketAddr) -> String {
-    let ip = match addr.ip() {
-        std::net::IpAddr::V4(v) if v.is_unspecified() => {
-            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-        }
-        std::net::IpAddr::V6(v) if v.is_unspecified() => {
-            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
-        }
-        ip => ip,
-    };
-    format!("http://{}", std::net::SocketAddr::new(ip, addr.port()))
 }
 
 /// Port interne de Node (`BL_NODE_PORT`, 3013 par défaut).
@@ -69,7 +50,6 @@ pub fn spawn(cfg: &NodeConfig) -> std::io::Result<Child> {
         .env("HOSTNAME", "127.0.0.1")
         // Jobs repris par le cron Rust : le planificateur de Node les saute.
         .env("BL_RUST_JOBS", crate::ingest::RUST_JOBS.join(","))
-        .envs(cfg.rust_url.as_ref().map(|u| ("BL_RUST_URL", u.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

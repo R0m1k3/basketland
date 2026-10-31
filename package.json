@@ -7,10 +7,9 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "dev": "next dev -p 3012",
+    "dev": "next dev -p 3013",
     "build": "next build",
-    "start": "node scripts/start-standalone.mjs",
-    "start:next": "next start -p 3012",
+    "start": "BL_STATIC_DIR=out cargo run --release --manifest-path server/Cargo.toml",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -85,23 +85,19 @@ async fn main() {
         Err(e) => eprintln!("[serveur] schéma de la base : {e}"),
     }
     // Node n'est lancé qu'une fois le port public obtenu : jamais d'application orpheline.
-    let local = listener.local_addr().unwrap_or(addr);
     // Interface statique servie par Rust (`BL_STATIC_DIR`) : plus de Node.
     let static_dir = state::static_dir_from_env();
     let mut child = match node::NodeConfig::from_env().filter(|_| static_dir.is_none()) {
-        Some(mut cfg) => {
-            cfg.rust_url = Some(node::rust_url(local));
-            match node::spawn(&cfg) {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    eprintln!(
-                        "[serveur] impossible de lancer l'application Node ({}) : {e}",
-                        cfg.cmd.join(" ")
-                    );
-                    std::process::exit(1);
-                }
+        Some(cfg) => match node::spawn(&cfg) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!(
+                    "[serveur] impossible de lancer l'application Node ({}) : {e}",
+                    cfg.cmd.join(" ")
+                );
+                std::process::exit(1);
             }
-        }
+        },
         None => None,
     };
 
