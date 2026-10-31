@@ -1,6 +1,6 @@
 import { getMatch } from '@/lib/db';
 import { error, json, parseId, type RouteCtx } from '@/lib/api';
-import { commentaryStatus, servedCommentaryCues, touchViewer } from '@/lib/commentary';
+import { commentaryStatus, nudgeCommentaryQueue, servedCommentaryCues, touchViewer } from '@/lib/commentary';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +32,8 @@ export async function GET(req: Request, ctx: RouteCtx<{ id: string }>) {
   if (!m) return error(404, 'match introuvable');
   const t = Number(new URL(req.url).searchParams.get('t'));
   touchViewer(id, Number.isFinite(t) ? t : null);
+  // En file derrière le match d'une fiche quittée : celui-ci cède la place.
+  nudgeCommentaryQueue(id);
   const cues = servedCommentaryCues(id);
   return json({
     match_id: id,

@@ -17,7 +17,9 @@ import {
   enqueueCommentary,
   enqueueRecentCommentaries,
   getCommentaryRecord,
+  nudgeCommentaryQueue,
   runCommentary,
+  touchViewer,
   workDir,
   type CommentaryDeps,
   type CommentaryOutcome,
@@ -129,6 +131,39 @@ describe('file des traductions', () => {
     gates.get(A)!.resolve({ ok: true, reason: 'ok' });
     await __commentaryIdle();
     expect(getCommentaryRecord(A)).toMatchObject({ ok: true });
+  });
+
+  it('fiche quittée : son travail cède la place au match qu’on vient d’ouvrir, sans attendre 3 min', async () => {
+    const started: number[] = [];
+    const gates = new Map<number, ReturnType<typeof deferred<CommentaryOutcome>>>();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    __setCommentaryRunnerForTests((job, _progress, signal) => {
+      started.push(job.matchId);
+      const d = deferred<CommentaryOutcome>();
+      gates.set(job.matchId, d);
+      signal.addEventListener('abort', () => d.reject(new Error('travail interrompu')));
+      return d.promise;
+    });
+    process.env.COMMENTARY_VIEWER_GONE_MS = '30';
+    try {
+      // A ouvert et lancé, puis B ouvert pendant que la fiche de A est encore ouverte : B attend.
+      touchViewer(A, 0);
+      enqueueCommentary(A, { priority: true });
+      touchViewer(B, 0);
+      enqueueCommentary(B, { priority: true });
+      expect(started).toEqual([A]);
+      expect(commentaryQueuePosition(B)).toBe(1);
+      // La fiche de A n'envoie plus rien : la prochaine interrogation de B le fait passer.
+      await new Promise((r) => setTimeout(r, 50));
+      touchViewer(B, 0);
+      nudgeCommentaryQueue(B);
+      await vi.waitFor(() => expect(started).toEqual([A, B]));
+      expect(getCommentaryRecord(A)).toBeUndefined(); // pas un échec
+      gates.get(B)!.resolve({ ok: true, reason: 'ok' });
+      await vi.waitFor(() => expect(gates.size).toBe(2));
+    } finally {
+      delete process.env.COMMENTARY_VIEWER_GONE_MS;
+    }
   });
 
   it('inactive sans configuration : rien n’est mis en file', () => {
