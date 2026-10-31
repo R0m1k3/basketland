@@ -124,14 +124,7 @@ fn js_round(x: f64) -> f64 {
     (x + 0.5).floor()
 }
 
-/// `x.toFixed(1)` pour x ≥ 0 (à égalité exacte, l'arrondi supérieur).
-fn to_fixed1(x: f64) -> String {
-    let y = x * 10.0;
-    if y.fract() == 0.5 && y / 10.0 == x {
-        return format!("{:.1}", (y + 0.5) / 10.0);
-    }
-    format!("{x:.1}")
-}
+use crate::js::to_fixed1;
 
 /// `Number(entête)` positif et fini, sinon `None` (`content-length`).
 fn positive_len(v: Option<&str>) -> Option<u64> {

@@ -1028,6 +1028,7 @@ impl R {
             video: self.h.video.clone(),
             replays: self.replays.clone(),
             media: self.media.clone(),
+            static_dir: None,
         })
     }
 

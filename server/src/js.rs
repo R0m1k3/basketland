@@ -22,6 +22,22 @@ pub fn round(x: f64) -> f64 {
     }
 }
 
+/// `x.toFixed(1)` : à égalité exacte, l'arrondi s'éloigne de zéro (comme V8).
+pub fn to_fixed1(x: f64) -> String {
+    if !x.is_finite() {
+        return crate::jsval::js_number_string(x);
+    }
+    if x < 0.0 {
+        // `(-0.04).toFixed(1)` vaut « -0.0 » : le signe est gardé.
+        return format!("-{}", to_fixed1(-x));
+    }
+    let y = x * 10.0;
+    if y.fract() == 0.5 && y / 10.0 == x {
+        return format!("{:.1}", (y + 0.5) / 10.0);
+    }
+    format!("{x:.1}")
+}
+
 /// `Math.min(a, b)` : NaN contagieux, `-0` plus petit que `+0`.
 pub fn min(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {

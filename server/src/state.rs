@@ -71,6 +71,9 @@ pub struct AppState {
     pub replays: crate::replay::Replays,
     /// Files de traduction, de doublage et d'analyse.
     pub media: Media,
+    /// Export statique de l'interface (`BL_STATIC_DIR`) : servi par Rust ;
+    /// sans lui, tout ce qui n'est pas routé est relayé à Node.
+    pub static_dir: Option<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -94,8 +97,17 @@ impl AppState {
             video,
             replays,
             media,
+            static_dir: static_dir_from_env(),
         }
     }
+}
+
+/// `BL_STATIC_DIR` (non vide) : dossier de l'export statique de l'interface.
+pub fn static_dir_from_env() -> Option<std::path::PathBuf> {
+    std::env::var("BL_STATIC_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// ffmpeg présent sur le serveur (vérifié une fois, comme `ffmpegAvailable`).
