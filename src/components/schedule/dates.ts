@@ -2,7 +2,7 @@
  * Libellés de dates en français à partir d'une clé de jour Paris 'YYYY-MM-DD'.
  * Midi UTC sert d'ancre : le jour reste le bon quel que soit l'heure d'été.
  */
-import { shiftKey } from '@/lib/queries';
+import { shiftKey } from '@/lib/dayKeys';
 
 const cache = new Map<string, Intl.DateTimeFormat>();
 function f(opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {

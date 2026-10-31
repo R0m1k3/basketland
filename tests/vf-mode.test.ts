@@ -10,8 +10,8 @@ vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../
 import * as db from '../src/lib/db';
 import { createSession } from '../src/lib/auth';
 import { currentActivity } from '../src/lib/activity';
-import { GET as settingsGet, POST as settingsPost } from '../src/app/api/admin/settings/route';
-import { POST as postDub } from '../src/app/api/matches/[id]/dub/route';
+import { GET as settingsGet, POST as settingsPost } from '../src/api-routes/admin/settings/route';
+import { POST as postDub } from '../src/api-routes/matches/[id]/dub/route';
 import { autoTranslateEnabled, isVfMode, setAutoTranslate, setVfMode, SETTING_KEYS, vfMode } from '../src/lib/settings';
 import { __commentaryIdle, __setCommentaryRunnerForTests, commentaryQueuePosition, commentaryRunningMatchId, enqueueCommentary, touchViewer } from '../src/lib/commentary';
 import {

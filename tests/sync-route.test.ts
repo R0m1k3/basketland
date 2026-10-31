@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../src/lib/audio')>()), ffmpegAvailable: () => true }));
 
 import * as db from '../src/lib/db';
-import { GET, POST } from '../src/app/api/matches/[id]/sync/route';
+import { GET, POST } from '../src/api-routes/matches/[id]/sync/route';
 import { __setAnalysisRunnerForTests } from '../src/lib/analysis';
 import { fixturePlays, freshDb, insertMatch } from './helpers/db';
 

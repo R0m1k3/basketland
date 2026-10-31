@@ -23,7 +23,7 @@ vi.mock('../src/lib/dub', async (orig) => ({
 }));
 vi.mock('../src/lib/activity', () => ({ currentActivity: st.activity }));
 
-import { POST } from '../src/app/api/internal/page-state/route';
+import { POST } from '../src/api-routes/internal/page-state/route';
 import { isPublicPath } from '../src/lib/authRoutes';
 import { setDbForTests } from '../src/lib/db';
 import { freshDb } from './helpers/db';

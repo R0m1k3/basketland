@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { POST } from '../src/app/api/diag/stall/route';
+import { POST } from '../src/api-routes/diag/stall/route';
 
 /** Signalement des gels de lecture : une ligne de journal, rien de stocké. */
 const req = (body: string, origin = 'http://nas.local') =>

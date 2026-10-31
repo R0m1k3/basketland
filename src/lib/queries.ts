@@ -11,7 +11,8 @@ import { commentaryProgressByIds, getDb, kvGet, listMatches } from './db';
 import { commentaryRunningMatchId } from './commentary';
 import type { StandingRow } from './espn';
 import { toDto, type MatchDto } from './present';
-import { addDays, parisDateKey, parisDayStartUtc } from './time';
+import { nightKeyOf, shiftKey, todayKey } from './dayKeys';
+import { parisDateKey, parisDayStartUtc } from './time';
 import type { MatchRow } from './types';
 
 type Params = Record<string, SQLInputValue>;
@@ -29,25 +30,8 @@ const IN_PROGRESS_GRACE = 3 * HOUR;
 
 // ---------------------------------------------------------------- jours & nuits
 
-export function todayKey(now = new Date()): string {
-  return parisDateKey(now);
-}
-
-/** Décale une clé de jour de `n` jours (midi UTC : insensible aux changements d'heure). */
-export function shiftKey(key: string, n: number): string {
-  return parisDateKey(addDays(new Date(`${key}T12:00:00Z`), n));
-}
-
-const KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
-export function isDateKey(v: string | undefined | null): v is string {
-  if (!v || !KEY_RE.test(v)) return false;
-  return !Number.isNaN(Date.parse(`${v}T12:00:00Z`)) && shiftKey(v, 0) === v;
-}
-
-/** Nuit NBA d'un match : jour de Paris de (début − 12 h). */
-export function nightKeyOf(dateUtc: string): string {
-  return parisDateKey(Date.parse(dateUtc) - 12 * HOUR);
-}
+// Fonctions pures, dans un module sans base pour les composants client.
+export { isDateKey, isUpcoming, nightKeyOf, shiftKey, todayKey } from './dayKeys';
 
 /** Bornes UTC [début, fin) de la nuit `key` : de midi à midi, heure de Paris. */
 function nightBounds(key: string): { from: string; to: string } {
@@ -296,11 +280,6 @@ export function nextGameByTeam(now = new Date()): Map<string, GameView> {
 /** Tous les matchs d'une équipe (toutes saisons en base), chronologiques. */
 export function teamGames(abbr: string): GameView[] {
   return toViews(listMatches({ team: abbr, limit: 400, order: 'asc' }));
-}
-
-/** Un match est « à venir » s'il est programmé dans le futur, ou en cours. */
-export function isUpcoming(g: { status: string; date_utc: string }, now = new Date()): boolean {
-  return g.status === 'live' || (g.status === 'scheduled' && Date.parse(g.date_utc) > now.getTime());
 }
 
 // ---------------------------------------------------------------- classement

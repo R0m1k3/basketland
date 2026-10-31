@@ -22,7 +22,7 @@ vi.mock('../src/lib/analysis', async (orig) => ({
   enqueueRecentAnalyses: queued.analyses,
 }));
 
-import { POST } from '../src/app/api/internal/replays/route';
+import { POST } from '../src/api-routes/internal/replays/route';
 import { isPublicPath } from '../src/lib/authRoutes';
 import { setDbForTests } from '../src/lib/db';
 import { setAutoTranslate } from '../src/lib/settings';

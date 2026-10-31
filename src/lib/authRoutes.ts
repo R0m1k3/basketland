@@ -1,5 +1,6 @@
 /**
- * Règles d'accès par chemin, utilisées par le middleware (src/middleware.ts).
+ * Règles d'accès par chemin, utilisées par le middleware (src/lib/middleware.ts,
+ * gardé comme référence : le serveur Rust les applique désormais).
  * Fonctions pures, sans base ni Next : testées directement.
  *
  * Tout est protégé par défaut. Restent publics :
