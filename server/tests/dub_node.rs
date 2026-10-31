@@ -997,26 +997,46 @@ async fn etats_de_la_file_comme_node() {
     let want = fx("queue");
     let mut states: Vec<Value> = Vec::new();
     let mut results: Vec<Value> = Vec::new();
-    let snap = |label: &str, states: &mut Vec<Value>| {
+    let current = |label: &str| {
         let mut m = serde_json::Map::new();
         m.insert(M.to_string(), manifest_json(d, M));
         m.insert(M2.to_string(), manifest_json(d, M2));
-        let got = json!({
+        json!({
             "label": label,
             "manifest": m,
             "activity": d.activity().to_json(),
             "positions": [d.queue_position(M), d.queue_position(M2)],
             "commentary": cm.activity().to_json(),
             "db": dub_snapshot(&x.db),
-        });
-        // Comparé tout de suite : la première divergence est celle qu'on voit.
-        let w = &want["states"][states.len()];
-        assert_eq!(w["label"], json!(label));
-        for k in ["manifest", "activity", "positions", "commentary", "db"] {
-            same_bytes(&got[k], &w[k], &format!("{label} : {k}"));
-        }
-        states.push(got);
+        })
     };
+    // Les travaux tournent dans des tâches tokio : sur une machine chargée
+    // (CI), l'état attendu peut arriver après les courtes pauses du scénario.
+    // On attend donc qu'il arrive (5 s au plus) avant de comparer ; un état
+    // qui n'arrive jamais échoue comme avant, sur la première divergence.
+    const KEYS: [&str; 5] = ["manifest", "activity", "positions", "commentary", "db"];
+    macro_rules! snap {
+        ($label:expr, $states:expr $(,)?) => {{
+            let label: &str = $label;
+            let states: &mut Vec<Value> = $states;
+            let w = &want["states"][states.len()];
+            assert_eq!(w["label"], json!(label));
+            let t0 = std::time::Instant::now();
+            let mut got = current(label);
+            while KEYS
+                .iter()
+                .any(|k| json_diff(&got[*k], &w[*k], "").is_some())
+                && t0.elapsed() < Duration::from_secs(5)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                got = current(label);
+            }
+            for k in KEYS {
+                same_bytes(&got[k], &w[k], &format!("{label} : {k}"));
+            }
+            states.push(got);
+        }};
+    }
     let gates = DubGates::default();
     d.set_runner(Some(gates.runner()));
     let cgates = CommentaryGates::default();
@@ -1042,39 +1062,39 @@ async fn etats_de_la_file_comme_node() {
     results.push(json!(d
         .release_gpu_for_translation(None)
         .map(|_| "attente")));
-    snap("rien", &mut states);
+    snap!("rien", &mut states);
     results.push(d.enqueue(M, explicit).to_json());
-    snap("en cours sans avancement", &mut states);
+    snap!("en cours sans avancement", &mut states);
     (gates.progress.lock().unwrap().clone().unwrap())(DubProgress {
         done: 1.0,
         total: 3.0,
         chunk: Some(1),
         step: Some("synthèse des répliques : 1 / 4".into()),
     });
-    snap("en cours", &mut states);
+    snap!("en cours", &mut states);
     set_dl(Some((1.1e9, 2.5e9)));
-    snap("en cours, téléchargement des voix", &mut states);
+    snap!("en cours, téléchargement des voix", &mut states);
     set_dl(None);
     results.push(d.enqueue(M2, explicit).to_json());
     results.push(d.enqueue(M, explicit).to_json());
     results.push(d.enqueue(M2, DubEnqueueOptions::default()).to_json());
-    snap("M2 en file", &mut states);
+    snap!("M2 en file", &mut states);
     results.push(d.stop(M2).to_json());
     results.push(d.stop(M2).to_json());
-    snap("M2 arrêté", &mut states);
+    snap!("M2 arrêté", &mut states);
     d.prioritize_on_view(M2);
     results.push(d.request(M2, false).to_json());
     sleep(150).await;
-    snap(
+    snap!(
         "M2 repris, sa traduction prend le GPU au doublage de M",
         &mut states,
     );
     set_dl(Some((3e8, 0.0)));
-    snap("attente du GPU, téléchargement des voix", &mut states);
+    snap!("attente du GPU, téléchargement des voix", &mut states);
     set_dl(None);
     cgates.resolve(M2, CommentaryOutcome::ok("traduit"));
     sleep(100).await;
-    snap(
+    snap!(
         "traduction finie : M en tête (rendu par le GPU)",
         &mut states,
     );
@@ -1086,7 +1106,7 @@ async fn etats_de_la_file_comme_node() {
         ),
     );
     sleep(50).await;
-    snap("M en échec service, M2 en cours", &mut states);
+    snap!("M en échec service, M2 en cours", &mut states);
     gates.resolve(
         M2,
         DubOutcome::yielded(
@@ -1095,7 +1115,7 @@ async fn etats_de_la_file_comme_node() {
         ),
     );
     sleep(50).await;
-    snap("M2 a cédé (lecture)", &mut states);
+    snap!("M2 a cédé (lecture)", &mut states);
     gates.resolve(
         M2,
         DubOutcome::yielded(
@@ -1104,7 +1124,7 @@ async fn etats_de_la_file_comme_node() {
         ),
     );
     sleep(50).await;
-    snap("M2 hors fenêtre", &mut states);
+    snap!("M2 hors fenêtre", &mut states);
     publish(&x.db, M, 1, &c1, &t);
     publish(&x.db, M, 2, &c2, &t);
     publish(&x.db, M2, 1, &c1, &t2);
@@ -1119,14 +1139,14 @@ async fn etats_de_la_file_comme_node() {
         gates.resolve(M, failed(kind, reason));
         sleep(50).await;
     }
-    snap("échecs répétés", &mut states);
+    snap!("échecs répétés", &mut states);
     results.push(d.request(M, false).to_json());
     sleep(20).await;
     gates.resolve(M, DubOutcome::ok("1 tronçon(s) doublé(s)"));
     tokio::time::timeout(Duration::from_secs(5), d.idle())
         .await
         .unwrap_or_else(|_| panic!("file jamais vide : {:?}", d.activity()));
-    snap("succès", &mut states);
+    snap!("succès", &mut states);
     results.push(d.request(M2, false).to_json());
     sleep(20).await;
     cm.touch_viewer(M, Some(10.0));
@@ -1141,12 +1161,12 @@ async fn etats_de_la_file_comme_node() {
         .to_json(),
     );
     sleep(50).await;
-    snap("M regardé passe devant M2", &mut states);
+    snap!("M regardé passe devant M2", &mut states);
     gates.resolve(M, DubOutcome::ok("ok"));
     sleep(50).await;
-    snap("M fini, M2 attend la fin de la lecture", &mut states);
+    snap!("M fini, M2 attend la fin de la lecture", &mut states);
     results.push(d.request(M, true).to_json());
-    snap("M relancé", &mut states);
+    snap!("M relancé", &mut states);
     results.push(d.request(M, true).to_json());
     gates.resolve(M, DubOutcome::ok("ok"));
     sleep(50).await;
@@ -1158,11 +1178,11 @@ async fn etats_de_la_file_comme_node() {
         .unwrap();
     x.db.with(|c| ddb::set_dub_complete(c, M, true)).unwrap();
     results.push(d.request(M, false).to_json());
-    snap("déjà doublé", &mut states);
+    snap!("déjà doublé", &mut states);
     set_env("DUB_DISABLED", "1");
     results.push(d.enqueue(M, explicit).to_json());
     results.push(d.request(M, false).to_json());
-    snap("inactif", &mut states);
+    snap!("inactif", &mut states);
     unset_env("DUB_DISABLED");
     for k in [
         "DUB_REPUMP_MS",
