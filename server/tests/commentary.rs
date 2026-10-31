@@ -1170,6 +1170,7 @@ async fn dossiers_de_travail_abandonnes_supprimes() {
 /// même avec `force`, qui passe le contrôle « déjà prête ».
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn demandes_concurrentes_dedoublonnees() {
+    let _g = LOCK.lock().await;
     for _ in 0..20 {
         let t = setup(&[A]);
         let g = Gated::default();
