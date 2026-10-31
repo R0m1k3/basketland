@@ -8,10 +8,14 @@
 pub mod api;
 pub mod auth;
 pub mod db;
+pub mod espn;
+pub mod http;
+pub mod jsval;
 pub mod node;
 pub mod present;
 pub mod proxy;
 pub mod routes;
+pub mod routes_match;
 pub mod state;
 pub mod time;
 
@@ -24,6 +28,13 @@ pub fn app(state: state::AppState) -> Router {
         .route("/api/health", get(routes::health))
         .route("/api/schedule", get(routes::schedule))
         .route("/api/matches", get(routes::matches))
+        .route("/api/matches/{id}", get(routes_match::detail))
+        .route("/api/matches/{id}/stats", get(routes_match::stats))
+        .route(
+            "/api/matches/{id}/clips",
+            get(routes_match::clips).post(routes_match::clips_post),
+        )
+        .route("/api/standings", get(routes_match::standings))
         .fallback(proxy::forward)
         .with_state(state)
 }

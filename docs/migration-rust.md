@@ -31,19 +31,22 @@ navigateur ──► basketland-server (Rust, :3012)
 - **Relais transparent** : `Host` conservé (contrôles d'origine des
   écritures), corps en flux dans les deux sens (vidéo, segments HLS), les
   redirections de Next vers son adresse interne réécrites en relatif.
-- Une route portée est **retirée de Node** dans l'étape suivante, pas dans la
-  même : on peut revenir en arrière en une PR.
+- Les routes Node déjà portées **restent en place** jusqu'à l'étape 8 : revenir
+  en arrière sur une route se fait en retirant une ligne du routeur Rust.
+- Une route portée qui dépend d'un traitement encore côté Node (récupération
+  ESPN à la volée, files en mémoire…) **relaie ce cas à Node** plutôt que de
+  le réimplémenter à moitié.
 
 ## Étapes
 
 | # | Contenu | État |
 |---|---------|------|
 | 1 | Passerelle (relais, lancement et arrêt de Node), sessions, `GET /api/health`, `GET /api/schedule`, `GET /api/matches` | ✅ |
-| 2 | Lecture seule : `GET /api/matches/[id]`, `/stats`, `/clips`, `/api/standings` (client ESPN), `/api/activity` | à faire |
+| 2 | Lecture seule : `GET /api/matches/[id]`, `/stats` (stats pas encore récupérées : relayé à Node), `/clips`, `/api/standings` (client ESPN, cache 30 min) | ✅ |
 | 3 | Comptes : login, logout, setup, mot de passe (scrypt identique), utilisateurs, paramètres | à faire |
 | 4 | Proxy vidéo ok.ru : résolution du flux, playlists, segments, MP4 (le plus gros trafic) | à faire |
 | 5 | Synchronisation ESPN et basketball-video, cron interne, `/api/ingest` | à faire |
-| 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg) | à faire |
+| 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity` | à faire |
 | 7 | Doublage (voix Qwen3-TTS / MiniMax) et OCR du bandeau de score | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
 

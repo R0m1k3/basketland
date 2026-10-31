@@ -20,6 +20,11 @@ CREATE TABLE matches (
 CREATE TABLE ingest_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER DEFAULT 0, detail TEXT DEFAULT '');
 CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, password_hash TEXT NOT NULL);
 CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE team_stats (match_id INTEGER NOT NULL, team_abbr TEXT NOT NULL, stats_json TEXT NOT NULL, PRIMARY KEY (match_id, team_abbr));
+CREATE TABLE player_stats (match_id INTEGER NOT NULL, team_abbr TEXT NOT NULL, player_id TEXT NOT NULL, player_name TEXT NOT NULL,
+  position TEXT DEFAULT '', jersey TEXT DEFAULT '', starter INTEGER DEFAULT 0, stats_json TEXT NOT NULL, PRIMARY KEY (match_id, player_id));
+CREATE TABLE match_leaders (match_id INTEGER NOT NULL, team_abbr TEXT NOT NULL, category TEXT NOT NULL, label TEXT, player TEXT, value TEXT);
+CREATE TABLE user_clips (id INTEGER PRIMARY KEY, match_id INTEGER NOT NULL, video_ts REAL NOT NULL, duration REAL, text_fr TEXT, created_at TEXT NOT NULL);
 ";
 
 struct Env {
@@ -293,7 +298,65 @@ async fn calendrier_groupe_par_jour() {
 #[tokio::test]
 async fn le_reste_part_a_node() {
     let env = setup();
-    let (s, _, v) = get(&env, "/api/matches/1", Some("jeton-frais")).await;
+    let (s, _, v) = get(&env, "/api/matches/1/replay", Some("jeton-frais")).await;
     assert_eq!(s, StatusCode::BAD_GATEWAY);
     assert!(v["error"].as_str().unwrap().contains("Node"));
+}
+
+#[tokio::test]
+async fn fiche_stats_et_clips() {
+    let env = setup();
+    let c = Connection::open(&env.path).unwrap();
+    c.execute_batch(
+        "UPDATE matches SET stats_synced_at = 'x' WHERE id = 1;
+         INSERT INTO team_stats VALUES (1, 'LAL', '{\"PTS\":101,\"FG%\":45.0}');
+         INSERT INTO player_stats VALUES (1, 'BOS', 'p2', 'Tatum', 'F', '0', 1, '{\"PTS\":\"30\"}');
+         INSERT INTO player_stats VALUES (1, 'LAL', 'p1', 'James', 'F', '23', 1, '{\"PTS\":\"28\"}');
+         INSERT INTO match_leaders VALUES (1, 'LAL', 'points', 'Points', 'James', '28');
+         INSERT INTO user_clips VALUES (5, 1, 12.5, 3, 'panier', 'x');",
+    )
+    .unwrap();
+    let tok = Some("jeton-frais");
+    let (s, _, v) = get(&env, "/api/matches/1", tok).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["id"], 1);
+    for (uri, code, msg) in [
+        ("/api/matches/abc", 400, "id invalide"),
+        ("/api/matches/99", 404, "match introuvable"),
+    ] {
+        let (s, _, v) = get(&env, uri, tok).await;
+        assert_eq!(s.as_u16(), code, "{uri}");
+        assert_eq!(v["error"], msg);
+    }
+    let (s, _, v) = get(&env, "/api/matches/1/stats", tok).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["available"], true);
+    // Visiteurs d'abord, puis domicile ; stats d'équipe absentes → {}.
+    assert_eq!(v["teams"][0]["abbr"], "BOS");
+    assert_eq!(v["teams"][0]["stats"], serde_json::json!({}));
+    assert_eq!(v["teams"][0]["players"][0]["name"], "Tatum");
+    assert_eq!(
+        v["teams"][1]["stats"],
+        serde_json::json!({ "PTS": 101, "FG%": 45 })
+    );
+    assert_eq!(v["teams"][1]["score"], 101);
+    assert_eq!(v["leaders"][0]["player"], "James");
+    let (_, _, v) = get(&env, "/api/matches/2/stats", tok).await;
+    assert_eq!(v["available"], false);
+    assert_eq!(v["reason"], "Statistiques disponibles à la fin du match");
+    let (_, _, v) = get(&env, "/api/matches/1/clips", tok).await;
+    assert_eq!(
+        v,
+        serde_json::json!({ "match_id": 1, "clips": [{ "id": 5, "match_id": 1, "video_ts": 12.5, "duration": 3, "text_fr": "panier", "created_at": "x" }], "implemented": false })
+    );
+    let (s, _, _) = get(&env, "/api/matches/1/clips", None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn stats_pas_encore_recuperees_relayees_a_node() {
+    let env = setup();
+    // Match terminé sans stats_synced_at : Node les récupère chez ESPN (ici injoignable → 502).
+    let (s, _, _) = get(&env, "/api/matches/1/stats", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY);
 }
