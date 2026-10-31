@@ -163,6 +163,20 @@ describe('MinimaxVoiceSession (API simulée)', () => {
     await expect(s.synth('Bonsoir.', 'A', out)).rejects.toThrow(/fermée/);
   });
 
+  it('moments forts : ton imposé (emphase 2 → surprised, 1 → happy), rien sinon ; MINIMAX_EMOTIONS=0 désactive', async () => {
+    const sent = mockApi((route) => (route === '/v1/get_voice' ? { json: catalog } : { json: speech(1) }));
+    const s = await MinimaxVoiceSession.open(undefined, noEmbedder);
+    const out = path.join(tmp, 'e.wav');
+    await s.synth('Quel dunk !', 'A', out, undefined, { emphasis: 2 });
+    await s.synth('Belle passe.', 'A', out, undefined, { emphasis: 1 });
+    await s.synth('Remise en jeu.', 'A', out);
+    process.env.MINIMAX_EMOTIONS = '0';
+    await s.synth('Quel dunk !', 'A', out, undefined, { emphasis: 2 });
+    delete process.env.MINIMAX_EMOTIONS;
+    const emotions = sent.slice(1).map((x) => (x.body.voice_setting as { emotion?: string }).emotion);
+    expect(emotions).toEqual(['surprised', 'happy', undefined, undefined]);
+  });
+
   it('PCM brut : en-tête WAV ajouté ; débit dépassé (1002) puis succès : retenté', async () => {
     let calls = 0;
     mockApi((route) => {

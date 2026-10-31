@@ -30,6 +30,7 @@ import {
   FEMALE_WINDOW_SEC,
   fitCue,
   getDubRecord,
+  groupCues,
   heardFemale,
   nextDubChunk,
   placeClips,
@@ -279,6 +280,19 @@ describe('locuteurs et voix', () => {
     expect(st.speakers).toHaveLength(1);
   });
 
+  it('son de match bruité : pas plus de DUB_MAX_SPEAKERS locuteurs, ni de nouveau locuteur sur une réplique de moins de 2 s', () => {
+    const st = emptySpeakers();
+    // Six empreintes toutes différentes (bruit), longues : 4 locuteurs au plus, les suivantes rejoignent le plus proche.
+    const ids = assignSpeakers(st, [3, 3, 3, 3, 3, 3], [0, 1, 2, 3, 4, 5].map(basis), [110, 120, 130, 140, 150, 160], [], { threshold: 0.6 });
+    expect(st.speakers).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
+    // Réplique de 1,5 s inconnue : rattachée au plus proche (défaut : 2 s minimum pour un nouveau locuteur).
+    const st2 = emptySpeakers();
+    assignSpeakers(st2, [3, 1.5], [VEC.X, VEC.Y], [110, 120], [], { threshold: 0.6 });
+    expect(st2.speakers).toHaveLength(1);
+    expect(assignSpeakers(emptySpeakers(), [3, 3, 3], [VEC.X, VEC.Y, VEC.W], [1, 2, 3], [], { threshold: 0.6, maxSpeakers: 2 })).toEqual([0, 1, 0]);
+  });
+
   it('rôles : 1er temps de parole → A, 2e → B4, suivants → B1 ; stables ; nouveau locuteur → prochaine voix libre', () => {
     const st = emptySpeakers();
     assignSpeakers(st, [2, 5, 1, 4, 1], [VEC.X, VEC.Y, basis(5), VEC.Y, basis(5)], [110, 120, 100, 122, 101], [], { threshold: 0.6, minNewSec: 0.5 });
@@ -426,6 +440,82 @@ describe('locuteurs et voix', () => {
 });
 
 // ------------------------------------------------------------------ travail
+
+describe('phrases dites d’une traite (intonation)', () => {
+  const cue = (start: number, end: number, text_fr: string, o: { emphasis?: number; untranslated?: number } = {}) => ({
+    start_ts: start,
+    end_ts: end,
+    text_fr,
+    untranslated: o.untranslated ?? 0,
+    emphasis: o.emphasis ?? 0,
+  });
+
+  it('morceaux d’une même phrase réunis ; coupure sur ponctuation finale, autre locuteur, silence, longueur, ligne non traduite', () => {
+    const cues = [
+      cue(0, 2, 'Curry remonte la balle,'),
+      cue(2.2, 4, 'cherche l’écran'),
+      cue(4.3, 6, 'et déclenche !', { emphasis: 2 }),
+      cue(6.2, 8, 'Belle action.'), // phrase précédente finie
+      cue(8.1, 9, 'Et maintenant'),
+      cue(9.2, 10, 'le consultant'), // autre locuteur
+      cue(12, 13, 'reprend'), // 2 s de silence
+      cue(13.1, 14, 'EN line', { untranslated: 1 }),
+      cue(14.1, 15, 'puis repart'),
+    ];
+    const g = groupCues(cues, [0, 0, 0, 0, 0, 1, 1, 1, 1]);
+    expect(g.map((x) => x.idx)).toEqual([[0, 1, 2], [3], [4], [5], [6], [8]]);
+    expect(g[0]).toMatchObject({ text: 'Curry remonte la balle, cherche l’écran et déclenche !', start: 0, end: 6, emphasis: 2 });
+    expect(g[1].text).toBe('Belle action.');
+  });
+
+  it('pas plus de 12 s d’une traite', () => {
+    const cues = [cue(0, 5, 'un'), cue(5.1, 10, 'deux'), cue(10.1, 14, 'trois')];
+    expect(groupCues(cues, [0, 0, 0]).map((x) => x.idx)).toEqual([[0, 1], [2]]);
+  });
+
+  it('runDub : une phrase en trois sous-titres = une seule synthèse, calée sur toute sa durée, avec son emphase', async () => {
+    publish(M, 0, [
+      [2, 4, 'Curry remonte la balle,', 'X'],
+      [4.2, 6, 'cherche l’écran', 'X'],
+      [6.3, 8, 'et déclenche !', 'X', 2],
+    ]);
+    const emph: (number | undefined)[] = [];
+    const { deps, calls, session } = fake();
+    const synth = session.synth.bind(session);
+    session.synth = (text, voice, out, sig, o) => {
+      emph.push(o?.emphasis);
+      return synth(text, voice, out, sig, o);
+    };
+    await runDub({ matchId: M }, () => {}, signal(), deps);
+    expect(calls.synth.map((s) => s.text)).toEqual(['Curry remonte la balle, cherche l’écran et déclenche !']);
+    expect(emph).toEqual([2]);
+    expect(calls.assemble[0].clips).toHaveLength(1);
+    expect(db.getDubChunks(M)).toHaveLength(1);
+  });
+});
+
+describe('son complet du match (extrait par la traduction)', () => {
+  it('découpé sur place s’il couvre le tronçon (rien à lire dans le flux) ; sinon lu dans le flux', async () => {
+    publish(M, 0, CHUNK0);
+    const slices: [number, number][] = [];
+    const a = fake();
+    a.deps.localAudio = async (_okId, start, length, out) => {
+      slices.push([start, length]);
+      fs.writeFileSync(out, Buffer.alloc(2048));
+      return true;
+    };
+    await runDub({ matchId: M }, () => {}, signal(), a.deps);
+    expect(a.calls.extract).toEqual([]);
+    expect(slices).toEqual([[0, 120.5]]);
+    expect(db.getDubChunks(M)).toHaveLength(1);
+
+    db.deleteDub(M);
+    const b = fake();
+    b.deps.localAudio = async () => false; // pas (encore) là
+    await runDub({ matchId: M }, () => {}, signal(), b.deps);
+    expect(b.calls.extract).toEqual([0]);
+  });
+});
 
 describe('runDub', () => {
   it('double les tronçons traduits : locuteurs → voix, emphase, répliques non traduites sautées, publication', async () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,9 @@ import {
   commentaryReady,
   commentaryStatus,
   coveredFrom,
+  cutAudio,
   enqueueCommentary,
+  extractFullAudio,
   getCommentaryRecord,
   inNightWindow,
   nextChunk,
@@ -269,7 +272,61 @@ describe('runCommentary à la demande', () => {
     expect(db.getCommentaryTrack(A)?.complete).toBe(1);
   });
 
-  it('spectateur présent : pas plus de COMMENTARY_MAX_LEAD_SEC d’avance sur la lecture (la traduction attend)', async () => {
+  it('son complet : le flux est lu une seule fois, dès le départ ; tronçons découpés sur place ; gardé seulement si le match va être doublé', async () => {
+    process.env.COMMENTARY_FULL_AUDIO_POLL_MS = '5';
+    const g = globalThis as { __dubWantsAudio?: (id: number) => boolean };
+    const before = g.__dubWantsAudio;
+    const okId = db.getMatch(A)!.video_ok_id!;
+    const run = async (wantsDub: boolean, force: boolean) => {
+      g.__dubWantsAudio = () => wantsDub;
+      const { deps, calls } = fakeDeps();
+      const full: string[] = [];
+      const cuts: number[] = [];
+      deps.extractFull = async (url, out, o) => {
+        full.push(url);
+        fs.writeFileSync(out, Buffer.alloc(4096));
+        o.onProgress?.(700); // le début est là : le premier tronçon peut partir
+        await new Promise((r) => setTimeout(r, 30));
+        o.onProgress?.(DURATION);
+      };
+      deps.cut = async (file, start, _len, out) => {
+        expect(fs.existsSync(file)).toBe(true);
+        cuts.push(start);
+        fs.writeFileSync(out, Buffer.alloc(4096));
+      };
+      const res = await runCommentary({ matchId: A, force }, () => {}, signal(), deps);
+      return { res, calls, full, cuts };
+    };
+    try {
+      const a = await run(false, false);
+      expect(a.res).toMatchObject({ ok: true });
+      expect(a.calls.extract).toEqual([]); // aucun tronçon lu dans le flux
+      expect(a.full).toHaveLength(1);
+      expect(a.cuts.sort((x, y) => x - y)).toEqual(PLANS.map((p) => p.start));
+      expect(fs.existsSync(workDir(okId))).toBe(false); // pas de doublage : tout est effacé
+      const b = await run(true, true);
+      expect(b.full).toHaveLength(1);
+      expect(fs.readdirSync(workDir(okId))).toEqual(['full.ogg']); // gardé pour le doublage
+    } finally {
+      g.__dubWantsAudio = before;
+      delete process.env.COMMENTARY_FULL_AUDIO_POLL_MS;
+    }
+  });
+
+  it('lecture en pause au début : pas de plafond d’avance, la traduction va quand même jusqu’au bout', async () => {
+    const { deps, calls } = fakeDeps();
+    const res = await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, {
+      target: () => 0,
+      watching: () => true,
+      playing: () => false,
+      keepGoing: () => true,
+    });
+    expect(res).toMatchObject({ ok: true });
+    expect(calls.transcribe).toEqual(PLANS.map((p) => p.index));
+    expect(db.getCommentaryTrack(A)?.complete).toBe(1);
+  });
+
+  it('vidéo en lecture : pas plus de COMMENTARY_MAX_LEAD_SEC d’avance sur la lecture (la traduction attend)', async () => {
     process.env.COMMENTARY_MAX_LEAD_SEC = '500';
     process.env.COMMENTARY_LEAD_POLL_MS = '5';
     let checks = 0;
@@ -277,6 +334,7 @@ describe('runCommentary à la demande', () => {
     const res = await runCommentary({ matchId: A, force: false }, () => {}, signal(), deps, {
       target: () => 0,
       watching: () => true,
+      playing: () => true,
       // Le spectateur reste 20 vérifications sans avancer, puis s'en va.
       keepGoing: () => ++checks < 20,
     });
@@ -479,5 +537,29 @@ describe('file : spectateur et nuit', () => {
     await __commentaryIdle();
     expect(calls.transcribe).toEqual([0, 1, 2]);
     expect(commentaryStatus(A).status).toBe('ready');
+  });
+});
+
+describe('son complet (ffmpeg réel)', () => {
+  const hasFfmpeg = spawnSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-version']).status === 0 && spawnSync('ffprobe', ['-version']).status === 0;
+  const probe = (f: string) => Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).stdout.toString().trim());
+
+  it.skipIf(!hasFfmpeg)('extraction en une passe avec progression, puis découpe exacte sur place', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-full-'));
+    try {
+      const src = path.join(tmp, 'match.wav');
+      spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=20:sample_rate=16000', '-ac', '1', src]);
+      const out = path.join(tmp, 'full.ogg.part');
+      const seen: number[] = [];
+      await extractFullAudio(src, out, { onProgress: (s) => seen.push(s) });
+      expect(seen.length).toBeGreaterThan(0);
+      expect(Math.max(...seen)).toBeGreaterThan(15);
+      expect(probe(out)).toBeCloseTo(20, 0);
+      const cut = path.join(tmp, 'cut.ogg');
+      await cutAudio(out, 5, 8, cut);
+      expect(probe(cut)).toBeCloseTo(8, 0);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
