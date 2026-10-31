@@ -171,6 +171,14 @@ pub fn regex(src: &str, flags: &str) -> Regex {
     let mut in_class = false;
     let mut chars = src.chars();
     while let Some(c) = chars.next() {
+        // `[\s\S]` : tout caractère, fins de ligne comprises.
+        if c == '[' && !in_class && chars.as_str().starts_with(r"\s\S]") {
+            out.push_str("(?s:.)");
+            for _ in 0..5 {
+                chars.next();
+            }
+            continue;
+        }
         match c {
             '\\' => {
                 let Some(n) = chars.next() else {
@@ -271,5 +279,6 @@ mod tests {
         assert!(regex(r"^a\s+b$", "").is_match("a\u{feff}b"));
         assert!(regex(r"^[\p{L}'’.-]+$", "u").is_match("Dončić"));
         assert!(regex("^makes$", "i").is_match("MAKES"));
+        assert!(regex(r"^a[\s\S]b$", "").is_match("a\u{85}b"));
     }
 }

@@ -116,7 +116,10 @@ async fn require_user(st: &AppState, headers: &HeaderMap) -> Result<(Session, St
     }
 }
 
-async fn require_admin(st: &AppState, headers: &HeaderMap) -> Result<(Session, String), Response> {
+pub(crate) async fn require_admin(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<(Session, String), Response> {
     let (s, h) = require_user(st, headers).await?;
     if s.role == "admin" {
         Ok((s, h))
