@@ -1,9 +1,6 @@
 //! `GET` / `POST /api/matches/[id]/sync` (équivalent de
-//! `src/app/api/matches/[id]/sync/route.ts`) — portée à l'étape 7 mais **pas
-//! encore branchée** sur le routeur : la route reste servie par Node tant que
-//! la file d'analyse n'est pas basculée (étape de branchement). Les
-//! gestionnaires rendent la réponse complète ; le branchement n'aura qu'à
-//! lire l'identifiant, les en-têtes et le corps, après la session.
+//! `src/app/api/matches/[id]/sync/route.ts`). Les gestionnaires rendent la
+//! réponse complète ; `routes_media` les appelle après la session.
 //!
 //! - `{ global_offset, quarter_offsets }` → réglage manuel persistant ;
 //! - `{ action: 'nudge', delta, period? }` → ± décalage relatif ;

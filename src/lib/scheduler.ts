@@ -11,9 +11,9 @@
  * fond : un match n'est doublé que sur « Doubler ce match » (dub.ts).
  *
  * Jobs repris par le serveur Rust (`BL_RUST_JOBS`, posé par server/src/node.rs) :
- * Node ne les lance plus, voir `rustJobs`. Recherche des replays reprise par
- * Rust : il signale les replays apparus par POST /api/internal/replays, qui
- * appelle `queueNewReplayWork` comme le faisait ce cron après `syncVideos`.
+ * Node ne les lance plus, voir `rustJobs`. Lancé par le serveur Rust, Node
+ * n'en lance aucun : Rust tient aussi les files de traduction, de doublage et
+ * d'analyse (étape 6b de docs/migration-rust.md).
  */
 import { countMatches } from './db';
 import { currentSeason } from './time';
@@ -44,8 +44,8 @@ export function queueRecentWork(what: { commentaries?: boolean; analyses?: boole
 /**
  * Après une recherche des replays : un replay qui vient d'apparaître est mis
  * en file de traduction et d'analyse tout de suite (pas d'attente des jobs
- * suivants). Appelé par le cron de Node après `syncVideos`, ou par le serveur
- * Rust (POST /api/internal/replays) quand c'est lui qui cherche les replays.
+ * suivants). Appelé par le cron de Node après `syncVideos` (Node lancé seul ;
+ * sous le serveur Rust, c'est son cron qui le fait, `server/src/scheduler.rs`).
  */
 export function queueNewReplayWork(): { commentaries: number; analyses: number } {
   const r = queueRecentWork({ commentaries: true, analyses: true });
@@ -56,9 +56,10 @@ export function queueNewReplayWork(): { commentaries: number; analyses: number }
 
 /**
  * Jobs lancés par le cron du serveur Rust, que Node ne doit plus lancer :
- * `BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles`
- * (`sync-season` : chargement de la saison au premier démarrage). Les autres
- * (analyses, traductions) restent à Node.
+ * `BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles,analyses,commentaries`
+ * (`sync-season` : chargement de la saison au premier démarrage ; `analyses`
+ * et `commentaries` : mises en file de fond des analyses vidéo et des
+ * pré-traductions).
  */
 export function rustJobs(): Set<string> {
   return new Set(
@@ -123,12 +124,14 @@ export function startScheduler(): void {
   // défaut, ou p. ex. 2 h-6 h, heure de Paris). Sinon, un match n'est
   // analysé et traduit que quand quelqu'un le demande. Un travail de fond
   // encore en cours à la fin de la fenêtre se met en pause.
-  every(10 * MIN, async () => {
-    const n = queueRecentWork({ analyses: true }).analyses;
-    if (n) console.log(`[cron] ${n} analyse(s) vidéo mise(s) en file`);
-  }, 4 * MIN);
-  every(10 * MIN, async () => {
-    const n = queueRecentWork({ commentaries: true }).commentaries;
-    if (n) console.log(`[cron] pré-traduction : ${n} match(s) mis en file`);
-  }, 6 * MIN);
+  if (!rust.has('analyses'))
+    every(10 * MIN, async () => {
+      const n = queueRecentWork({ analyses: true }).analyses;
+      if (n) console.log(`[cron] ${n} analyse(s) vidéo mise(s) en file`);
+    }, 4 * MIN);
+  if (!rust.has('commentaries'))
+    every(10 * MIN, async () => {
+      const n = queueRecentWork({ commentaries: true }).commentaries;
+      if (n) console.log(`[cron] pré-traduction : ${n} match(s) mis en file`);
+    }, 6 * MIN);
 }

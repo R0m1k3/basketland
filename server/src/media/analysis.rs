@@ -1,7 +1,7 @@
 //! File d'attente des analyses vidéo (synchro automatique de la VF),
-//! équivalent de `src/lib/analysis.ts` — portée à l'étape 7, **pas encore
-//! branchée** : ni route, ni cron, ni `AppState` ne la construisent ; Node
-//! fait toujours tourner sa file.
+//! équivalent de `src/lib/analysis.ts` — portée à l'étape 7 ; le service est
+//! construit au démarrage (`state::Media`), servi par `routes_media`
+//! (calage) et alimenté par le cron (`scheduler`).
 //!
 //! Une analyse = balayage OCR du chrono du bandeau
 //! ([`crate::media::video_scan`] avec [`OcrScan`]), puis, si l'OCR n'a pas

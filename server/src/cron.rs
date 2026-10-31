@@ -1,15 +1,14 @@
-//! Cron interne des jobs portés (équivalent de la part de
-//! `src/lib/scheduler.ts` qui les concerne) : mêmes délais initiaux, mêmes
-//! intervalles. Calendrier 15 min, stats 5 min, replays 20 min, VF 60 min ;
-//! base presque vide au démarrage (< 50 matchs) : saison complète.
-//! `DISABLE_CRON=1` le désactive. Node ne lance plus ces jobs
-//! (`BL_RUST_JOBS`, voir `node.rs`) et garde ses files de traduction et
-//! d'analyse : un replay apparu pendant `sync-videos` lui est signalé
-//! aussitôt (`replay::notify_node`), comme le faisait son cron.
+//! Cron interne (équivalent de `src/lib/scheduler.ts`) : mêmes délais
+//! initiaux, mêmes intervalles. Calendrier 15 min, stats 5 min, replays
+//! 20 min, VF 60 min, analyses vidéo et pré-traductions 10 min ; base presque
+//! vide au démarrage (< 50 matchs) : saison complète. `DISABLE_CRON=1` le
+//! désactive. Node ne lance plus aucun job (`BL_RUST_JOBS`, voir `node.rs`).
+//! Un replay apparu pendant `sync-videos` est mis en file de traduction et
+//! d'analyse aussitôt (`queueNewReplayWork`), comme le faisait Node.
 
 use crate::db::{self, Db, MatchFilters};
 use crate::state::AppState;
-use crate::{ingest, replay};
+use crate::{ingest, replay, scheduler};
 use std::future::Future;
 use std::time::Duration;
 
@@ -35,9 +34,9 @@ where
     });
 }
 
-/// Schéma présent : la base est créée et migrée par Node (au démarrage de
-/// son planificateur). Sur une installation neuve, le fichier n'existe pas
-/// encore quand le serveur Rust démarre.
+/// Schéma présent : la base est créée et migrée au démarrage du serveur
+/// (`schema::ensure_schema`) ; si ça a échoué (volume non inscriptible),
+/// les jobs attendent qu'elle existe.
 async fn schema_ready(db: &Db) -> bool {
     db.run(|c| {
         c.query_row(
@@ -62,7 +61,7 @@ pub fn start(st: AppState) {
         let mut warned = false;
         while !schema_ready(&st.db).await {
             if !warned && t0.elapsed() > Duration::from_secs(30) {
-                eprintln!("[cron] base pas encore créée par l'application Node : jobs en attente");
+                eprintln!("[cron] base pas encore créée : jobs en attente");
                 warned = true;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -116,36 +115,79 @@ fn schedule(st: AppState) {
             }
         },
     );
-    // Recherche des replays ; un replay qui vient d'apparaître est signalé à
-    // Node, qui le met en file de traduction et d'analyse tout de suite
-    // (pas d'attente de ses jobs de 10 min).
+    // Recherche des replays ; un replay qui vient d'apparaître est mis en
+    // file de traduction et d'analyse tout de suite (pas d'attente des jobs
+    // de 10 min).
+    let s = st.clone();
     every(
         Duration::from_millis(replay::VIDEO_JOB_INTERVAL_MS as u64),
         Duration::from_secs(3 * MIN),
         move || {
-            let st = st.clone();
+            let st = s.clone();
             async move {
                 let (_, changed) = st.replays.sync_videos(&st.db, 20).await;
                 if changed > 0 {
-                    match replay::notify_node(&st.upstream, None).await {
-                        Ok(_) => println!(
-                            "[cron] sync-videos : {changed} replay(s) nouveau(x) ou passé(s) en HLS, signalé(s) à l'application Node"
-                        ),
-                        Err(e) => {
-                            eprintln!("[cron] nouveaux replays : mise en file impossible ({e})")
-                        }
+                    let (d, m) = (st.db.clone(), st.media.clone());
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        scheduler::queue_new_replay_work(&d, &m)
+                    })
+                    .await
+                    {
+                        eprintln!("[cron] {e}");
                     }
                 }
             }
         },
     );
+    let d = db.clone();
     every(
         Duration::from_secs(60 * MIN),
         Duration::from_secs(10 * MIN),
         move || {
-            let d = db.clone();
+            let d = d.clone();
             async move {
                 ingest::sync_subtitles(&d, 50).await;
+            }
+        },
+    );
+    // Tâches de fond lourdes (analyse vidéo OCR, pré-traduction des
+    // commentaires) : seulement si la traduction automatique est activée et
+    // dans la fenêtre autorisée (`COMMENTARY_NIGHT_WINDOW`) ; sinon un match
+    // n'est analysé et traduit que quand quelqu'un le demande.
+    let s = st.clone();
+    every(
+        Duration::from_secs(10 * MIN),
+        Duration::from_secs(4 * MIN),
+        move || {
+            let st = s.clone();
+            async move {
+                let r = tokio::task::spawn_blocking(move || {
+                    scheduler::queue_recent_work(&st.db, &st.media, false, true).analyses
+                })
+                .await;
+                match r {
+                    Ok(0) => {}
+                    Ok(n) => println!("[cron] {n} analyse(s) vidéo mise(s) en file"),
+                    Err(e) => eprintln!("[cron] {e}"),
+                }
+            }
+        },
+    );
+    every(
+        Duration::from_secs(10 * MIN),
+        Duration::from_secs(6 * MIN),
+        move || {
+            let st = st.clone();
+            async move {
+                let r = tokio::task::spawn_blocking(move || {
+                    scheduler::queue_recent_work(&st.db, &st.media, true, false).commentaries
+                })
+                .await;
+                match r {
+                    Ok(0) => {}
+                    Ok(n) => println!("[cron] pré-traduction : {n} match(s) mis en file"),
+                    Err(e) => eprintln!("[cron] {e}"),
+                }
             }
         },
     );

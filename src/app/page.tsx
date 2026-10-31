@@ -24,8 +24,7 @@ import TeamLogo from '@/components/ui/TeamLogo';
 import { IconArrowRight, IconCalendar } from '@/components/ui/Icons';
 import { spoilerMode } from '@/components/ui/spoilers';
 import ActivityPanel from '@/components/home/ActivityPanel';
-import { currentActivity } from '@/lib/activity';
-import { commentaryDisabledReason } from '@/lib/commentary';
+import { loadMediaState } from '@/lib/mediaState';
 import { inScheduleWindow, nightWindowLabel } from '@/lib/nightWindow';
 import { autoTranslateEnabled } from '@/lib/settings';
 
@@ -36,9 +35,9 @@ export const dynamic = 'force-dynamic';
  * n'attend. `untranslated` : des replays récents n'ont pas (ou pas toute)
  * leur VF — échecs en attente d'un nouvel essai, par exemple.
  */
-function idleText(auto: boolean, untranslated: boolean): string {
+function idleText(commentaryDisabled: boolean, auto: boolean, untranslated: boolean): string {
   const none = 'Aucun traitement en cours';
-  if (commentaryDisabledReason()) return `${none} — traduction des commentaires non configurée.`;
+  if (commentaryDisabled) return `${none} — traduction des commentaires non configurée.`;
   if (!auto) return `${none} — traduction à la demande : « Sous-titrer ce match » sur la fiche d’un match.`;
   if (!inScheduleWindow()) {
     const hours = nightWindowLabel();
@@ -55,6 +54,8 @@ function nightTitle(night: string, today: string): string {
 
 export default async function HomePage() {
   const spoilers = await spoilerMode();
+  // État des files (traduction en cours, activité) : lu avant `toViews`.
+  const media = await loadMediaState();
   const now = new Date();
   const today = todayKey(now);
   const season = latestSeason();
@@ -70,7 +71,7 @@ export default async function HomePage() {
   const standings = cachedStandings();
   // Traduction automatique (Paramètres) et travail du serveur en ce moment.
   const autoTranslate = autoTranslateEnabled();
-  const activity = currentActivity();
+  const activity = media.activity;
   // Pré-traduction : où en est la VF des derniers replays.
   const vfCount = {
     ready: replays.filter((g) => g.vf.state === 'ready').length,
@@ -93,7 +94,7 @@ export default async function HomePage() {
           </p>
           <SpoilerToggle initial={spoilers} />
         </div>
-        <ActivityPanel initial={activity} idleText={idleText(autoTranslate, vfCount.todo + vfCount.partial > 0)} />
+        <ActivityPanel initial={activity} idleText={idleText(!!media.commentary_disabled_reason, autoTranslate, vfCount.todo + vfCount.partial > 0)} />
       </div>
 
       {live.length > 0 && (

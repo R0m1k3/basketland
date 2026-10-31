@@ -18,8 +18,8 @@ const ENV_KEYS: [&str; 6] = [
     "MINIMAX_TRANSLATE",
 ];
 
-fn node_state(v: &Value) -> pages::NodeState {
-    pages::NodeState {
+fn media_state(v: &Value) -> pages::MediaState {
+    pages::MediaState {
         running_match_id: v["running_match_id"].as_i64(),
         activity: v["activity"].clone(),
         commentary_disabled_reason: v["commentary_disabled_reason"].as_str().map(str::to_string),
@@ -76,7 +76,7 @@ async fn pages_comme_node() {
             settings::setting_set(&c, k, v.as_str()).unwrap();
         }
         let now = basketland_server::time::parse_instant(sc["now"].as_str().unwrap()).unwrap();
-        let node = node_state(&sc["node"]);
+        let node = media_state(&sc["node"]);
         let session = auth::validate_session_opts(&c, sc["token"].as_str(), now, false).unwrap();
         let spoilers = if sc["spoilers"] == "hide" {
             "hide"
@@ -87,7 +87,7 @@ async fn pages_comme_node() {
             now,
             spoilers,
             session: session.as_ref(),
-            node: &node,
+            media: &node,
         };
         let p = &sc["params"];
         let param = |k: &str| p.get(k).and_then(Value::as_str);

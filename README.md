@@ -191,7 +191,7 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
 - **Mot de passe perdu** : depuis le NAS,
 
   ```bash
-  docker exec -it basketland node scripts/reset-password.mjs <identifiant> <nouveau-mot-de-passe>
+  docker exec -it basketland basketland-server reset-password <identifiant> <nouveau-mot-de-passe>
   ```
 
   redéfinit le mot de passe (et crée le compte en administrateur s'il n'existe

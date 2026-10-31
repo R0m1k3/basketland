@@ -6,9 +6,6 @@
  * - /login, /setup et leurs routes d'API ;
  * - /api/health (healthcheck Docker) ;
  * - /api/ingest, qui a sa propre authentification par jeton (INGEST_TOKEN) ;
- * - /api/internal/replays et /api/internal/page-state, appelés par le serveur
- *   Rust seul, avec le même jeton (le serveur Rust ne relaie jamais
- *   /api/internal/… depuis l'extérieur) ;
  * - les fichiers internes et statiques de Next (/_next/…), les icônes et
  *   fichiers posés à la racine (favicon.ico, robots.txt, icon.svg…).
  */
@@ -19,8 +16,6 @@ export const SETUP_PATH = '/setup';
 const PUBLIC_EXACT = new Set([
   '/api/health',
   '/api/ingest',
-  '/api/internal/replays',
-  '/api/internal/page-state',
   '/api/auth/login',
   '/api/auth/setup',
   '/api/auth/logout',

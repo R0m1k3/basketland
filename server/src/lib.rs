@@ -6,6 +6,7 @@
 //! (voir `docs/migration-rust.md`).
 
 pub mod accounts;
+pub mod activity;
 pub mod analysis_db;
 pub mod api;
 pub mod auth;
@@ -31,16 +32,22 @@ pub mod present;
 pub mod proxy;
 pub mod queries;
 pub mod replay;
+pub mod reset_password;
 pub mod routes;
 pub mod routes_auth;
+pub mod routes_diag;
 pub mod routes_ingest;
 pub mod routes_match;
+pub mod routes_media;
 pub mod routes_pages;
 pub mod routes_replay;
 pub mod routes_settings;
 pub mod routes_video;
+pub mod scheduler;
+pub mod schema;
 pub mod settings;
 pub mod state;
+pub mod static_site;
 pub mod sync_route;
 pub mod teams;
 pub mod time;
@@ -51,7 +58,7 @@ pub mod video;
 pub mod writes;
 
 use axum::extract::{Request, State};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 
@@ -73,10 +80,23 @@ pub fn is_internal_path(path: &str) -> bool {
     p == "/api/internal" || p.starts_with("/api/internal/")
 }
 
-/// Relais vers Node, sauf les chemins internes (404).
+/// Requête non routée : interface statique servie par Rust (`BL_STATIC_DIR`),
+/// sinon relais vers Node ; chemins internes toujours en 404.
 async fn relay(st: State<state::AppState>, req: Request) -> Response {
     if is_internal_path(req.uri().path()) {
         return api::error(axum::http::StatusCode::NOT_FOUND, "introuvable");
+    }
+    if let Some(root) = st.static_dir.clone() {
+        return static_site::serve(&st, &root, req).await;
+    }
+    proxy::forward(st, req).await
+}
+
+/// Méthode non servie par une route portée : 405, ou la réponse de Node
+/// quand il sert encore l'interface.
+async fn method_fallback(st: State<state::AppState>, req: Request) -> Response {
+    if st.static_dir.is_some() {
+        return axum::http::StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
     proxy::forward(st, req).await
 }
@@ -116,11 +136,59 @@ pub fn app(state: state::AppState) -> Router {
         .route("/api/video/{ok_id}/file.mp4", get(routes_video::file_mp4))
         .route(
             "/api/matches/{id}/replay",
-            post(routes_replay::replay).fallback(proxy::forward),
+            post(routes_replay::replay).fallback(method_fallback),
         )
         .route(
             "/api/ingest",
-            post(routes_ingest::ingest).fallback(proxy::forward),
+            post(routes_ingest::ingest).fallback(method_fallback),
+        )
+        // Files médias (étapes 6b et 7).
+        .route(
+            "/api/matches/{id}/subtitles",
+            get(routes_media::subtitles).fallback(method_fallback),
+        )
+        .route(
+            "/api/matches/{id}/subtitles.vtt",
+            get(routes_media::subtitles_vtt).fallback(method_fallback),
+        )
+        .route(
+            "/api/matches/{id}/commentary",
+            get(routes_media::commentary_get)
+                .post(routes_media::commentary_post)
+                .fallback(method_fallback),
+        )
+        .route(
+            "/api/matches/{id}/watching",
+            post(routes_media::watching).fallback(method_fallback),
+        )
+        .route(
+            "/api/matches/{id}/dub",
+            get(routes_media::dub_get)
+                .post(routes_media::dub_post)
+                .fallback(method_fallback),
+        )
+        .route(
+            "/api/matches/{id}/dub/{idx}",
+            get(routes_media::dub_chunk).fallback(method_fallback),
+        )
+        .route(
+            "/api/matches/{id}/sync",
+            get(routes_media::sync_get)
+                .post(routes_media::sync_post)
+                .fallback(method_fallback),
+        )
+        .route(
+            "/api/diag/stall",
+            post(routes_diag::stall).fallback(method_fallback),
+        )
+        .route(
+            "/api/activity",
+            get(routes_media::activity).fallback(method_fallback),
+        )
+        // État des files pour les pages de Node (jeton d'ingestion).
+        .route(
+            routes_media::MEDIA_STATE_PATH,
+            post(routes_media::media_state).fallback(relay),
         )
         // Données des pages (étape 8a) ; seule `/api/pages/session` est publique.
         .route(

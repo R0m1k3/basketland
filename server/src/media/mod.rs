@@ -1,7 +1,7 @@
-//! Fondations du traitement des médias (étape 6a de la migration) : modules
-//! de bibliothèque portés de Node, PAS encore branchés sur une route ni sur
-//! le cron — les files de traduction, de doublage et d'analyse vidéo restent
-//! côté Node tant qu'elles ne sont pas basculées ensemble (étapes 6b et 7).
+//! Traitement des médias (étapes 6a, 6b et 7 de la migration) : modules
+//! portés de Node, et les files de traduction, de doublage et d'analyse
+//! vidéo qui les utilisent (construites ensemble par `state::Media`, servies
+//! par `routes_media`).
 //!
 //! | Module | Équivalent Node |
 //! |--------|-----------------|
@@ -15,15 +15,15 @@
 //! | [`audio_energy`] | `audioEnergy.ts` |
 //! | [`local_ai`] | `localAi.ts` (Whisper et Ollama embarqués) |
 //! | [`commentary_ai`] | `commentaryAi.ts` (transcription, traduction) |
-//! | [`commentary`] | `commentary.ts` (file de traduction, étape 6b, non branchée) |
-//! | [`dub`] | `dub.ts` (file de doublage, étape 6b, non branchée) |
+//! | [`commentary`] | `commentary.ts` (file de traduction, étape 6b) |
+//! | [`dub`] | `dub.ts` (file de doublage, étape 6b) |
 //! | [`voice_minimax`] | `voiceMinimax.ts` |
 //! | [`voice_ai`] | `voiceAi.ts` (Qwen3-TTS embarqué) |
 //! | [`video_scan`] | `videoScan.ts` |
-//! | [`ocr`] | `ocr.ts` (étape 7, non branché) |
-//! | [`scoreboard`] | `scoreboard.ts` (étape 7, non branché) |
+//! | [`ocr`] | `ocr.ts` (étape 7) |
+//! | [`scoreboard`] | `scoreboard.ts` (étape 7) |
 //! | `tesseract` | moteur OCR natif (fonction cargo `ocr`) |
-//! | [`analysis`] | `analysis.ts` (file d'analyse vidéo, étape 7, non branchée) |
+//! | [`analysis`] | `analysis.ts` (file d'analyse vidéo, étape 7) |
 //!
 //! Les réglages (`settings.ts`) sont dans [`crate::settings`].
 

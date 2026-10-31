@@ -3,17 +3,14 @@
 //! (`guarded`), sauf `/api/pages/session`, lue par `/login` et `/setup` avant
 //! qu'une session existe.
 //!
-//! Ce que tiennent encore les files de Node (match en cours de traduction,
-//! activité, raisons de désactivation de la traduction et du doublage) est lu
-//! par un appel interne, `POST /api/internal/page-state` (jeton d'ingestion,
-//! jamais relayé depuis l'extérieur), comme `POST /api/internal/replays`.
-//! L'étape qui branche les médias en Rust remplacera cet appel par la
-//! lecture directe des services Rust ([`fetch_node_state`]).
+//! L'état des files médias (match en cours de traduction, activité, raisons
+//! de désactivation de la traduction et du doublage) est lu dans les services
+//! du processus ([`media_state`]).
 
 use crate::api::{error, json_response, ok, Query};
 use crate::auth::{self, Session};
 use crate::db;
-use crate::pages::{self, NodeState, NotFound, PageCtx};
+use crate::pages::{self, MediaState, NotFound, PageCtx};
 use crate::queries::STANDINGS_KEY;
 use crate::routes::{db_error, guarded, guarded_session};
 use crate::state::AppState;
@@ -23,13 +20,9 @@ use axum::response::Response;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use std::future::Future;
-use std::time::Duration;
 
 /// Chemin public (sans session) des données de page : layout, `/login`, `/setup`.
 pub const PUBLIC_SESSION_PATH: &str = "/api/pages/session";
-
-/// Appel interne à Node ; jamais relayé depuis l'extérieur (voir `lib.rs`).
-pub const NODE_PAGE_STATE_PATH: &str = "/api/internal/page-state";
 
 /// Cookie du mode « scores masqués » (`SPOILER_COOKIE`).
 pub const SPOILER_COOKIE: &str = "bl_spoilers";
@@ -43,59 +36,38 @@ pub fn spoiler_mode(headers: &HeaderMap) -> &'static str {
     }
 }
 
-fn opt_string(v: &Value, k: &str) -> Option<String> {
-    v.get(k).and_then(Value::as_str).map(str::to_string)
-}
-
-/// État des files de Node (`POST /api/internal/page-state`, jeton
-/// d'ingestion) ; `dub` : aussi `await dubDisabledReason()`.
-pub async fn fetch_node_state(st: &AppState, dub: bool) -> Result<NodeState, String> {
-    let token = tokio::task::spawn_blocking(crate::ingest::ingest_token)
-        .await
-        .map_err(|e| e.to_string())??;
-    let (status, v) = st
-        .upstream
-        .post_json(
-            NODE_PAGE_STATE_PATH,
-            &token,
-            &json!({ "dub": dub }),
-            Duration::from_secs(15),
-        )
-        .await?;
-    if status != 200 {
-        return Err(match v.get("error").and_then(Value::as_str) {
-            Some(e) => format!("HTTP {status} ({e})"),
-            None => format!("HTTP {status}"),
-        });
-    }
-    let v = crate::jsval::js_normalize(v);
-    Ok(NodeState {
-        running_match_id: v.get("running_match_id").and_then(Value::as_i64),
-        activity: v.get("activity").cloned().unwrap_or(Value::Null),
-        commentary_disabled_reason: opt_string(&v, "commentary_disabled_reason"),
-        dub_disabled_reason: opt_string(&v, "dub_disabled_reason"),
+/// État des files médias pour les pages ; `dub` : aussi `dubDisabledReason()`
+/// (charge le moteur de voix : page Paramètres d'un administrateur seule).
+pub async fn media_state(st: &AppState, dub: bool) -> Result<MediaState, String> {
+    let (db, media) = (st.db.clone(), st.media.clone());
+    tokio::task::spawn_blocking(move || {
+        let activity = db.with(|c| crate::activity::current_activity(c, &media))?;
+        Ok(MediaState {
+            running_match_id: media.commentary.running_match_id(),
+            activity,
+            commentary_disabled_reason: media.commentary.disabled_reason(),
+            dub_disabled_reason: if dub {
+                media.dub.disabled_reason()
+            } else {
+                None
+            },
+        })
     })
-}
-
-fn node_error(e: String) -> Response {
-    eprintln!("[serveur] état des files de Node illisible : {e}");
-    error(
-        StatusCode::BAD_GATEWAY,
-        "application Node injoignable (démarrage en cours ?)",
-    )
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn not_found(nf: NotFound) -> Response {
     json_response(StatusCode::NOT_FOUND, &nf.0)
 }
 
-/// Page servie : session exigée, état de Node lu si `needs_node`, puis
+/// Page servie : session exigée, état des files lu si `needs_media`, puis
 /// `build` sur la base.
 async fn page<F>(
     st: &AppState,
     uri: &OriginalUri,
     headers: &HeaderMap,
-    needs_node: bool,
+    needs_media: bool,
     build: F,
 ) -> Response
 where
@@ -103,13 +75,13 @@ where
 {
     let spoilers = spoiler_mode(headers);
     guarded_session(st, uri, headers, |session| async move {
-        let node = if needs_node {
-            match fetch_node_state(st, false).await {
+        let media = if needs_media {
+            match media_state(st, false).await {
                 Ok(n) => n,
-                Err(e) => return node_error(e),
+                Err(e) => return db_error(e),
             }
         } else {
-            NodeState::default()
+            MediaState::default()
         };
         let now = Utc::now();
         let r = st
@@ -119,7 +91,7 @@ where
                     now,
                     spoilers,
                     session: session.as_ref(),
-                    node: &node,
+                    media: &media,
                 };
                 build(c, &ctx)
             })
@@ -187,7 +159,7 @@ pub async fn match_page(
     uri: OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    // `toDto` seul (pas de `toViews`) : rien à demander à Node.
+    // `toDto` seul (pas de `toViews`) : l'état des files n'est pas lu.
     page(&st, &uri, &headers, false, move |c, ctx| {
         pages::match_page(c, ctx, &raw)
     })
@@ -271,17 +243,17 @@ pub async fn parametres(
         let Some(session): Option<Session> = session else {
             return error(StatusCode::UNAUTHORIZED, "non connecté");
         };
-        let node = if session.role == "admin" {
-            match fetch_node_state(&st, true).await {
+        let media = if session.role == "admin" {
+            match media_state(&st, true).await {
                 Ok(n) => n,
-                Err(e) => return node_error(e),
+                Err(e) => return db_error(e),
             }
         } else {
-            NodeState::default()
+            MediaState::default()
         };
         match st
             .db
-            .run(move |c| pages::parametres(c, &session, &node))
+            .run(move |c| pages::parametres(c, &session, &media))
             .await
         {
             Ok(v) => ok(v),

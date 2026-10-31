@@ -6,9 +6,8 @@
 //!   depuis la fiche partagent la même recherche (dédoublonnage en vol).
 //! - Un replay déjà trouvé (MP4 revérifié pour passer en HLS) n'est jamais
 //!   rétrogradé par une recherche qui échoue.
-//! - Les files de traduction et d'analyse restent côté Node (étapes 6 et 7) :
-//!   un replay qui vient d'apparaître y est signalé par `POST
-//!   /api/internal/replays` (jeton d'ingestion), voir [`notify_node`].
+//! - Un replay qui vient d'apparaître est mis en file de traduction (et
+//!   d'analyse, après le job) par l'appelant : voir `crate::scheduler`.
 
 use crate::bv::{Bv, ReplayLookup, ReplayMatch};
 use crate::db::{self, Db, MatchRow};
@@ -16,7 +15,6 @@ use crate::ingest::{self, JobResult};
 use crate::ingest_db::{self as idb, ReplayRecheckWindow, VideoUpdate};
 use crate::jsval::js_number_string;
 use crate::present::to_dto;
-use crate::proxy::Upstream;
 use chrono::TimeZone;
 use rusqlite::types::Value as SqlValue;
 use serde_json::{json, Value};
@@ -337,7 +335,7 @@ impl Replays {
     pub async fn request_replay_check(
         &self,
         db: &Db,
-        upstream: &Upstream,
+        on_found: impl FnOnce(i64) + Send + 'static,
         m: MatchRow,
     ) -> Result<(u16, Value), String> {
         let now = self.0.bv.now_ms();
@@ -383,17 +381,16 @@ impl Replays {
 
         let id = m.id;
         let fallback = m.clone();
-        let (me, d, up) = (self.clone(), db.clone(), upstream.clone());
+        let (me, d) = (self.clone(), db.clone());
         // Tâche à part : la recherche (et la mise en file de la traduction)
         // va au bout même si la réponse part avant (202).
         let work = tokio::spawn(async move {
             let r = me.search_replay(&d, m, true).await;
-            // Replay trouvé : traduction des commentaires en tête de file (Node
-            // respecte la « Traduction automatique » et le backoff des échecs).
+            // Replay trouvé : traduction des commentaires en tête de file
+            // (`prioritizeFoundReplay` : « Traduction automatique » et backoff
+            // des échecs respectés).
             if r.changed {
-                if let Err(e) = notify_node(&up, Some(id)).await {
-                    eprintln!("[replay] mise en file de la traduction impossible : {e}");
-                }
+                on_found(id);
             }
             r
         });
@@ -460,35 +457,6 @@ fn result_message(r: &ReplaySearchResult, video: &Value) -> String {
         "Pas encore de replay : {}.",
         human_replay_reason(lookup.reason.as_deref())
     )
-}
-
-// ------------------------------------------------------------------ files restées côté Node
-
-/// Chemin de l'appel interne à Node ; jamais relayé depuis l'extérieur (voir `lib.rs`).
-pub const NODE_REPLAYS_PATH: &str = "/api/internal/replays";
-
-/// Signale à Node un replay apparu : `Some(id)` (recherche à la demande) met
-/// la traduction de ce match en tête de file (`prioritizeOnView`) ; `None`
-/// (job) met en file les traductions et analyses des replays récents
-/// (`queueRecentWork`), comme le faisait le cron de Node après `syncVideos`.
-pub async fn notify_node(upstream: &Upstream, match_id: Option<i64>) -> Result<Value, String> {
-    let token = tokio::task::spawn_blocking(ingest::ingest_token)
-        .await
-        .map_err(|e| e.to_string())??;
-    let body = match match_id {
-        Some(id) => json!({ "match_id": id }),
-        None => json!({}),
-    };
-    let (status, v) = upstream
-        .post_json(NODE_REPLAYS_PATH, &token, &body, Duration::from_secs(15))
-        .await?;
-    if status != 200 {
-        return Err(match v.get("error").and_then(Value::as_str) {
-            Some(e) => format!("application Node : HTTP {status} ({e})"),
-            None => format!("application Node : HTTP {status}"),
-        });
-    }
-    Ok(v)
 }
 
 #[cfg(test)]

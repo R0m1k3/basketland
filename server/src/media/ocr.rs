@@ -1,5 +1,5 @@
 //! Lecture du chrono de jeu affiché à l'écran (équivalent de `ocr.ts`),
-//! portée à l'étape 7, **pas encore branchée**.
+//! portée à l'étape 7.
 //!
 //! Briques bas niveau : parseur du texte du bandeau, extraction d'images
 //! (ffmpeg, flux HLS ou MP4), filtres d'image, moteur OCR (trait

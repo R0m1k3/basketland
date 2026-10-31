@@ -26,11 +26,10 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-/// Ce qui vit encore dans le processus Node (files de traduction et de
-/// doublage, activité) : lu par `POST /api/internal/page-state` (voir
-/// `routes_pages`) jusqu'au branchement des médias en Rust.
+/// État des files médias (traduction, doublage, activité), lu par
+/// `routes_pages::media_state`.
 #[derive(Debug, Clone, Default)]
-pub struct NodeState {
+pub struct MediaState {
     /// `commentaryRunningMatchId()`.
     pub running_match_id: Option<i64>,
     /// `currentActivity()`, tel quel.
@@ -42,13 +41,13 @@ pub struct NodeState {
 }
 
 /// Contexte d'une page : instant présent, cookie « scores masqués », session,
-/// état de Node.
+/// état des files médias.
 pub struct PageCtx<'a> {
     pub now: DateTime<Utc>,
     /// `spoilerMode()` : `"show"` ou `"hide"` (cookie `bl_spoilers`).
     pub spoilers: &'static str,
     pub session: Option<&'a Session>,
-    pub node: &'a NodeState,
+    pub media: &'a MediaState,
 }
 
 /// Page introuvable (`notFound()` côté Next) : réponse 404 avec ce corps.
@@ -88,9 +87,9 @@ pub fn session(
 
 /// `idleText` de l'accueil : ligne du panneau « En cours de traitement » quand
 /// rien ne tourne ni n'attend.
-fn idle_text(node: &NodeState, auto: bool, untranslated: bool, now: DateTime<Utc>) -> String {
+fn idle_text(media: &MediaState, auto: bool, untranslated: bool, now: DateTime<Utc>) -> String {
     let none = "Aucun traitement en cours";
-    if node.commentary_disabled_reason.is_some() {
+    if media.commentary_disabled_reason.is_some() {
         return format!("{none} — traduction des commentaires non configurée.");
     }
     if !auto {
@@ -128,7 +127,7 @@ fn starts_after(g: &Value, now: DateTime<Utc>) -> bool {
 
 /// `GET /api/pages/home`.
 pub fn home(c: &Connection, ctx: &PageCtx) -> rusqlite::Result<Value> {
-    let running = ctx.node.running_match_id;
+    let running = ctx.media.running_match_id;
     let now = ctx.now;
     let today = q::today_key(now);
     let season = q::latest_season(c)?;
@@ -178,9 +177,9 @@ pub fn home(c: &Connection, ctx: &PageCtx) -> rusqlite::Result<Value> {
         "days": days.into_iter().map(|(key, games)| json!({ "key": key, "games": games })).collect::<Vec<_>>(),
         "standings": standings,
         "auto_translate": auto,
-        "activity": ctx.node.activity,
+        "activity": ctx.media.activity,
         "vf_count": { "ready": ready, "running": running_n, "partial": partial, "todo": todo },
-        "idle_text": idle_text(ctx.node, auto, todo + partial > 0, now),
+        "idle_text": idle_text(ctx.media, auto, todo + partial > 0, now),
         "night_window_label": crate::media::night_window::night_window_label(),
     }))
 }
@@ -199,7 +198,7 @@ pub fn matchs(
     team_param: Option<&str>,
     d_param: Option<&str>,
 ) -> rusqlite::Result<Value> {
-    let running = ctx.node.running_match_id;
+    let running = ctx.media.running_match_id;
     let now = ctx.now;
     let today = q::today_key(now);
     let team = team_param
@@ -454,7 +453,7 @@ fn nick_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 pub fn equipes(c: &Connection, ctx: &PageCtx) -> rusqlite::Result<Value> {
     let season = q::latest_season(c)?;
     let records = q::season_records(c, season)?;
-    let next = q::next_game_by_team(c, ctx.now, ctx.node.running_match_id)?;
+    let next = q::next_game_by_team(c, ctx.now, ctx.media.running_match_id)?;
     let seeds = q::conference_seeds(c)?;
     let today = q::today_key(ctx.now);
     let all = teams::all_teams();
@@ -575,7 +574,7 @@ pub fn equipe(c: &Connection, ctx: &PageCtx, raw: &str) -> PageResult {
     if !abbr_shape(&abbr) {
         return Ok(Err(not_found()));
     }
-    let all = q::team_games(c, &abbr, ctx.node.running_match_id)?;
+    let all = q::team_games(c, &abbr, ctx.media.running_match_id)?;
     if all.is_empty() && !teams::is_nba_team(&abbr) {
         return Ok(Err(not_found()));
     }
@@ -689,7 +688,11 @@ fn version_text(v: &crate::version::AppVersion) -> String {
 /// `GET /api/pages/parametres` (session requise : sans session, 401 ; la page
 /// renvoyait vers `/login?next=/parametres`). `dub_disabled_reason` ne sert
 /// qu'à un administrateur.
-pub fn parametres(c: &Connection, session: &Session, node: &NodeState) -> rusqlite::Result<Value> {
+pub fn parametres(
+    c: &Connection,
+    session: &Session,
+    media: &MediaState,
+) -> rusqlite::Result<Value> {
     let admin = session.role == "admin";
     let admin_data = if admin {
         let s = Settings::load(c)?;
@@ -697,7 +700,7 @@ pub fn parametres(c: &Connection, session: &Session, node: &NodeState) -> rusqli
             "users": crate::accounts::list_users(c)?,
             "auto_translate": settings::auto_translate_enabled(&s),
             "vf_mode": settings::vf_mode(&s),
-            "voice_disabled_reason": node.dub_disabled_reason,
+            "voice_disabled_reason": media.dub_disabled_reason,
             "minimax": settings::minimax_settings_view(&s),
             "openai": settings::openai_settings_view(&s),
             "openai_model_placeholder": settings::OPENAI_MODEL_PLACEHOLDER,

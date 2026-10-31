@@ -8,7 +8,7 @@
  */
 import type { SQLInputValue } from 'node:sqlite';
 import { commentaryProgressByIds, getDb, kvGet, listMatches } from './db';
-import { commentaryRunningMatchId } from './commentary';
+import { runningMatchId } from './mediaState';
 import type { StandingRow } from './espn';
 import { toDto, type MatchDto } from './present';
 import { addDays, parisDateKey, parisDayStartUtc } from './time';
@@ -92,7 +92,7 @@ export function toViews(rows: MatchRow[]): GameView[] {
   const finals = rows.filter((r) => r.status === 'final').map((r) => r.id);
   const stats = idsWithStats(finals);
   const progress = commentaryProgressByIds(finals);
-  const running = commentaryRunningMatchId();
+  const running = runningMatchId();
   return rows.map((r) => {
     const dto = toDto(r);
     const p = dto.video.available ? progress.get(r.id) : undefined;

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 /**
  * Jobs repris par le serveur Rust (BL_RUST_JOBS, posé par server/src/node.rs
  * pour l'application Node) : le planificateur de Node ne les lance plus et
- * garde les autres (vidéos, analyses, traductions).
+ * garde les autres. Sous le serveur Rust (étape 6b), la liste les nomme tous.
  */
 const jobs = vi.hoisted(() => ({
   syncSchedule: vi.fn(async () => ({ ok: true, detail: '' })),
@@ -102,5 +102,18 @@ describe('cron Node : jobs repris par le serveur Rust (BL_RUST_JOBS)', () => {
     expect(jobs.syncSchedule).toHaveBeenCalled();
     expect(jobs.syncSeason).toHaveBeenCalledTimes(1);
     expect(jobs.syncSubtitles).toHaveBeenCalled();
+  });
+
+  it('files médias reprises par Rust (étape 6b) : plus aucun job ni mise en file de fond', async () => {
+    start('sync-schedule,sync-season,sync-stats,sync-videos,sync-subtitles,analyses,commentaries');
+    await vi.advanceTimersByTimeAsync(61 * MIN);
+    for (const f of [...Object.values(jobs), ...Object.values(queued)]) expect(f).not.toHaveBeenCalled();
+  });
+
+  it('analyses et pré-traductions sautées séparément', async () => {
+    start('analyses');
+    await vi.advanceTimersByTimeAsync(7 * MIN);
+    expect(queued.analyses).toHaveBeenCalledTimes(1); // après syncVideos (3 min) seulement
+    expect(queued.commentaries).toHaveBeenCalledTimes(2); // après syncVideos, puis job de 6 min
   });
 });

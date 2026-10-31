@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { loadMediaState } from '@/lib/mediaState';
 import { conferenceSeeds, latestSeason, nextGameByTeam, seasonRecords, todayKey } from '@/lib/queries';
 import { TEAMS, type TeamInfo } from '@/lib/teams';
 import { seasonLabel } from '@/lib/time';
@@ -16,7 +17,8 @@ const DIVISIONS: Record<TeamInfo['conference'], string[]> = {
   Ouest: ['Nord-Ouest', 'Pacifique', 'Sud-Ouest'],
 };
 
-export default function TeamsPage() {
+export default async function TeamsPage() {
+  await loadMediaState(); // match en cours de traduction, lu avant les requêtes
   const records = seasonRecords();
   const next = nextGameByTeam();
   const seeds = conferenceSeeds();
