@@ -17,7 +17,9 @@
  *           (diarisation) et la voix féminine aux locutrices.
  *
  * Modèles téléchargés au premier usage dans `/data/models/hf` (cache
- * Hugging Face, même dossier que les autres modèles), jamais dans l'image.
+ * Hugging Face, même dossier que les autres modèles), jamais dans l'image —
+ * par un processus à part (`prepareVoiceModels`), sans le GPU, avant
+ * l'ouverture d'une session.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -107,6 +109,105 @@ export function listVoices(dir: string = process.env.VOICES_DIR || defaultVoices
 }
 
 const short = (e: unknown) => ((e as Error)?.message || String(e)).replace(/\s+/g, ' ').slice(0, 200);
+
+// ------------------------------------------------------------------ téléchargement des modèles (hors GPU)
+
+interface ModelsState {
+  /** Modèles présents dans le cache (vérifié une fois par processus serveur). */
+  ready: boolean;
+  /** Téléchargement (ou vérification du cache) en cours. */
+  promise: Promise<void> | null;
+  /** Octets téléchargés / attendus, seulement pendant un vrai téléchargement. */
+  progress: { done: number; total: number } | null;
+}
+
+const gm = globalThis as unknown as { __voiceModels?: ModelsState };
+const models: ModelsState = (gm.__voiceModels ??= { ready: false, promise: null, progress: null });
+
+/**
+ * Met en cache les modèles du doublage (~2,5 Go au premier usage) SANS
+ * toucher à la carte graphique : un processus `voice_worker.py
+ * --download-only`, partagé par tous les appelants. Il ne dépend d'aucun
+ * travail : un doublage qui cède le GPU (ou est interrompu) arrête d'attendre,
+ * pas le téléchargement, qui continue et sert à la reprise. Échec : rejet, et
+ * l'appel suivant recommence (le cache Hugging Face reprend les fichiers
+ * entamés). Délai : `TTS_LOAD_TIMEOUT_MS` sans nouvelle du processus.
+ */
+export function prepareVoiceModels(): Promise<void> {
+  if (models.ready) return Promise.resolve();
+  if (models.promise) return models.promise;
+  const cfg = voiceConfig();
+  if (cfg.disabledReason) return Promise.reject(new Error(cfg.disabledReason));
+  models.promise = new Promise<void>((resolve, reject) => {
+    const hf = path.join(cfg.modelsDir, 'hf');
+    fs.mkdirSync(hf, { recursive: true });
+    const child = spawn(cfg.python, [workerPath(), '--model', cfg.model, '--download-only', '--download-root', hf], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HF_HOME: hf, PYTHONUNBUFFERED: '1' },
+    });
+    lowerPriority(child);
+    const timeoutMs = Number(process.env.TTS_LOAD_TIMEOUT_MS) || 10 * 60_000;
+    let last = Date.now();
+    let tail = '';
+    let error = '';
+    let downloaded = false;
+    const watchdog = setInterval(() => {
+      if (Date.now() - last >= timeoutMs) {
+        error = `téléchargement des modèles de voix bloqué (aucune nouvelle depuis ${Math.round(timeoutMs / 60_000)} min)`;
+        child.kill('SIGKILL');
+      }
+    }, 5_000);
+    watchdog.unref?.();
+    let partial = '';
+    child.stderr?.on('data', (b: Buffer) => {
+      last = Date.now();
+      const text = b.toString();
+      tail = (tail + text).slice(-2000);
+      const lines = (partial + text).split(/\r?\n|\r/);
+      partial = lines.pop() ?? '';
+      // Seules les lignes du moteur (progression en %) vont au journal ; pas les traces Python.
+      for (const l of lines) if (l.trim().startsWith('[voix]')) console.log(l.trim());
+    });
+    readline.createInterface({ input: child.stdout! }).on('line', (line) => {
+      last = Date.now();
+      let msg: { event?: string; done?: unknown; total?: unknown; error?: string };
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (msg?.event === 'progress') models.progress = { done: Number(msg.done) || 0, total: Number(msg.total) || 0 };
+      else if (msg?.event === 'downloaded') downloaded = true;
+      else if (msg?.event === 'error') error = msg.error ?? 'échec du téléchargement';
+    });
+    const finish = (why: string | null) => {
+      clearInterval(watchdog);
+      models.progress = null;
+      models.promise = null;
+      if (why === null) {
+        models.ready = true;
+        resolve();
+      } else reject(new Error(why));
+    };
+    child.on('error', (e) => finish(`téléchargement des modèles de voix impossible (${short(e)})`));
+    child.on('exit', (code, sig) => {
+      if (code === 0 && downloaded) return finish(null);
+      const last2 = tail.split('\n').filter(Boolean).slice(-2).join(' | ');
+      finish(error || `téléchargement des modèles de voix arrêté (${sig ?? `code ${code}`})${last2 ? ` : ${last2}` : ''}`);
+    });
+  });
+  return models.promise;
+}
+
+/** Tests : modèles pas encore vérifiés. */
+export function __resetVoiceModelsForTests(): void {
+  Object.assign(models, { ready: false, promise: null, progress: null });
+}
+
+/** Téléchargement des modèles en cours : octets faits / attendus (total 0 : inconnu), sinon null. */
+export function voiceModelsDownload(): { done: number; total: number } | null {
+  return models.progress ? { ...models.progress } : null;
+}
 
 interface WorkerReply {
   event?: string;

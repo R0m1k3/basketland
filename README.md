@@ -521,7 +521,13 @@ Le moteur (`scripts/voice_worker.py`, environnement Python `/opt/tts` de
 l'image, piloté par `src/lib/voiceAi.ts`) est démarré à la demande puis
 arrêté à la fin, comme Whisper. Modèles téléchargés au premier usage dans
 `/data/models/hf` (≈ 2,5 Go pour Qwen3-TTS, ≈ 85 Mo pour ECAPA, 62 Mo pour
-le classifieur homme/femme), jamais dans l'image. Qwen3-TTS peut parfois ne
+le classifieur homme/femme), jamais dans l'image. Ce téléchargement se fait
+à part (`voice_worker.py --download-only`), sans la carte graphique : il
+commence dès qu'un doublage est mis en file, continue pendant que le doublage
+attend le GPU (traduction ou analyse en cours) et n'est jamais interrompu
+quand le doublage cède la place ; la fiche du match affiche sa progression,
+puis l'étape en cours (extraction, chargement du moteur, reconnaissance des
+voix, synthèse des répliques n / N, montage). Qwen3-TTS peut parfois ne
 pas finir sa phrase : chaque synthèse est plafonnée en longueur
 (proportionnelle au texte) et en temps, une prise ratée (plafond atteint,
 délai dépassé, durée absurde) est refaite une fois, puis signalée en erreur.

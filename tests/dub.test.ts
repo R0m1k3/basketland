@@ -21,6 +21,7 @@ import {
   dubDir,
   dubManifest,
   dubQueuePosition,
+  downloadText,
   emphasize,
   emptySpeakers,
   enqueueDub,
@@ -776,6 +777,62 @@ describe('file : GPU partagé et priorité à la lecture', () => {
     ]);
     release();
     await __dubIdle();
+  });
+});
+
+describe('démarrage : téléchargement des voix hors GPU, étapes visibles', () => {
+  it('téléchargement en clair', () => {
+    expect(downloadText({ done: 1.1e9, total: 2.5e9 })).toBe('téléchargement des voix (premier usage, une seule fois) : 44 % · 1,1 / 2,5 Go');
+    expect(downloadText({ done: 3e8, total: 0 })).toBe('téléchargement des voix (premier usage, une seule fois) : 0,3 Go');
+    expect(downloadText({ done: 2.5e9, total: 2.5e9 })).toContain('99 %');
+  });
+
+  it('GPU pris : le téléchargement des voix part quand même tout de suite, et la fiche dit qui occupe le GPU', async () => {
+    process.env.TRANSCRIBE_URL = 'http://gpu.local:8000/v1';
+    process.env.TRANSLATE_URL = 'http://gpu.local:11434/v1';
+    process.env.DUB_REPUMP_MS = '10';
+    publish(M, 0, CHUNK0);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    __setCommentaryRunnerForTests(async () => {
+      await gate;
+      return { ok: true, reason: 'ok' };
+    });
+    let prepared = 0;
+    let downloading: { done: number; total: number } | null = { done: 1.1e9, total: 2.5e9 };
+    __setDubEngineForTests({
+      config: () => ({}),
+      open: async () => fake().session,
+      prepare: async () => void prepared++,
+      download: () => downloading,
+    });
+    viaQueue(fake().deps);
+    enqueueCommentary(M2, { priority: true });
+    enqueueDub(M);
+    expect(prepared).toBe(0); // chargement différé du moteur
+    await vi.waitFor(() => expect(prepared).toBe(1));
+    expect(dubManifest(M)).toMatchObject({
+      status: 'waiting',
+      reason: 'en attente du GPU : la traduction d’un autre match passe d’abord, le doublage reprend ensuite',
+      step: 'téléchargement des voix (premier usage, une seule fois) : 44 % · 1,1 / 2,5 Go',
+    });
+    downloading = null;
+    expect(dubManifest(M).step).toBeUndefined();
+    release();
+    await vi.waitFor(() => expect(db.getDubChunks(M)).toHaveLength(1));
+    await __dubIdle();
+  });
+
+  it('pendant le travail : l’étape en cours est dans le manifeste', async () => {
+    publish(M, 0, CHUNK0);
+    const steps: (string | undefined)[] = [];
+    const { deps } = fake({ onSynth: () => steps.push(dubManifest(M).step) });
+    viaQueue(deps);
+    enqueueDub(M);
+    await __dubIdle();
+    expect(steps[0]).toMatch(/^synthèse des répliques : 1 \/ \d+$/);
+    expect(steps.at(-1)).toMatch(new RegExp(`^synthèse des répliques : ${steps.length} / ${steps.length}$`));
+    expect(db.getDubChunks(M)).toHaveLength(1);
   });
 });
 

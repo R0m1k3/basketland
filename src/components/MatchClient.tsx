@@ -38,22 +38,25 @@ interface DubManifestLite {
   status?: DubBannerState['status'];
   reason?: string;
   progress?: { done: number; total: number };
+  step?: string;
   chunks?: unknown[];
 }
 
 function toDubBanner(d: DubManifestLite): DubBannerState | null {
   if (!d.status) return null;
-  return { status: d.status, reason: d.reason, progress: d.progress, chunks: Array.isArray(d.chunks) ? d.chunks.length : 0 };
+  return { status: d.status, reason: d.reason, progress: d.progress, step: d.step, chunks: Array.isArray(d.chunks) ? d.chunks.length : 0 };
 }
 
 function sameDub(a: DubBannerState | null, b: DubBannerState | null): boolean {
   return (
     a === b ||
-    (!!a && !!b && a.status === b.status && a.reason === b.reason && a.chunks === b.chunks && a.progress?.done === b.progress?.done && a.progress?.total === b.progress?.total)
+    (!!a && !!b && a.status === b.status && a.reason === b.reason && a.step === b.step && a.chunks === b.chunks && a.progress?.done === b.progress?.done && a.progress?.total === b.progress?.total)
   );
 }
 
 const POLL_MS = 12_000;
+/** Doublage en cours : étapes et téléchargement des voix suivis de plus près. */
+const DUB_RUNNING_POLL_MS = 5_000;
 /** La traduction démarre quand le lecteur a autant d'avance chargée (s)… */
 const START_BUFFER_SEC = 15;
 /** …ou au plus tard après ce délai. */
@@ -201,7 +204,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
 
   // Doublage : manifeste lu SANS `?t=` (aucun effet de bord : seul le lecteur,
   // VF doublée choisie, signale la position), au chargement, quand l'état de
-  // la traduction change, et toutes les 12 s tant qu'il est en file ou en cours.
+  // la traduction change, et toutes les 12 s tant qu'il est en file (5 s en cours).
   const [dub, setDub] = useState<DubBannerState | null>(null);
   const dubSeq = useRef(0);
   const loadDub = useCallback(() => {
@@ -221,7 +224,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   const dubStatus = dub?.status;
   useEffect(() => {
     if (dubStatus !== 'waiting' && dubStatus !== 'running') return;
-    const timer = setInterval(() => void loadDub(), POLL_MS);
+    const timer = setInterval(() => void loadDub(), dubStatus === 'running' ? DUB_RUNNING_POLL_MS : POLL_MS);
     return () => clearInterval(timer);
   }, [dubStatus, loadDub]);
 
