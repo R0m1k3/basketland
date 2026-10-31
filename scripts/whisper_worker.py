@@ -53,21 +53,24 @@ def load_model(name: str, device: str, compute_type: str, download_root: str):
 def batch_size_for(device: str) -> int:
     """
     Taille des lots du mode « batched » de faster-whisper
-    (`WHISPER_BATCH_SIZE`, `auto` par défaut : 8 sur GPU, 0 sur processeur).
+    (`WHISPER_BATCH_SIZE`, 0 par défaut : mode séquentiel).
 
     Les passages de parole repérés par le VAD sont transcrits par lots au lieu
-    d'un par un : 3 à 4 fois plus rapide sur GPU, même modèle. 0 : mode
-    séquentiel d'avant. Sur processeur, les lots n'accélèrent guère et
-    prennent plus de mémoire : séquentiel par défaut.
+    d'un par un : bien plus rapide sur GPU, même modèle. MAIS faster-whisper
+    1.2.1 désactive alors `hallucination_silence_threshold` (forcé à None dans
+    BatchedInferencePipeline.transcribe) et ne retente pas d'autres
+    températures : la protection contre les phrases inventées pendant les
+    pauses (« Thank you »…) disparaît. Donc à activer en connaissance de cause
+    (p. ex. 8 sur GPU) ; `auto` : 8 sur carte NVIDIA, 0 sur processeur.
     """
-    raw = (os.environ.get("WHISPER_BATCH_SIZE") or "auto").strip().lower()
+    raw = (os.environ.get("WHISPER_BATCH_SIZE") or "0").strip().lower()
     if raw == "auto":
         return 8 if device == "cuda" else 0
     try:
         return max(0, min(64, int(raw)))
     except ValueError:
-        log(f"WHISPER_BATCH_SIZE invalide ({raw}) : réglage automatique")
-        return 8 if device == "cuda" else 0
+        log(f"WHISPER_BATCH_SIZE invalide ({raw}) : mode séquentiel")
+        return 0
 
 
 def to_verbose(segments, info) -> dict:
