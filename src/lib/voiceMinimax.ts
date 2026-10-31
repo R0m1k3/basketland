@@ -2,8 +2,9 @@
  * Voix du doublage par l'API MiniMax (synthèse vocale en ligne, voix
  * françaises du catalogue MiniMax), à la place de Qwen3-TTS embarqué.
  *
- * Choisi par `TTS_ENGINE=minimax`, ou dès que `MINIMAX_API_KEY` est défini
- * (voir `voiceConfig`, voiceAi.ts). La synthèse ne touche plus la carte
+ * Choisi par `TTS_ENGINE=minimax`, ou dès qu'une clé MiniMax est donnée —
+ * page Paramètres (prioritaire) ou `MINIMAX_API_KEY` (voir `voiceConfig`,
+ * voiceAi.ts). Modèle et voix aussi réglables dans la page Paramètres. La synthèse ne touche plus la carte
  * graphique : le doublage n'attend plus la fin des traductions. L'analyse
  * des voix (empreintes ECAPA, hauteur, genre), qui répartit les répliques
  * entre les commentateurs, reste locale : `voice_worker.py --embed-only`,
@@ -17,16 +18,11 @@
  * est retirée (le doublage se replie sur une autre, voir `voiceFor`).
  */
 import fs from 'node:fs';
+import { MINIMAX_DEFAULT_MODEL, MINIMAX_DEFAULT_VOICES, MINIMAX_ROLES, type MinimaxRole } from './minimaxCatalog';
+import { getSetting, savedMinimaxVoices, SETTING_KEYS } from './settings';
 
+export { MINIMAX_DEFAULT_MODEL, MINIMAX_DEFAULT_VOICES };
 export const MINIMAX_DEFAULT_URL = 'https://api.minimax.io';
-export const MINIMAX_DEFAULT_MODEL = 'speech-2.8-hd';
-/** Voix françaises du catalogue MiniMax (liste « System Voice ID » de la documentation). */
-export const MINIMAX_DEFAULT_VOICES: Readonly<Record<string, string>> = {
-  A: 'French_Male_Speech_New', // « Level-Headed Man »
-  B4: 'French_MaleNarrator', // « Male Narrator »
-  B1: 'French_CasualMan', // « Casual Man »
-  F: 'French_FemaleAnchor', // « Female Anchor »
-};
 const SAMPLE_RATE = 24_000;
 
 export interface MinimaxConfig {
@@ -39,17 +35,27 @@ export interface MinimaxConfig {
   speed: number;
 }
 
+/** Réglages enregistrés dans la page Paramètres (prioritaires sur les variables d'environnement). */
+function saved(): { key: string | null; model: string | null; voices: Partial<Record<MinimaxRole, string>> } {
+  try {
+    return { key: getSetting(SETTING_KEYS.minimaxApiKey), model: getSetting(SETTING_KEYS.minimaxModel), voices: savedMinimaxVoices() };
+  } catch {
+    return { key: null, model: null, voices: {} }; // base illisible : variables d'environnement
+  }
+}
+
 export function minimaxConfig(): MinimaxConfig {
+  const s = saved();
   const voices: Record<string, string> = {};
-  for (const [role, def] of Object.entries(MINIMAX_DEFAULT_VOICES)) {
-    const v = (process.env[`MINIMAX_VOICE_${role}`] ?? def).trim();
+  for (const role of MINIMAX_ROLES) {
+    const v = (s.voices[role] ?? process.env[`MINIMAX_VOICE_${role}`] ?? MINIMAX_DEFAULT_VOICES[role]).trim();
     if (v) voices[role] = v;
   }
   const speed = Number(process.env.MINIMAX_TTS_SPEED);
   return {
     url: (process.env.MINIMAX_API_URL?.trim() || MINIMAX_DEFAULT_URL).replace(/\/+$/, ''),
-    key: process.env.MINIMAX_API_KEY?.trim() || '',
-    model: process.env.MINIMAX_TTS_MODEL?.trim() || MINIMAX_DEFAULT_MODEL,
+    key: s.key?.trim() || process.env.MINIMAX_API_KEY?.trim() || '',
+    model: s.model?.trim() || process.env.MINIMAX_TTS_MODEL?.trim() || MINIMAX_DEFAULT_MODEL,
     voices,
     speed: Number.isFinite(speed) && speed >= 0.5 && speed <= 2 ? speed : 1,
   };

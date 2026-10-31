@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import AccountPanel from '@/components/settings/AccountPanel';
 import AutoTranslateSettings from '@/components/settings/AutoTranslateSettings';
+import MiniMaxSettings from '@/components/settings/MiniMaxSettings';
 import OpenAiSettings from '@/components/settings/OpenAiSettings';
 import SubtitleSettings from '@/components/settings/SubtitleSettings';
 import UsersAdmin from '@/components/settings/UsersAdmin';
@@ -9,7 +10,7 @@ import VfModeSettings from '@/components/settings/VfModeSettings';
 import { currentSession } from '@/lib/authServer';
 import { listUsers } from '@/lib/db';
 import { dubDisabledReason } from '@/lib/dub';
-import { autoTranslateEnabled, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView, vfMode } from '@/lib/settings';
+import { autoTranslateEnabled, minimaxSettingsView, OPENAI_MODEL_PLACEHOLDER, openAiSettingsView, vfMode } from '@/lib/settings';
 import { PARIS_TZ } from '@/lib/time';
 import { appVersion } from '@/lib/version';
 
@@ -82,6 +83,7 @@ export default async function SettingsPage() {
           </SectionTitle>
           <AutoTranslateSettings initial={autoTranslateEnabled()} />
           <VfModeSettings initial={vfMode()} voiceDisabledReason={await dubDisabledReason()} />
+          <MiniMaxSettings initial={minimaxSettingsView()} />
           <OpenAiSettings initial={openAiSettingsView()} placeholderModel={OPENAI_MODEL_PLACEHOLDER} />
         </section>
       )}
