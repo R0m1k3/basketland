@@ -44,7 +44,7 @@ navigateur ──► basketland-server (Rust, :3012)
 | 1 | Passerelle (relais, lancement et arrêt de Node), sessions, `GET /api/health`, `GET /api/schedule`, `GET /api/matches` | ✅ |
 | 2 | Lecture seule : `GET /api/matches/[id]`, `/stats` (stats pas encore récupérées : relayé à Node), `/clips`, `/api/standings` (client ESPN, cache 30 min) | ✅ |
 | 3 | Comptes : `/api/auth/login`, `/logout`, `/setup`, `/api/account/password`, `/api/admin/users` (scrypt au même format, limitation des tentatives) | ✅ |
-| 4 | Proxy vidéo ok.ru : résolution du flux, playlists, segments, MP4 (le plus gros trafic) | à faire |
+| 4 | Proxy vidéo ok.ru `/api/video/[okId]/…` (`master.m3u8`, `playlist.m3u8`, `segment.ts`, `asset.ts`, `file.mp4`) : flux résolu en cache et rafraîchi avant expiration, cache de segments et préchargement, reprise des téléchargements bloqués, mêmes réglages (`SEGMENT_CACHE_MB`, `PREFETCH_*`, `SEGMENT_STALL_MS`, `SEGMENT_RETRIES`) | ✅ |
 | 5 | Synchronisation ESPN et basketball-video, cron interne, `/api/ingest` | à faire |
 | 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity`, `/api/admin/settings` | à faire |
 | 7 | Doublage (voix Qwen3-TTS / MiniMax) et OCR du bandeau de score | à faire |

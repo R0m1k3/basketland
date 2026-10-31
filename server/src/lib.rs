@@ -10,16 +10,20 @@ pub mod api;
 pub mod auth;
 pub mod db;
 pub mod espn;
+pub mod hls;
 pub mod http;
 pub mod jsval;
 pub mod node;
+pub mod okru;
 pub mod present;
 pub mod proxy;
 pub mod routes;
 pub mod routes_auth;
 pub mod routes_match;
+pub mod routes_video;
 pub mod state;
 pub mod time;
+pub mod video;
 pub mod writes;
 
 use axum::routing::{get, post};
@@ -46,6 +50,14 @@ pub fn app(state: state::AppState) -> Router {
             "/api/admin/users",
             get(routes_auth::users_list).post(routes_auth::users_post),
         )
+        .route("/api/video/{ok_id}/master.m3u8", get(routes_video::master))
+        .route(
+            "/api/video/{ok_id}/playlist.m3u8",
+            get(routes_video::playlist),
+        )
+        .route("/api/video/{ok_id}/segment.ts", get(routes_video::segment))
+        .route("/api/video/{ok_id}/asset.ts", get(routes_video::asset))
+        .route("/api/video/{ok_id}/file.mp4", get(routes_video::file_mp4))
         .fallback(proxy::forward)
         .with_state(state)
 }

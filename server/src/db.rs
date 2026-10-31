@@ -227,6 +227,16 @@ fn where_for(f: &MatchFilters) -> (String, Vec<SqlValue>) {
     (clauses.join(" AND "), params)
 }
 
+/// Replay connu du proxy vidéo : `listMatches({ videoOkId, video: true,
+/// leagueAny: true, limit: 1 })` non vide (toutes ligues confondues).
+pub fn video_ok_id_known(c: &Connection, ok_id: &str) -> rusqlite::Result<bool> {
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM matches WHERE video_available = ?1 AND video_ok_id = ?2)",
+        rusqlite::params![1, ok_id],
+        |r| r.get(0),
+    )
+}
+
 /// Ligne `matches` (colonnes utiles à l'API).
 #[derive(Debug, Clone)]
 pub struct MatchRow {
