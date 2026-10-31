@@ -1,4 +1,4 @@
-use basketland_server::{app, db, node, proxy, state, video};
+use basketland_server::{app, cron, db, node, proxy, state, video};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
@@ -65,6 +65,8 @@ async fn main() {
 
     let mut term = signal(SignalKind::terminate()).expect("signal SIGTERM");
     let mut int = signal(SignalKind::interrupt()).expect("signal SIGINT");
+    // Jobs d'ingestion portés (calendrier, stats, VF) ; Node ne les lance plus.
+    cron::start(st.db.clone());
     let server = axum::serve(listener, app(st));
 
     let code = tokio::select! {

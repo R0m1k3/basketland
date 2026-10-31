@@ -8,10 +8,15 @@
 pub mod accounts;
 pub mod api;
 pub mod auth;
+pub mod cron;
 pub mod db;
 pub mod espn;
+pub mod espn_events;
 pub mod hls;
 pub mod http;
+pub mod ingest;
+pub mod ingest_db;
+pub mod js;
 pub mod jsval;
 pub mod node;
 pub mod okru;
@@ -19,10 +24,13 @@ pub mod present;
 pub mod proxy;
 pub mod routes;
 pub mod routes_auth;
+pub mod routes_ingest;
 pub mod routes_match;
 pub mod routes_video;
 pub mod state;
 pub mod time;
+pub mod vf;
+pub mod vf_sync;
 pub mod video;
 pub mod writes;
 
@@ -58,6 +66,10 @@ pub fn app(state: state::AppState) -> Router {
         .route("/api/video/{ok_id}/segment.ts", get(routes_video::segment))
         .route("/api/video/{ok_id}/asset.ts", get(routes_video::asset))
         .route("/api/video/{ok_id}/file.mp4", get(routes_video::file_mp4))
+        .route(
+            "/api/ingest",
+            post(routes_ingest::ingest).fallback(proxy::forward),
+        )
         .fallback(proxy::forward)
         .with_state(state)
 }
