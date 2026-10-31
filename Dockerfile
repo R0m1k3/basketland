@@ -12,6 +12,20 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
+# ---------------------------------------------------------------- serveur Rust
+# Passerelle HTTP (server/) : écoute sur le port public, sert les routes déjà
+# portées en Rust et relaie tout le reste à Next.js (port interne 3013).
+# Dépendances compilées dans une couche à part : un changement du code seul
+# ne refait pas leur compilation.
+FROM rust:1.96-slim-bookworm AS rust
+WORKDIR /build
+COPY server/Cargo.toml server/Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && echo '' > src/lib.rs \
+ && cargo build --release --locked && rm -rf src
+COPY server/src ./src
+RUN touch src/main.rs src/lib.rs && cargo build --release --locked \
+ && install -m 755 target/release/basketland-server /basketland-server
+
 # ---------------------------------------------------------------- Ollama
 # Traduction des commentaires : binaire Ollama et ses bibliothèques (CUDA
 # comprise) repris de l'image officielle, version figée. Le binaire est
@@ -105,6 +119,7 @@ COPY --from=ollama /ollama/bin/ollama /usr/bin/ollama
 COPY --from=ollama /ollama/lib /usr/lib/ollama
 COPY --from=whisper /opt/whisper /opt/whisper
 COPY --from=tts /opt/tts /opt/tts
+COPY --from=rust /basketland-server /usr/local/bin/basketland-server
 
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
@@ -135,7 +150,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3012)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-# `node:sqlite` (base de l'application) est stable dans les faits mais encore
-# marqué expérimental par Node 22 : sans ce drapeau, chaque démarrage écrit
-# « ExperimentalWarning: SQLite is an experimental feature » dans les logs.
-CMD ["node", "--disable-warning=ExperimentalWarning", "server.js"]
+# Le serveur Rust écoute sur PORT (3012) et lance lui-même Next.js sur
+# 127.0.0.1:3013 (`BL_NODE_CMD`, voir server/src/node.rs), avec
+# `--disable-warning=ExperimentalWarning` : `node:sqlite` est encore marqué
+# expérimental par Node 22, sans ce drapeau chaque démarrage l'écrit dans les logs.
+CMD ["basketland-server"]
