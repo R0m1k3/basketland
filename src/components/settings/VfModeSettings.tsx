@@ -21,7 +21,7 @@ const OPTIONS: { value: VfMode; title: string; text: string; icon: React.ReactNo
   {
     value: 'doublage',
     title: 'Doublage voix',
-    text: 'Les commentaires sont traduits puis dits par des voix françaises (le son d’origine est baissé pendant qu’elles parlent). Plus de calcul pour le serveur.',
+    text: 'Les matchs doublés (« Doubler ce match ») sont dits par des voix françaises, le son d’origine baissé pendant qu’elles parlent. Le lecteur part en « VF doublée ».',
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <rect x="9" y="3" width="6" height="11" rx="3" />
@@ -58,8 +58,8 @@ export default function VfModeSettings({ initial, voiceDisabledReason }: { initi
       ok: true,
       text:
         r.data.vfMode === 'doublage'
-          ? 'Doublage voix choisi : avec la traduction automatique, les replays traduits sont aussi doublés ; le lecteur part en « VF doublée ».'
-          : 'Sous-titres choisis : plus aucun doublage automatique ; « Doubler ce match » reste possible sur la fiche d’un match.',
+          ? 'Doublage voix choisi : le lecteur part en « VF doublée » et la fiche met « Doubler ce match » en avant.'
+          : 'Sous-titres choisis : « Doubler ce match » reste possible sur la fiche d’un match.',
     });
   }
 
@@ -126,8 +126,9 @@ export default function VfModeSettings({ initial, voiceDisabledReason }: { initi
         <div className="space-y-1.5 border-t border-ink-700/60 pt-4 text-xs leading-relaxed text-paper-faint">
           <p>Le doublage part des sous-titres : la traduction des commentaires est donc toujours faite, dans les deux modes.</p>
           <p>
-            Match par match, la fiche propose aussi « Sous-titrer ce match » et « Doubler ce match » : quand la traduction automatique est
-            désactivée, ou pour doubler un seul match en mode Sous-titres.
+            Une traduction ne lance jamais le doublage : un match n’est doublé que sur « Doubler ce match » (fiche du match), qui lance
+            aussi la traduction s’il le faut. Quand la traduction automatique est désactivée, la fiche propose aussi « Sous-titrer ce
+            match ».
           </p>
         </div>
 

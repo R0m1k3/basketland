@@ -39,18 +39,26 @@ interface DubManifestLite {
   reason?: string;
   progress?: { done: number; total: number };
   step?: string;
+  stopped?: boolean;
   chunks?: unknown[];
 }
 
 function toDubBanner(d: DubManifestLite): DubBannerState | null {
   if (!d.status) return null;
-  return { status: d.status, reason: d.reason, progress: d.progress, step: d.step, chunks: Array.isArray(d.chunks) ? d.chunks.length : 0 };
+  return {
+    status: d.status,
+    reason: d.reason,
+    progress: d.progress,
+    step: d.step,
+    stopped: d.stopped === true,
+    chunks: Array.isArray(d.chunks) ? d.chunks.length : 0,
+  };
 }
 
 function sameDub(a: DubBannerState | null, b: DubBannerState | null): boolean {
   return (
     a === b ||
-    (!!a && !!b && a.status === b.status && a.reason === b.reason && a.step === b.step && a.chunks === b.chunks && a.progress?.done === b.progress?.done && a.progress?.total === b.progress?.total)
+    (!!a && !!b && a.status === b.status && a.reason === b.reason && a.step === b.step && a.stopped === b.stopped && a.chunks === b.chunks && a.progress?.done === b.progress?.done && a.progress?.total === b.progress?.total)
   );
 }
 
@@ -228,9 +236,10 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
     return () => clearInterval(timer);
   }, [dubStatus, loadDub]);
 
-  // « Doubler ce match » (tout utilisateur) ; `retry` : « Relancer le doublage », administrateurs.
+  // « Doubler ce match » / « Reprendre le doublage » et « Arrêter le doublage » (tout utilisateur) ;
+  // `retry` : « Relancer le doublage », administrateurs.
   const dubCommand = useCallback(
-    (action: 'start' | 'retry'): Promise<CommandResult> => {
+    (action: 'start' | 'retry' | 'stop'): Promise<CommandResult> => {
       ++dubSeq.current; // une lecture en vol ne doit pas écraser la réponse de la commande
       return fetch(`/api/matches/${matchId}/dub`, {
         method: 'POST',
@@ -250,6 +259,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   );
   const startDub = useCallback(() => dubCommand('start'), [dubCommand]);
   const relaunchDub = useCallback(() => dubCommand('retry'), [dubCommand]);
+  const stopDub = useCallback(() => dubCommand('stop'), [dubCommand]);
 
   // Positions des actions, triées par seq.
   const pos = useMemo(() => positions.slice().sort((a, b) => a[0] - b[0]), [positions]);
@@ -318,6 +328,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
           onRelaunch={isAdmin ? relaunch : undefined}
           onDub={startDub}
           onDubRelaunch={isAdmin ? relaunchDub : undefined}
+          onDubStop={stopDub}
           position={playback.currentTime}
         />
         {commentary?.status === 'ready' && subtitles.length > 0 && (

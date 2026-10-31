@@ -24,6 +24,8 @@ export interface DubBannerState {
   progress?: { done: number; total: number };
   /** Étape en cours, ou téléchargement des voix qui avance pendant l'attente. */
   step?: string;
+  /** Arrêté à la demande : « Reprendre le doublage » le relance. */
+  stopped?: boolean;
   /** Tronçons déjà doublés (jouables). */
   chunks: number;
 }
@@ -119,6 +121,14 @@ function dubLine(dub: DubBannerState, canStart: boolean): Line | null {
         note: dub.step ? `${cap(dub.step)} (continue pendant l’attente)` : null,
       };
     case 'partial':
+      if (dub.stopped) {
+        return {
+          ...base,
+          dot: 'bg-flame/50',
+          title: `Doublage arrêté (${dub.chunks} tronçon${dub.chunks > 1 ? 's' : ''} doublé${dub.chunks > 1 ? 's' : ''})`,
+          detail: canStart ? '« Reprendre le doublage » le relance là où il s’est arrêté.' : 'Les passages pas encore doublés restent en VO.',
+        };
+      }
       return {
         ...base,
         dot: 'bg-flame/50',
@@ -129,6 +139,8 @@ function dubLine(dub: DubBannerState, canStart: boolean): Line | null {
       return { ...base, tone: 'text-win', dot: 'bg-win', title: 'Voix françaises prêtes', detail: 'Menu ⚙ du lecteur → Voix → « VF doublée ».' };
     case 'failed':
       return { ...base, tone: 'text-loss', dot: 'bg-loss', title: 'Doublage impossible pour l’instant', detail: dub.reason ?? null };
+    case 'none':
+      return dub.stopped ? { ...base, title: 'Doublage arrêté', detail: canStart ? '« Reprendre le doublage » le relance.' : null } : null;
     default:
       return null;
   }
@@ -141,6 +153,11 @@ const RELAUNCH_ICON = (
   </svg>
 );
 const RELAUNCH_CLASS = 'btn-ghost border border-ink-600/70 !px-2.5 !py-1 text-xs text-paper-mute disabled:cursor-not-allowed disabled:opacity-50';
+const STOP_ICON = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+  </svg>
+);
 
 /** Confirmation d'une relance (administrateurs). */
 function Confirm({ text, busy, onConfirm, onCancel }: { text: string; busy: boolean; onConfirm: () => void; onCancel: () => void }) {
@@ -167,9 +184,12 @@ function Confirm({ text, busy, onConfirm, onCancel }: { text: string; busy: bool
  * - Traduction automatique désactivée (Paramètres) : un match pas encore
  *   traduit affiche le bouton « Sous-titrer ce match ».
  * - « Doubler ce match » (tout utilisateur ; moteur de voix actif, match pas
- *   entièrement doublé ni déjà en file) : traduction automatique
- *   désactivée, ou mode « sous-titres » (doubler ce seul match). En doublage
- *   automatique (mode « doublage » + traduction automatique), pas de bouton.
+ *   entièrement doublé ni déjà en file), dans les deux modes : seul ce
+ *   bouton lance le doublage (et la traduction s'il le faut) ; une
+ *   traduction ne le lance jamais. Mis en avant en mode « doublage ».
+ * - « Arrêter le doublage » (tout utilisateur) pendant que le match est
+ *   doublé ou en file : ce qui est doublé reste, et « Reprendre le
+ *   doublage » (le bouton « Doubler ce match ») le relance.
  * - Administrateurs : « Relancer la traduction » et « Relancer le doublage »
  *   (avec confirmation) — refont la piste même terminée ; inactifs pendant
  *   que ce match est traduit (ou doublé).
@@ -184,6 +204,7 @@ export default function CommentaryStatus({
   onRelaunch,
   onDub,
   onDubRelaunch,
+  onDubStop,
   position = 0,
 }: {
   state: CommentaryState | null;
@@ -202,6 +223,8 @@ export default function CommentaryStatus({
   onDub?: () => Promise<CommandResult>;
   /** Doublage effacé puis refait (administrateurs seulement ; absent sinon). */
   onDubRelaunch?: () => Promise<CommandResult>;
+  /** « Arrêter le doublage » : retiré de la file ou interrompu, sans rien effacer. */
+  onDubStop?: () => Promise<CommandResult>;
   /** Position de lecture (s), lue à chaque mise à jour du statut. */
   position?: number;
 }) {
@@ -239,12 +262,13 @@ export default function CommentaryStatus({
   const manualStart = !autoTranslate && status === 'none' && !state.reason;
   /** Match sans replay exploitable (ou introuvable) : ni traduction ni doublage possibles. */
   const noReplay = status === 'none' && !!state.reason;
-  // « Doubler ce match » : jamais en doublage automatique (tout y est doublé).
-  const autoDub = autoTranslate && vfMode === 'doublage';
   const dubStatus = dub?.status;
   const dubEngineOn = !!dub && dubStatus !== 'disabled';
+  const dubStopped = !!dub?.stopped;
   const dubStart =
-    !!onDub && dubEngineOn && !autoDub && status !== 'disabled' && !noReplay && (dubStatus === 'none' || dubStatus === 'partial' || dubStatus === 'failed');
+    !!onDub && dubEngineOn && status !== 'disabled' && !noReplay && (dubStatus === 'none' || dubStatus === 'partial' || dubStatus === 'failed');
+  /** « Arrêter le doublage » : pendant le doublage de ce match ou son attente. */
+  const dubStop = !!onDubStop && dubEngineOn && (dubStatus === 'running' || dubStatus === 'waiting');
 
   if (status === 'ready') {
     tone = 'text-win';
@@ -317,7 +341,7 @@ export default function CommentaryStatus({
   // Les deux boutons proposés : le mode « Version française » choisit celui qui est mis en avant.
   const dubFirst = vfMode === 'doublage';
   const showButtons =
-    manualStart || status === 'failed' || dubStart || (canRelaunch && confirming !== 'traduction') || (canRelaunchDub && confirming !== 'doublage');
+    manualStart || status === 'failed' || dubStart || dubStop || (canRelaunch && confirming !== 'traduction') || (canRelaunchDub && confirming !== 'doublage');
 
   return (
     <div className="panel-soft px-4 py-3">
@@ -356,7 +380,19 @@ export default function CommentaryStatus({
                   <rect x="9" y="3" width="6" height="11" rx="3" />
                   <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
                 </svg>
-                Doubler ce match
+                {dubStopped ? 'Reprendre le doublage' : 'Doubler ce match'}
+              </button>
+            )}
+            {dubStop && onDubStop && (
+              <button
+                type="button"
+                onClick={() => void run(onDubStop, true)}
+                disabled={busy}
+                className={RELAUNCH_CLASS}
+                title="Arrêter le doublage de ce match (les passages déjà doublés restent disponibles)"
+              >
+                {STOP_ICON}
+                Arrêter le doublage
               </button>
             )}
             {canRelaunch && confirming !== 'traduction' && (

@@ -2,7 +2,7 @@ import { getMatch } from '@/lib/db';
 import { allowedOrigins, error, isOriginAllowed, json, parseId, type RouteCtx } from '@/lib/api';
 import { requireAdmin } from '@/lib/authHttp';
 import { commentaryStatus } from '@/lib/commentary';
-import { dubDisabledReason, dubManifest, prioritizeDubOnView, requestDub } from '@/lib/dub';
+import { dubDisabledReason, dubManifest, prioritizeDubOnView, requestDub, stopDub } from '@/lib/dub';
 import { touchViewer } from '@/lib/viewers';
 
 export const dynamic = 'force-dynamic';
@@ -48,7 +48,11 @@ export async function GET(req: Request, ctx: RouteCtx<{ id: string }>) {
  *   lecture d'un autre match et pendant une traduction) ;
  * - { action: 'retry' } → « Relancer le doublage », ADMINISTRATEURS
  *   seulement : le doublage existant est effacé puis refait (refusé, 409,
- *   pendant que ce match est doublé).
+ *   pendant que ce match est doublé) ;
+ * - { action: 'stop' } → « Arrêter le doublage » (tout utilisateur
+ *   connecté) : retiré de la file ou interrompu, ce qui est doublé reste ;
+ *   « Reprendre le doublage » (`start`) le relance. La traduction n'est
+ *   pas touchée.
  * Réponse : `{ dub: manifeste, commentary: statut de la traduction, message }`.
  * Mêmes garde-fous que la route commentary : origine contrôlée, Content-Type
  * JSON exigé (une requête « simple » text/plain n'est pas préflightée).
@@ -66,7 +70,13 @@ export async function POST(req: Request, ctx: RouteCtx<{ id: string }>) {
   } catch {
     return error(400, 'JSON invalide');
   }
-  if (body?.action !== 'start' && body?.action !== 'retry') return error(400, "action invalide (attendu : 'start' ou 'retry')");
+  if (body?.action !== 'start' && body?.action !== 'retry' && body?.action !== 'stop') {
+    return error(400, "action invalide (attendu : 'start', 'retry' ou 'stop')");
+  }
+  if (body.action === 'stop') {
+    const r = stopDub(id);
+    return json({ dub: dubManifest(id), commentary: commentaryStatus(id), message: r.message });
+  }
   if (body.action === 'retry') {
     // Efface un doublage existant : réservé aux administrateurs (401 / 403 sinon).
     const admin = requireAdmin(req);

@@ -28,7 +28,11 @@ export const MINIMAX_TEXT_MODELS = [
 ] as const;
 export const MINIMAX_DEFAULT_TEXT_MODEL = 'MiniMax-M3.1-Flash';
 
-/** Voix françaises du catalogue MiniMax (liste « System Voice ID » de la documentation). */
+/**
+ * Voix françaises du catalogue MiniMax (`get_voice`) : les six de la liste
+ * « System Voice ID » de la documentation, plus deux qu'elle n'affiche pas
+ * (journaliste, oratrice). L'espace dans certains identifiants est voulue.
+ */
 export const MINIMAX_FRENCH_VOICES = [
   { id: 'French_Male_Speech_New', label: 'Homme posé' },
   { id: 'French_MaleNarrator', label: 'Narrateur' },
@@ -36,6 +40,8 @@ export const MINIMAX_FRENCH_VOICES = [
   { id: 'French_FemaleAnchor', label: 'Présentatrice' },
   { id: 'French_Female_News Anchor', label: 'Présentatrice patiente' },
   { id: 'French_MovieLeadFemale', label: 'Héroïne de cinéma' },
+  { id: 'French_Female Journalist', label: 'Journaliste' },
+  { id: 'French_Female_Speech_New', label: 'Oratrice assurée' },
 ] as const;
 
 /** Voix par défaut de chaque rôle. */

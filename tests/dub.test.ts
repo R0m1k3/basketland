@@ -9,7 +9,6 @@ vi.mock('../src/lib/audio', async (orig) => ({ ...(await orig<typeof import('../
 import * as db from '../src/lib/db';
 import { __setCommentaryRunnerForTests, enqueueCommentary, touchViewer } from '../src/lib/commentary';
 import { currentActivity } from '../src/lib/activity';
-import { settingSet } from '../src/lib/db';
 import {
   __dubIdle,
   __setDubEngineForTests,
@@ -25,7 +24,6 @@ import {
   emphasize,
   emptySpeakers,
   enqueueDub,
-  enqueueRecentDubs,
   FEMALE_MIN_SEC,
   FEMALE_WINDOW_SEC,
   fitCue,
@@ -36,15 +34,17 @@ import {
   placeClips,
   prioritizeDubOnView,
   releaseGpuForTranslation,
+  requestDub,
   rolesUsed,
   runDub,
   speechRanges,
+  stopDub,
   voiceFor,
   type DubControl,
   type DubDeps,
   type VoiceSessionLike,
 } from '../src/lib/dub';
-import { GET as getDub } from '../src/app/api/matches/[id]/dub/route';
+import { GET as getDub, POST as postDub } from '../src/app/api/matches/[id]/dub/route';
 import { GET as getDubAudio } from '../src/app/api/matches/[id]/dub/[idx]/route';
 import { freshDb, insertMatch } from './helpers/db';
 
@@ -188,9 +188,7 @@ beforeEach(() => {
   process.env.COMMENTARY_NIGHT_WINDOW = 'always';
   insertMatch(M, { duration: 400 });
   insertMatch(M2, { duration: 400 });
-  // Ces tests décrivent le doublage AUTOMATIQUE (fond, match regardé) : mode « doublage ».
-  // Le mode « sous-titres » (défaut) et les demandes explicites : tests/vf-mode.test.ts.
-  settingSet('vf_mode', 'doublage');
+  // Réglage « Version française », « Doubler ce match » et absence de doublage automatique : tests/vf-mode.test.ts.
   TRACK = { ok_id: db.getMatch(M)!.video_ok_id!, transcribe_model: 'large-v3-turbo', translate_model: 'translategemma:12b', chunk_sec: 120, chunks_total: 3 };
   __setDubEngineForTests({ config: () => ({}), open: async () => fake().session });
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -725,7 +723,7 @@ describe('file : GPU partagé et priorité à la lecture', () => {
       },
     });
     viaQueue(deps);
-    expect(enqueueDub(M).started).toBe(true);
+    expect(enqueueDub(M, { explicit: true }).started).toBe(true);
     await vi.waitFor(() => expect(dubManifest(M)).toMatchObject({ status: 'waiting', reason: expect.stringContaining('GPU') }));
     expect(calls.closed).toBe(1);
     expect(calls.synth).toHaveLength(2);
@@ -739,14 +737,14 @@ describe('file : GPU partagé et priorité à la lecture', () => {
     expect(getDubRecord(M)?.ok).toBe(true);
   });
 
-  it('doublage de fond : s’efface quand un AUTRE match est regardé, reprend après', async () => {
+  it('doublage demandé : s’efface quand un AUTRE match est regardé, reprend après', async () => {
     process.env.DUB_REPUMP_MS = '10';
     process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
     publish(M, 0, CHUNK0);
     publish(M, 1, CHUNK1);
     const { deps, calls } = fake({ onSynth: (n) => n === 2 && touchViewer(M2, 10) });
     viaQueue(deps);
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     await vi.waitFor(() => expect(dubManifest(M).status).toBe('waiting'));
     expect(calls.closed).toBe(1);
     expect(db.getDubChunks(M)).toEqual([]);
@@ -756,7 +754,7 @@ describe('file : GPU partagé et priorité à la lecture', () => {
     expect(db.getDubChunks(M)).toHaveLength(2);
   });
 
-  it('match regardé : passe devant un doublage de fond (interrompu, repris ensuite), à partir de la position', async () => {
+  it('doublage demandé du match regardé : passe devant celui d’un autre match (interrompu, repris ensuite), à partir de la position', async () => {
     process.env.DUB_REPUMP_MS = '10';
     process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
     const t2 = { ...TRACK, ok_id: db.getMatch(M2)!.video_ok_id! };
@@ -771,12 +769,12 @@ describe('file : GPU partagé et priorité à la lecture', () => {
         if (!opened) {
           opened = true;
           touchViewer(M2, 130);
-          prioritizeDubOnView(M2);
+          enqueueDub(M2, { priority: true, explicit: true }); // « Doubler ce match » sur la fiche regardée
         }
       },
     });
     viaQueue(deps);
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     await vi.waitFor(() => expect(db.getDubChunks(M2)).toHaveLength(2));
     // M2 depuis la position du spectateur (tronçon 1), puis le tronçon 0.
     expect(order[1]).toBe('Retour au jeu.');
@@ -788,37 +786,13 @@ describe('file : GPU partagé et priorité à la lecture', () => {
     expect(db.getDubChunks(M)).toHaveLength(1);
   });
 
-  it('fond hors fenêtre ou pré-traduction désactivée : rien n’est mis en file ni doublé', async () => {
+  it('pas de doublage de fond : un travail ni demandé ni regardé est abandonné', async () => {
     publish(M, 0, CHUNK0);
     viaQueue(fake().deps);
-    settingSet('auto_translate', '0');
-    expect(await enqueueRecentDubs()).toBe(0);
-    settingSet('auto_translate', null);
-    process.env.COMMENTARY_NIGHT_WINDOW = 'off';
-    expect(await enqueueRecentDubs()).toBe(0);
-    enqueueDub(M); // mise en file de fond directe : abandonnée hors fenêtre
+    expect(enqueueDub(M)).toMatchObject({ queued: false, message: 'Doublage abandonné : ni demandé ni regardé' });
+    prioritizeDubOnView(M); // pas demandé : regarder le match ne le lance pas
     await __dubIdle();
     expect(db.getDubChunks(M)).toEqual([]);
-  });
-
-  it('job périodique : matchs traduits au doublage incomplet, une fois', async () => {
-    publish(M, 0, CHUNK0);
-    const { deps } = fake();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    __setDubRunnerForTests(async () => {
-      await gate;
-      return { ok: true, reason: 'simulé' };
-    });
-    expect(await enqueueRecentDubs()).toBe(1); // M2 n'a pas de sous-titres
-    expect(await enqueueRecentDubs()).toBe(0); // déjà en cours
-    release();
-    await __dubIdle();
-    viaQueue(deps);
-    expect(await enqueueRecentDubs()).toBe(1);
-    await __dubIdle();
-    expect(db.finalMatchesNeedingDub(new Date(Date.now() - 10 * 86400_000).toISOString())).toEqual([]);
-    expect(await enqueueRecentDubs()).toBe(0);
   });
 
   it('une traduction qui démarre reprend tout de suite la carte graphique au doublage en cours (remis en tête de file)', async () => {
@@ -836,7 +810,7 @@ describe('file : GPU partagé et priorité à la lecture', () => {
       return { ok: false, kind: 'erreur', reason: 'interrompu' };
     });
     expect(releaseGpuForTranslation()).toBeNull(); // rien ne tourne : pas d'attente
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     let translationStartedAfterAbort: boolean | null = null;
     __setCommentaryRunnerForTests(async () => {
       translationStartedAfterAbort = aborted;
@@ -861,7 +835,7 @@ describe('file : GPU partagé et priorité à la lecture', () => {
       await gate;
       return { ok: true, reason: 'ok' };
     });
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     expect(currentActivity().tasks).toEqual([
       expect.objectContaining({ kind: 'doublage', match: expect.objectContaining({ id: M }), label: 'Doublage en français', pct: 33 }),
     ]);
@@ -898,7 +872,7 @@ describe('démarrage : téléchargement des voix hors GPU, étapes visibles', ()
     });
     viaQueue(fake().deps);
     enqueueCommentary(M2, { priority: true });
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     expect(prepared).toBe(0); // chargement différé du moteur
     await vi.waitFor(() => expect(prepared).toBe(1));
     expect(dubManifest(M)).toMatchObject({
@@ -929,7 +903,7 @@ describe('démarrage : téléchargement des voix hors GPU, étapes visibles', ()
     const { deps, calls } = fake({ onSynth: () => released.push(releaseGpuForTranslation()) });
     viaQueue(deps);
     enqueueCommentary(M2, { priority: true }); // la traduction d'un autre match tient le GPU
-    expect(enqueueDub(M).started).toBe(true);
+    expect(enqueueDub(M, { explicit: true }).started).toBe(true);
     await __dubIdle();
     expect(db.getDubChunks(M)).toHaveLength(1);
     expect(calls.closed).toBe(1);
@@ -977,7 +951,7 @@ describe('démarrage : téléchargement des voix hors GPU, étapes visibles', ()
     const steps: (string | undefined)[] = [];
     const { deps } = fake({ onSynth: () => steps.push(dubManifest(M).step) });
     viaQueue(deps);
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     await __dubIdle();
     expect(steps[0]).toMatch(/^synthèse des répliques : 1 \/ \d+$/);
     expect(steps.at(-1)).toMatch(new RegExp(`^synthèse des répliques : ${steps.length} / ${steps.length}$`));
@@ -1000,10 +974,96 @@ describe('doublage et sous-titres retraduits', () => {
   });
 });
 
+describe('arrêt du doublage', () => {
+  it('pendant le doublage : interrompu, ce qui est doublé reste ; « Reprendre » le relance', async () => {
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    publish(M, 0, CHUNK0);
+    publish(M, 1, CHUNK1);
+    let stop: ReturnType<typeof stopDub> | null = null;
+    // Arrêt au milieu du 2e tronçon (le 1er est déjà publié).
+    const { deps } = fake({ onSynth: (n) => n === CHUNK0.length + 1 && (stop = stopDub(M)) });
+    viaQueue(deps);
+    touchViewer(M, 0);
+    expect(requestDub(M).started).toBe(true);
+    await __dubIdle();
+    expect(stop).toEqual({ stopped: true, message: expect.stringContaining('arrêté') });
+    expect(db.getDubChunks(M)).toHaveLength(1);
+    expect(dubManifest(M)).toMatchObject({ status: 'partial', reason: 'doublage arrêté', stopped: true });
+    expect(getDubRecord(M)).toMatchObject({ ok: true, failures: 0, stopped: true });
+    expect(dubActivity().running).toBeNull();
+
+    // Regarder le match ne le relance pas.
+    prioritizeDubOnView(M);
+    expect(dubQueuePosition(M)).toBeNull();
+    expect(dubManifest(M).status).toBe('partial');
+
+    // « Reprendre le doublage » : il repart et finit.
+    expect(requestDub(M).started).toBe(true);
+    expect(getDubRecord(M)?.stopped).toBeUndefined();
+    await __dubIdle();
+    expect(db.getDubChunks(M)).toHaveLength(2);
+    expect(dubManifest(M).status).not.toBe('running');
+    expect(dubManifest(M).stopped).toBeUndefined();
+  });
+
+  it('en file : retiré de la file ; rien à arrêter : sans effet', async () => {
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    const t2 = { ...TRACK, ok_id: db.getMatch(M2)!.video_ok_id! };
+    publish(M, 0, CHUNK0);
+    publish(M2, 0, CHUNK0, t2);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    __setDubRunnerForTests(async () => {
+      await gate;
+      return { ok: true, reason: 'ok' };
+    });
+    expect(stopDub(M2)).toEqual({ stopped: false, message: 'Aucun doublage en cours pour ce match' });
+    enqueueDub(M, { explicit: true });
+    enqueueDub(M2, { explicit: true });
+    expect(dubQueuePosition(M2)).toBe(1);
+    expect(stopDub(M2).stopped).toBe(true);
+    expect(dubQueuePosition(M2)).toBeNull();
+    expect(dubManifest(M2)).toMatchObject({ status: 'none', stopped: true });
+    expect(dubManifest(M).status).toBe('running'); // l'autre match continue
+    release();
+    await __dubIdle();
+    expect(getDubRecord(M)?.ok).toBe(true);
+  });
+
+  it('API : action « stop »', async () => {
+    publish(M, 0, CHUNK0);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    __setDubRunnerForTests(async (_job, _p, sig) => {
+      await Promise.race([gate, new Promise((r) => sig.addEventListener('abort', r))]);
+      return { ok: true, reason: 'ok' };
+    });
+    enqueueDub(M, { explicit: true });
+    const post = (body: unknown) =>
+      postDub(
+        new Request(`http://nas.local:3000/api/matches/${M}/dub`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://nas.local:3000', host: 'nas.local:3000' },
+          body: JSON.stringify(body),
+        }),
+        params(M),
+      );
+    const r = await post({ action: 'stop' });
+    expect(r.status).toBe(200);
+    const d = await r.json();
+    expect(d.dub).toMatchObject({ status: 'none', stopped: true });
+    expect(d.message).toContain('arrêté');
+    expect((await post({ action: 'pause' })).status).toBe(400);
+    release();
+    await __dubIdle();
+    expect(getDubRecord(M)).toMatchObject({ ok: true, stopped: true }); // l'arrêt n'est pas compté comme un succès ou un échec
+  });
+});
+
 // ------------------------------------------------------------------ API
 
 describe('API', () => {
-  it('manifeste : forme exacte, ?t= donne la priorité au match regardé ; audio servi avec Range', async () => {
+  it('manifeste : forme exacte, ?t= ne lance pas le doublage ; audio servi avec Range', async () => {
     const empty = await (await getDub(new Request(`http://nas.local/api/matches/${M}/dub`), params(M))).json();
     expect(empty).toEqual({ status: 'none', reason: 'pas encore de sous-titres français', chunks: [], voices: {} });
 
@@ -1014,7 +1074,8 @@ describe('API', () => {
     expect((await (await getDub(new Request(`http://nas.local/api/matches/${M}/dub`), params(M))).json()).status).toBe('none');
     const r = await getDub(new Request(`http://nas.local/api/matches/${M}/dub?t=10`), params(M));
     expect(r.headers.get('cache-control')).toBe('no-store');
-    expect((await r.json()).status).toBe('running');
+    expect((await r.json()).status).toBe('none'); // regarder le match ne lance pas son doublage
+    expect(enqueueDub(M, { explicit: true }).started).toBe(true);
     await __dubIdle();
     const m = await (await getDub(new Request(`http://nas.local/api/matches/${M}/dub?t=10`), params(M))).json();
     expect(m.status).toBe('partial');
@@ -1058,7 +1119,7 @@ describe('API', () => {
   it('manifeste : échec sans tronçon → failed ; avec tronçons → partial et la raison', async () => {
     publish(M, 0, CHUNK0);
     viaQueue(fake({ failOpen: true }).deps);
-    enqueueDub(M);
+    enqueueDub(M, { explicit: true });
     await __dubIdle();
     expect(dubManifest(M)).toMatchObject({ status: 'failed', reason: expect.stringContaining('Moteur de voix indisponible') });
     expect(getDubRecord(M)).toMatchObject({ kind: 'service', failures: 0, netFailures: 1 });

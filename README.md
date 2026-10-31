@@ -382,14 +382,19 @@ serveur.
 
 **Version française** (Paramètres, administrateurs) : **Sous-titres** (par
 défaut) ou **Doublage voix**. Le doublage part des sous-titres : la
-traduction est faite dans les deux modes. Avec la traduction automatique,
-le mode Doublage voix double aussi chaque replay traduit, et le lecteur
-part en « VF doublée » tant que l'utilisateur n'a rien choisi ; en mode
-Sous-titres, aucun doublage automatique (ceux déjà en file sont abandonnés),
-mais « Doubler ce match » double un match précis. Un doublage demandé ainsi
+traduction est faite dans les deux modes. **Une traduction ne lance jamais
+le doublage** (ni la traduction automatique, ni « Sous-titrer ce match », ni
+« Relancer la traduction ») : un match n'est doublé que sur **« Doubler ce
+match »** (tout utilisateur connecté), qui lance aussi la traduction s'il le
+faut. Le mode Doublage voix met ce bouton en avant et fait partir le lecteur
+en « VF doublée » tant que l'utilisateur n'a rien choisi. Un doublage demandé
 va jusqu'au bout même si l'on quitte la fiche (en pause pendant la lecture
-d'un autre match et pendant une traduction) ; les administrateurs ont en
-plus « Relancer le doublage » (efface le doublage et le refait).
+d'un autre match et pendant une traduction). **« Arrêter le doublage »**
+(tout utilisateur, pendant le doublage ou son attente) le retire de la file
+ou l'interrompt, par exemple pour passer à une autre vidéo : les passages
+déjà doublés restent, la traduction continue, et « Reprendre le doublage »
+le relance. Les administrateurs ont en plus « Relancer le doublage » (efface
+le doublage et le refait).
 
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
 et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
@@ -560,14 +565,12 @@ suivante est repoussée : deux voix ne parlent jamais en même temps), puis le
 tronçon est monté en AAC (`/data/dub/<match>/chunk-N.m4a`). Le doublage **ne
 tourne jamais en même temps qu'une traduction ou une analyse** (la carte
 graphique est partagée) : il s'arrête à la réplique suivante et reprend
-après. Comme la traduction, il s'efface pendant la lecture d'un autre match,
-suit la « Traduction automatique », la « Version française » (doublage de
-fond en mode Doublage voix seulement ; sinon sur un clic « Doubler ce
-match », `POST /api/matches/[id]/dub`) et `COMMENTARY_NIGHT_WINDOW`, et le match
-regardé passe devant (`GET /api/matches/[id]/dub` : manifeste des tronçons ;
-`/dub/<n>` : l'audio). Un match vu pour la première fois est doublé une fois
-sa traduction terminée ; un replay traduit en tâche de fond est souvent déjà
-doublé quand on l'ouvre.
+après. Il ne part que sur un clic « Doubler ce match » (`POST
+/api/matches/[id]/dub`), jamais après une traduction ni en tâche de fond.
+Comme la traduction, il s'efface pendant la lecture d'un autre match, et le
+doublage demandé du match regardé passe devant (`GET /api/matches/[id]/dub` :
+manifeste des tronçons ; `/dub/<n>` : l'audio). Il suit la traduction en
+cours tronçon par tronçon jusqu'au doublage complet.
 
 **Voix féminine automatique** : une locutrice (reporter au bord du terrain,
 consultante) prend la voix **F**. Pour chaque réplique d'au moins 1 s, le

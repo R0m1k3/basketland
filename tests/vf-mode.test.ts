@@ -12,7 +12,7 @@ import { createSession } from '../src/lib/auth';
 import { currentActivity } from '../src/lib/activity';
 import { GET as settingsGet, POST as settingsPost } from '../src/app/api/admin/settings/route';
 import { POST as postDub } from '../src/app/api/matches/[id]/dub/route';
-import { autoDubEnabled, autoTranslateEnabled, isVfMode, setAutoTranslate, setVfMode, SETTING_KEYS, vfMode } from '../src/lib/settings';
+import { autoTranslateEnabled, isVfMode, setAutoTranslate, setVfMode, SETTING_KEYS, vfMode } from '../src/lib/settings';
 import { __commentaryIdle, __setCommentaryRunnerForTests, commentaryQueuePosition, commentaryRunningMatchId, enqueueCommentary, touchViewer } from '../src/lib/commentary';
 import {
   __dubIdle,
@@ -21,7 +21,6 @@ import {
   dubManifest,
   dubQueuePosition,
   enqueueDub,
-  enqueueRecentDubs,
   getDubRecord,
   prioritizeDubOnView,
   requestDub,
@@ -134,16 +133,12 @@ afterEach(() => {
 // ------------------------------------------------------------------ réglage
 
 describe('réglage « Version française »', () => {
-  it('sous-titres par défaut (clé absente ou valeur inconnue) ; doublage automatique = traduction automatique ET doublage', () => {
+  it('sous-titres par défaut (clé absente ou valeur inconnue)', () => {
     expect(db.settingGet(SETTING_KEYS.vfMode)).toBeNull();
     expect(vfMode()).toBe('sous-titres');
-    expect(autoDubEnabled()).toBe(false);
     setVfMode('doublage');
     expect(db.settingGet('vf_mode')).toBe('doublage');
     expect(vfMode()).toBe('doublage');
-    expect(autoDubEnabled()).toBe(true);
-    setAutoTranslate(false);
-    expect(autoDubEnabled()).toBe(false);
     db.settingSet('vf_mode', 'voix');
     expect(vfMode()).toBe('sous-titres');
     expect(isVfMode('doublage')).toBe(true);
@@ -181,63 +176,48 @@ describe('réglage « Version française »', () => {
   });
 });
 
-// ------------------------------------------------------------------ doublage automatique
+// ------------------------------------------------------------------ pas de doublage automatique
 
-describe('doublage automatique selon le mode', () => {
-  it('sous-titres (défaut) : ni doublage de fond, ni lancement à l’ouverture ; doublage : les deux', async () => {
+describe('une traduction ne lance jamais le doublage', () => {
+  it('dans les deux modes : ni à l’ouverture du match, ni pour un match traduit, ni pendant la traduction', async () => {
+    const runs = fakeDub();
+    for (const mode of ['sous-titres', 'doublage'] as const) {
+      setVfMode(mode);
+      enqueueCommentary(M, { priority: true, explicit: true }); // « Sous-titrer ce match » (exécuteur qui ne rend jamais la main)
+      expect(commentaryRunningMatchId()).toBe(M);
+      expect(dubManifest(M)).toMatchObject({ status: 'none' }); // pas de « le doublage suivra »
+    }
+    __setCommentaryRunnerForTests(null);
     publish(M, 0);
     publish(M, 1);
-    const runs = fakeDub();
-    expect(await enqueueRecentDubs()).toBe(0);
-    expect(enqueueDub(M)).toMatchObject({ queued: false }); // mise en file de fond directe : abandonnée
-    touchViewer(M, 10);
-    prioritizeDubOnView(M); // le match est regardé, VF doublée choisie dans le lecteur
-    expect(dubQueuePosition(M)).toBeNull();
-    await __dubIdle();
-    expect(runs).toEqual([]);
-    expect(dubManifest(M).status).toBe('none');
-
-    setVfMode('doublage');
-    prioritizeDubOnView(M);
-    await __dubIdle();
-    expect(runs).toEqual([{ matchId: M, chunks: [0, 1], explicit: false }]);
-    expect(dubManifest(M).status).toBe('ready');
-    publish(M2, 0);
-    expect(await enqueueRecentDubs()).toBe(1);
-    expect(dubQueuePosition(M2)).toBe(1); // doublage de fond : attend la fin de la lecture de M
-    expect(runs.map((r) => r.matchId)).toEqual([M]);
+    for (const mode of ['sous-titres', 'doublage'] as const) {
+      setVfMode(mode);
+      touchViewer(M, 10);
+      prioritizeDubOnView(M); // le match est regardé, VF doublée choisie dans le lecteur
+      expect(dubQueuePosition(M)).toBeNull();
+      await __dubIdle();
+      expect(runs).toEqual([]);
+      expect(dubManifest(M).status).toBe('none');
+    }
   });
 
-  it('sous-titres : la traduction en cours n’annonce pas de doublage (« le doublage suivra » seulement en mode doublage)', () => {
-    enqueueCommentary(M, { priority: true }); // exécuteur qui ne rend jamais la main
-    expect(commentaryRunningMatchId()).toBe(M);
-    expect(dubManifest(M).status).toBe('none');
-    setVfMode('doublage');
-    expect(dubManifest(M)).toMatchObject({ status: 'waiting', reason: 'traduction des commentaires en cours : le doublage suivra' });
-  });
-
-  it('passage en mode sous-titres : les doublages de fond en file sont abandonnés, celui en cours cède la place', async () => {
-    setVfMode('doublage');
-    publish(M, 0);
-    publish(M2, 0);
+  it('match regardé : un doublage DEMANDÉ passe en tête de file', async () => {
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    for (const id of [M, M2]) {
+      publish(id, 0);
+      publish(id, 1);
+    }
     const g = gate();
-    let ctl: DubControl | null = null;
-    const runs = fakeDub(async (id, c) => {
-      if (id !== M) return;
-      ctl = c;
-      await g.wait;
-    });
-    expect(enqueueDub(M).started).toBe(true);
-    expect(enqueueDub(M2)).toMatchObject({ queued: true, position: 1 });
-    expect(ctl!.yieldReason()).toBeNull();
-
-    setVfMode('sous-titres');
-    expect(ctl!.yieldReason()).toBe('window'); // au prochain tronçon, le travail de fond s'arrête
+    fakeDub(() => g.wait);
+    expect(requestDub(M2).started).toBe(true);
+    touchViewer(M, 10);
+    prioritizeDubOnView(M); // pas demandé : rien
+    expect(dubQueuePosition(M)).toBeNull();
+    expect(requestDub(M)).toMatchObject({ queued: true });
+    expect(dubQueuePosition(M)).toBe(1);
     g.open();
-    await __dubIdle();
-    expect(runs.map((r) => r.matchId)).toEqual([M]);
-    expect(dubQueuePosition(M2)).toBeNull();
-    expect(db.getDubChunks(M2)).toEqual([]);
+    await vi.waitFor(() => expect(dubManifest(M).status).toBe('ready'));
+    expect(dubManifest(M2).status).toBe('waiting'); // interrompu, il reprendra après la lecture de M
   });
 });
 
@@ -264,7 +244,7 @@ describe('« Doubler ce match » : demande explicite', () => {
     expect(r.translation).toBe('Traduction des commentaires lancée');
     expect(commentaryRunningMatchId()).toBe(M);
     expect(dubQueuePosition(M)).toBe(1);
-    expect(dubManifest(M)).toMatchObject({ status: 'waiting', reason: 'traduction des commentaires en cours : le doublage suivra' });
+    expect(dubManifest(M)).toMatchObject({ status: 'waiting', reason: 'traduction des commentaires en cours : le doublage suivra' }); // demandé : il suit
     expect(currentActivity().queued).toContainEqual(expect.objectContaining({ kind: 'doublage', match: expect.objectContaining({ id: M }) }));
 
     // Pas de sous-titres pendant un moment : le doublage reste en file (plusieurs passages de la file).

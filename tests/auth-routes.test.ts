@@ -191,7 +191,7 @@ describe('paramètres MiniMax (route)', () => {
         {
           minimaxApiKey: ` ${key} `,
           minimaxModel: 'speech-2.8-turbo',
-          minimaxVoices: { A: 'French_CasualMan', F: 'French_MovieLeadFemale' },
+          minimaxVoices: { A: 'French_CasualMan', F: 'French_Female Journalist' },
           minimaxTranslate: true,
           minimaxTranslateModel: 'MiniMax-M3',
         },
@@ -205,7 +205,7 @@ describe('paramètres MiniMax (route)', () => {
       keySet: true,
       keyMasked: 'sk-…wxyz',
       model: 'speech-2.8-turbo',
-      voices: { A: 'French_CasualMan', B4: 'French_MaleNarrator', B1: 'French_CasualMan', F: 'French_MovieLeadFemale' },
+      voices: { A: 'French_CasualMan', B4: 'French_MaleNarrator', B1: 'French_CasualMan', F: 'French_Female Journalist' },
       translate: true,
       translateModel: 'MiniMax-M3',
     });
