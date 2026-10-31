@@ -21,6 +21,12 @@ hex = "0.4"
 form_urlencoded = "1"
 percent-encoding = "2"
 libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "stream", "http2"] }
+scrypt = { version = "0.11", default-features = false }
+rand = "0.8"
+base64 = "0.22"
+subtle = "2"
+url = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
@@ -30,3 +36,13 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 4
 strip = true
+
+# scrypt (N = 2^15) est très lent sans optimisation : tests et dev en dépendent.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3

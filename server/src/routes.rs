@@ -13,7 +13,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 /// Garde d'accès + renouvellement du cookie de session, autour d'un gestionnaire.
-async fn guarded(
+pub(crate) async fn guarded(
     st: &AppState,
     uri: &OriginalUri,
     headers: &HeaderMap,
@@ -43,7 +43,7 @@ async fn guarded(
     res
 }
 
-fn db_error(e: String) -> Response {
+pub(crate) fn db_error(e: String) -> Response {
     eprintln!("[serveur] erreur SQLite : {e}");
     error(StatusCode::INTERNAL_SERVER_ERROR, &e)
 }

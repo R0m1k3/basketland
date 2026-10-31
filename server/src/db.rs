@@ -76,6 +76,21 @@ impl Db {
         res.map_err(|e| e.to_string())
     }
 
+    /// Connexion à part, ouverte pour l'occasion : pour un travail long
+    /// (scrypt…) qui ne doit pas bloquer la connexion partagée.
+    pub async fn run_own<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
+    ) -> DbResult<T> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let own = Db::new(path);
+            own.with(f)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     /// `with` depuis le code asynchrone.
     pub async fn run<T: Send + 'static>(
         &self,
@@ -329,4 +344,143 @@ pub fn extend_session(c: &Connection, token_hash: &str, expires_at: &str) -> rus
 pub fn delete_session(c: &Connection, token_hash: &str) -> rusqlite::Result<()> {
     c.execute("DELETE FROM sessions WHERE token_hash = ?1", [token_hash])
         .map(|_| ())
+}
+
+// ---------------------------------------------------------------- fiche d'un match
+
+pub fn get_match(c: &Connection, id: i64) -> rusqlite::Result<Option<MatchRow>> {
+    let mut st = c.prepare("SELECT * FROM matches WHERE id = ?1")?;
+    let mut rows = st.query_map([id], match_row)?;
+    rows.next().transpose()
+}
+
+/// Match terminé dont les statistiques ont déjà été récupérées.
+pub fn stats_synced(c: &Connection, id: i64) -> rusqlite::Result<bool> {
+    c.query_row(
+        "SELECT stats_synced_at IS NOT NULL FROM matches WHERE id = ?1",
+        [id],
+        |r| r.get(0),
+    )
+}
+
+fn parsed(s: Option<String>) -> Value {
+    s.and_then(|s| crate::jsval::js_parse(&s))
+        .unwrap_or(Value::Null)
+}
+
+/// `getTeamStats` : (équipe, stats).
+pub fn team_stats(c: &Connection, id: i64) -> rusqlite::Result<Vec<(String, Value)>> {
+    let mut st = c.prepare("SELECT * FROM team_stats WHERE match_id = ?1 ORDER BY team_abbr")?;
+    let rows = st.query_map([id], |r| {
+        Ok((
+            col_text(r, "team_abbr").unwrap_or_default(),
+            parsed(col_text(r, "stats_json")),
+        ))
+    })?;
+    rows.collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct PlayerStat {
+    pub team_abbr: String,
+    pub player_id: Value,
+    pub player_name: Value,
+    pub position: Value,
+    pub jersey: Value,
+    pub starter: bool,
+    pub stats: Value,
+}
+
+pub fn player_stats(c: &Connection, id: i64) -> rusqlite::Result<Vec<PlayerStat>> {
+    let mut st = c.prepare(
+        "SELECT * FROM player_stats WHERE match_id = ?1 ORDER BY team_abbr, starter DESC, rowid",
+    )?;
+    let rows = st.query_map([id], |r| {
+        Ok(PlayerStat {
+            team_abbr: col_text(r, "team_abbr").unwrap_or_default(),
+            player_id: sql_to_json(col(r, "player_id")),
+            player_name: sql_to_json(col(r, "player_name")),
+            position: sql_to_json(col(r, "position")),
+            jersey: sql_to_json(col(r, "jersey")),
+            starter: match col(r, "starter") {
+                SqlValue::Integer(i) => i != 0,
+                SqlValue::Real(f) => f != 0.0,
+                SqlValue::Text(s) => !s.is_empty(),
+                _ => false,
+            },
+            stats: parsed(col_text(r, "stats_json")),
+        })
+    })?;
+    rows.collect()
+}
+
+/// Lignes d'une requête, colonnes dans l'ordre du SELECT (comme `all()` de node:sqlite).
+fn rows_as_objects(c: &Connection, sql: &str, id: i64) -> rusqlite::Result<Vec<Value>> {
+    let mut st = c.prepare(sql)?;
+    let names: Vec<String> = st.column_names().into_iter().map(str::to_string).collect();
+    let rows = st.query_map([id], |r| {
+        let mut m = serde_json::Map::new();
+        for (i, n) in names.iter().enumerate() {
+            m.insert(n.clone(), sql_to_json(r.get::<_, SqlValue>(i)?));
+        }
+        Ok(Value::Object(m))
+    })?;
+    rows.collect()
+}
+
+pub fn leaders(c: &Connection, id: i64) -> rusqlite::Result<Vec<Value>> {
+    rows_as_objects(
+        c,
+        "SELECT team_abbr, category, label, player, value FROM match_leaders WHERE match_id = ?1",
+        id,
+    )
+}
+
+pub fn clips(c: &Connection, id: i64) -> rusqlite::Result<Vec<Value>> {
+    rows_as_objects(
+        c,
+        "SELECT id, match_id, video_ts, duration, text_fr, created_at FROM user_clips WHERE match_id = ?1 ORDER BY video_ts",
+        id,
+    )
+}
+
+// ---------------------------------------------------------------- cache clé/valeur
+
+/// `kvGet` : valeur en cache si plus récente que `max_age_ms` (`None` : sans limite).
+pub fn kv_get(
+    c: &Connection,
+    key: &str,
+    max_age_ms: Option<i64>,
+) -> rusqlite::Result<Option<Value>> {
+    let mut st = c.prepare("SELECT value, updated_at FROM kv_cache WHERE key = ?1")?;
+    let mut rows = st.query_map([key], |r| {
+        Ok((
+            col_text(r, "value").unwrap_or_default(),
+            col_text(r, "updated_at").unwrap_or_default(),
+        ))
+    })?;
+    let Some((value, updated)) = rows.next().transpose()? else {
+        return Ok(None);
+    };
+    if let Some(max) = max_age_ms {
+        // Date illisible : Date.parse → NaN, la comparaison échoue et la valeur est servie.
+        if let Some(at) = crate::time::parse_instant(&updated) {
+            if (chrono::Utc::now() - at).num_milliseconds() > max {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(crate::jsval::js_parse(&value))
+}
+
+pub fn kv_set(c: &Connection, key: &str, value: &Value) -> rusqlite::Result<()> {
+    c.execute(
+        "INSERT OR REPLACE INTO kv_cache (key, value, updated_at) VALUES (?1, ?2, ?3)",
+        [
+            key,
+            &value.to_string(),
+            &crate::time::iso_utc(chrono::Utc::now()),
+        ],
+    )
+    .map(|_| ())
 }

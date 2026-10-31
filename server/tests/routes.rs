@@ -18,8 +18,13 @@ CREATE TABLE matches (
   broadcast TEXT DEFAULT '', slug TEXT, video_ok_id TEXT, video_duration INTEGER, video_available INTEGER DEFAULT 0,
   video_checked_at TEXT, stats_synced_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, video_kind TEXT);
 CREATE TABLE ingest_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER DEFAULT 0, detail TEXT DEFAULT '');
-CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL, password_hash TEXT NOT NULL);
+CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', created_at TEXT NOT NULL DEFAULT 'x', last_login_at TEXT);
 CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE team_stats (match_id INTEGER NOT NULL, team_abbr TEXT NOT NULL, stats_json TEXT NOT NULL, PRIMARY KEY (match_id, team_abbr));
+CREATE TABLE player_stats (match_id INTEGER NOT NULL, team_abbr TEXT NOT NULL, player_id TEXT NOT NULL, player_name TEXT NOT NULL,
+  position TEXT DEFAULT '', jersey TEXT DEFAULT '', starter INTEGER DEFAULT 0, stats_json TEXT NOT NULL, PRIMARY KEY (match_id, player_id));
+CREATE TABLE match_leaders (match_id INTEGER NOT NULL, team_abbr TEXT NOT NULL, category TEXT NOT NULL, label TEXT, player TEXT, value TEXT);
+CREATE TABLE user_clips (id INTEGER PRIMARY KEY, match_id INTEGER NOT NULL, video_ts REAL NOT NULL, duration REAL, text_fr TEXT, created_at TEXT NOT NULL);
 ";
 
 struct Env {
@@ -293,7 +298,193 @@ async fn calendrier_groupe_par_jour() {
 #[tokio::test]
 async fn le_reste_part_a_node() {
     let env = setup();
-    let (s, _, v) = get(&env, "/api/matches/1", Some("jeton-frais")).await;
+    let (s, _, v) = get(&env, "/api/matches/1/replay", Some("jeton-frais")).await;
     assert_eq!(s, StatusCode::BAD_GATEWAY);
     assert!(v["error"].as_str().unwrap().contains("Node"));
+}
+
+#[tokio::test]
+async fn fiche_stats_et_clips() {
+    let env = setup();
+    let c = Connection::open(&env.path).unwrap();
+    c.execute_batch(
+        "UPDATE matches SET stats_synced_at = 'x' WHERE id = 1;
+         INSERT INTO team_stats VALUES (1, 'LAL', '{\"PTS\":101,\"FG%\":45.0}');
+         INSERT INTO player_stats VALUES (1, 'BOS', 'p2', 'Tatum', 'F', '0', 1, '{\"PTS\":\"30\"}');
+         INSERT INTO player_stats VALUES (1, 'LAL', 'p1', 'James', 'F', '23', 1, '{\"PTS\":\"28\"}');
+         INSERT INTO match_leaders VALUES (1, 'LAL', 'points', 'Points', 'James', '28');
+         INSERT INTO user_clips VALUES (5, 1, 12.5, 3, 'panier', 'x');",
+    )
+    .unwrap();
+    let tok = Some("jeton-frais");
+    let (s, _, v) = get(&env, "/api/matches/1", tok).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["id"], 1);
+    for (uri, code, msg) in [
+        ("/api/matches/abc", 400, "id invalide"),
+        ("/api/matches/99", 404, "match introuvable"),
+    ] {
+        let (s, _, v) = get(&env, uri, tok).await;
+        assert_eq!(s.as_u16(), code, "{uri}");
+        assert_eq!(v["error"], msg);
+    }
+    let (s, _, v) = get(&env, "/api/matches/1/stats", tok).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["available"], true);
+    // Visiteurs d'abord, puis domicile ; stats d'équipe absentes → {}.
+    assert_eq!(v["teams"][0]["abbr"], "BOS");
+    assert_eq!(v["teams"][0]["stats"], serde_json::json!({}));
+    assert_eq!(v["teams"][0]["players"][0]["name"], "Tatum");
+    assert_eq!(
+        v["teams"][1]["stats"],
+        serde_json::json!({ "PTS": 101, "FG%": 45 })
+    );
+    assert_eq!(v["teams"][1]["score"], 101);
+    assert_eq!(v["leaders"][0]["player"], "James");
+    let (_, _, v) = get(&env, "/api/matches/2/stats", tok).await;
+    assert_eq!(v["available"], false);
+    assert_eq!(v["reason"], "Statistiques disponibles à la fin du match");
+    let (_, _, v) = get(&env, "/api/matches/1/clips", tok).await;
+    assert_eq!(
+        v,
+        serde_json::json!({ "match_id": 1, "clips": [{ "id": 5, "match_id": 1, "video_ts": 12.5, "duration": 3, "text_fr": "panier", "created_at": "x" }], "implemented": false })
+    );
+    let (s, _, _) = get(&env, "/api/matches/1/clips", None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn stats_pas_encore_recuperees_relayees_a_node() {
+    let env = setup();
+    // Match terminé sans stats_synced_at : Node les récupère chez ESPN (ici injoignable → 502).
+    let (s, _, _) = get(&env, "/api/matches/1/stats", Some("jeton-frais")).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY);
+}
+
+async fn post(
+    env: &Env,
+    uri: &str,
+    body: Value,
+    cookie: Option<&str>,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    let mut b = Request::post(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::HOST, "nas:3012")
+        .header(header::ORIGIN, "http://nas:3012");
+    if let Some(c) = cookie {
+        b = b.header(header::COOKIE, format!("bl_session={c}"));
+    }
+    let res = router(env)
+        .oneshot(b.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let (parts, body) = res.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    (
+        parts.status,
+        parts.headers,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn session_of(h: &axum::http::HeaderMap) -> String {
+    let c = h[header::SET_COOKIE].to_str().unwrap();
+    c.strip_prefix("bl_session=")
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn comptes_de_bout_en_bout() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("basketland.db");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(SCHEMA)
+        .unwrap();
+    let env = Env { _dir: dir, path };
+    basketland_server::accounts::reset_attempts();
+
+    let (s, h, v) = post(&env, "/api/auth/setup", serde_json::json!({ "username": " Admin ", "password": "motdepasse", "confirm": "motdepasse" }), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["user"],
+        serde_json::json!({ "id": 1, "username": "admin", "role": "admin" })
+    );
+    let admin = session_of(&h);
+    let (s, _, v) = post(&env, "/api/auth/setup", serde_json::json!({ "username": "autre", "password": "motdepasse", "confirm": "motdepasse" }), None).await;
+    assert_eq!(
+        (s, v["error"].as_str().unwrap()),
+        (
+            StatusCode::FORBIDDEN,
+            "Le compte administrateur existe déjà."
+        )
+    );
+
+    let (s, _, v) = post(&env, "/api/admin/users", serde_json::json!({ "action": "create", "username": "lea", "password": "motdepasse", "role": "user" }), Some(&admin)).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v["users"].as_array().unwrap().len(), 2);
+
+    let (s, h, v) = post(
+        &env,
+        "/api/auth/login",
+        serde_json::json!({ "username": "LEA", "password": "motdepasse", "next": "/matchs/2" }),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["next"], "/matchs/2");
+    let lea = session_of(&h);
+    let (s, _, _) = get(&env, "/api/admin/users", Some(&lea)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    for _ in 0..5 {
+        let (s, _, _) = post(
+            &env,
+            "/api/auth/login",
+            serde_json::json!({ "username": "lea", "password": "mauvais" }),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+    let (s, _, v) = post(
+        &env,
+        "/api/auth/login",
+        serde_json::json!({ "username": "lea", "password": "motdepasse" }),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(v["error"], "Trop de tentatives. Réessayez dans 60 s.");
+
+    // Réinitialisation par l'administrateur : la session de Léa est révoquée.
+    let (s, _, _) = post(
+        &env,
+        "/api/admin/users",
+        serde_json::json!({ "action": "reset-password", "id": 2, "password": "nouveaumdp" }),
+        Some(&admin),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _, _) = get(&env, "/api/matches", Some(&lea)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+    let (s, h, _) = post(
+        &env,
+        "/api/auth/logout",
+        serde_json::json!({}),
+        Some(&admin),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        h[header::SET_COOKIE],
+        "bl_session=; Path=/; Max-Age=0; HttpOnly; SameSite=lax"
+    );
+    let (s, _, _) = get(&env, "/api/admin/users", Some(&admin)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
 }
