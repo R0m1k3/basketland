@@ -17,13 +17,19 @@ RUN npm run build
 # portées en Rust et relaie tout le reste à Next.js (port interne 3013).
 # Dépendances compilées dans une couche à part : un changement du code seul
 # ne refait pas leur compilation.
+#
+# OCR du bandeau de score (analyse vidéo) : libtesseract 5 natif, lié par son
+# API C (fonction cargo `ocr`, voir server/src/media/tesseract.rs).
 FROM rust:1.96-slim-bookworm AS rust
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libtesseract-dev libleptonica-dev \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY server/Cargo.toml server/Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && echo '' > src/lib.rs \
- && cargo build --release --locked && rm -rf src
+ && cargo build --release --locked --features ocr && rm -rf src
 COPY server/src ./src
-RUN touch src/main.rs src/lib.rs && cargo build --release --locked \
+RUN touch src/main.rs src/lib.rs && cargo build --release --locked --features ocr \
  && install -m 755 target/release/basketland-server /basketland-server
 
 # ---------------------------------------------------------------- Ollama
@@ -106,9 +112,19 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # `su`, ni `runuser`) — vérifié en inspectant la couche système de l'image
 # officielle. Sans ce paquet, l'entrypoint échoue au démarrage et le
 # conteneur ne démarre pas du tout.
+#
+# `libtesseract5` : OCR natif du serveur Rust (analyse vidéo), avec le MÊME
+# modèle de langue que tesseract.js (`eng.traineddata` 4.0.0_best_int de
+# @tesseract.js-data/eng, copié plus bas) : pas de paquet tesseract-ocr-eng.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 \
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 libtesseract5 \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz /usr/share/basketland/tessdata/
+RUN gunzip /usr/share/basketland/tessdata/eng.traineddata.gz
+# Un seul fil OpenMP, comme tesseract.js (WASM) : l'analyse est une tâche de
+# fond en priorité basse, elle ne doit pas occuper tous les cœurs du NAS.
+ENV TESSDATA_PREFIX=/usr/share/basketland/tessdata
+ENV OMP_THREAD_LIMIT=1
 
 # Services embarqués de traduction des commentaires (voir src/lib/localAi.ts)
 # et voix du doublage (src/lib/voiceAi.ts) : démarrés à la demande par

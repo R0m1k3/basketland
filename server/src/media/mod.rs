@@ -20,10 +20,15 @@
 //! | [`voice_minimax`] | `voiceMinimax.ts` |
 //! | [`voice_ai`] | `voiceAi.ts` (Qwen3-TTS embarqué) |
 //! | [`video_scan`] | `videoScan.ts` |
+//! | [`ocr`] | `ocr.ts` (étape 7, non branché) |
+//! | [`scoreboard`] | `scoreboard.ts` (étape 7, non branché) |
+//! | `tesseract` | moteur OCR natif (fonction cargo `ocr`) |
+//! | [`analysis`] | `analysis.ts` (file d'analyse vidéo, étape 7, non branchée) |
 //!
 //! Les réglages (`settings.ts`) sont dans [`crate::settings`].
 
 pub mod abort;
+pub mod analysis;
 pub mod audio;
 pub mod audio_energy;
 pub mod commentary;
@@ -32,8 +37,12 @@ pub mod commentary_cues;
 pub mod dub;
 pub mod local_ai;
 pub mod night_window;
+pub mod ocr;
 pub mod proc;
 pub mod roster_names;
+pub mod scoreboard;
+#[cfg(feature = "ocr")]
+pub mod tesseract;
 pub mod video_scan;
 pub mod viewers;
 pub mod voice_ai;
