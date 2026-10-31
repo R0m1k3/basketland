@@ -7,8 +7,10 @@ import TeamPage from '@/components/pages/TeamPage';
  *
  * `Page` est un composant serveur : un export par défaut qui serait
  * directement le composant client ferait ignorer `generateStaticParams`.
+ * `dynamicParams` reste à sa valeur par défaut : à l'export, seuls les
+ * paramètres de `generateStaticParams` sont produits ; en développement
+ * (`next dev`, sans export), tout identifiant est rendu.
  */
-export const dynamicParams = false;
 
 export function generateStaticParams() {
   return [{ abbr: '_' }];

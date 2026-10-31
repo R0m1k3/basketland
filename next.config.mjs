@@ -9,10 +9,14 @@
  * `_.txt`), que Rust sert pour tout identifiant ; la page lit le vrai dans
  * l'URL.
  *
+ * En développement (`next dev` derrière Rust), pas d'export : les routes
+ * dynamiques acceptent alors tout identifiant (l'export n'accepte que ceux de
+ * `generateStaticParams`, et Rust n'y est pas là pour servir la page `_`).
+ *
  * @type {import('next').NextConfig}
  */
 const nextConfig = {
-  output: 'export',
+  output: process.env.NODE_ENV === 'development' ? undefined : 'export',
   trailingSlash: false,
   poweredByHeader: false,
   reactStrictMode: true,
