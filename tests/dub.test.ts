@@ -36,15 +36,17 @@ import {
   placeClips,
   prioritizeDubOnView,
   releaseGpuForTranslation,
+  requestDub,
   rolesUsed,
   runDub,
   speechRanges,
+  stopDub,
   voiceFor,
   type DubControl,
   type DubDeps,
   type VoiceSessionLike,
 } from '../src/lib/dub';
-import { GET as getDub } from '../src/app/api/matches/[id]/dub/route';
+import { GET as getDub, POST as postDub } from '../src/app/api/matches/[id]/dub/route';
 import { GET as getDubAudio } from '../src/app/api/matches/[id]/dub/[idx]/route';
 import { freshDb, insertMatch } from './helpers/db';
 
@@ -997,6 +999,93 @@ describe('doublage et sous-titres retraduits', () => {
     publish(M, 0, CHUNK0); // retraduit (p. ex. « Relancer la traduction »)
     expect(db.getDubChunks(M)).toEqual([]);
     expect(db.getDubTrack(M)?.complete).toBe(0);
+  });
+});
+
+describe('arrêt du doublage', () => {
+  it('pendant le doublage : interrompu, ce qui est doublé reste, ne repart plus tout seul ; « Reprendre » le relance', async () => {
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    publish(M, 0, CHUNK0);
+    publish(M, 1, CHUNK1);
+    let stop: ReturnType<typeof stopDub> | null = null;
+    // Arrêt au milieu du 2e tronçon (le 1er est déjà publié).
+    const { deps } = fake({ onSynth: (n) => n === CHUNK0.length + 1 && (stop = stopDub(M)) });
+    viaQueue(deps);
+    touchViewer(M, 0);
+    expect(requestDub(M).started).toBe(true);
+    await __dubIdle();
+    expect(stop).toEqual({ stopped: true, message: expect.stringContaining('arrêté') });
+    expect(db.getDubChunks(M)).toHaveLength(1);
+    expect(dubManifest(M)).toMatchObject({ status: 'partial', reason: 'doublage arrêté', stopped: true });
+    expect(getDubRecord(M)).toMatchObject({ ok: true, failures: 0, stopped: true });
+    expect(dubActivity().running).toBeNull();
+
+    // Doublage automatique (mode « doublage ») : ni la lecture ni le travail de fond ne le relancent.
+    prioritizeDubOnView(M);
+    expect(await enqueueRecentDubs()).toBe(0);
+    expect(dubQueuePosition(M)).toBeNull();
+    expect(dubManifest(M).status).toBe('partial');
+
+    // « Reprendre le doublage » : il repart et finit.
+    expect(requestDub(M).started).toBe(true);
+    expect(getDubRecord(M)?.stopped).toBeUndefined();
+    await __dubIdle();
+    expect(db.getDubChunks(M)).toHaveLength(2);
+    expect(dubManifest(M).status).not.toBe('running');
+    expect(dubManifest(M).stopped).toBeUndefined();
+  });
+
+  it('en file : retiré de la file ; rien à arrêter : sans effet', async () => {
+    process.env.COMMENTARY_VIEWER_IDLE_MS = '60000';
+    const t2 = { ...TRACK, ok_id: db.getMatch(M2)!.video_ok_id! };
+    publish(M, 0, CHUNK0);
+    publish(M2, 0, CHUNK0, t2);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    __setDubRunnerForTests(async () => {
+      await gate;
+      return { ok: true, reason: 'ok' };
+    });
+    expect(stopDub(M2)).toEqual({ stopped: false, message: 'Aucun doublage en cours pour ce match' });
+    enqueueDub(M);
+    enqueueDub(M2, { explicit: true });
+    expect(dubQueuePosition(M2)).toBe(1);
+    expect(stopDub(M2).stopped).toBe(true);
+    expect(dubQueuePosition(M2)).toBeNull();
+    expect(dubManifest(M2)).toMatchObject({ status: 'none', stopped: true });
+    expect(dubManifest(M).status).toBe('running'); // l'autre match continue
+    release();
+    await __dubIdle();
+    expect(getDubRecord(M)?.ok).toBe(true);
+  });
+
+  it('API : action « stop »', async () => {
+    publish(M, 0, CHUNK0);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    __setDubRunnerForTests(async (_job, _p, sig) => {
+      await Promise.race([gate, new Promise((r) => sig.addEventListener('abort', r))]);
+      return { ok: true, reason: 'ok' };
+    });
+    enqueueDub(M, { explicit: true });
+    const post = (body: unknown) =>
+      postDub(
+        new Request(`http://nas.local:3000/api/matches/${M}/dub`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://nas.local:3000', host: 'nas.local:3000' },
+          body: JSON.stringify(body),
+        }),
+        params(M),
+      );
+    const r = await post({ action: 'stop' });
+    expect(r.status).toBe(200);
+    const d = await r.json();
+    expect(d.dub).toMatchObject({ status: 'none', stopped: true });
+    expect(d.message).toContain('arrêté');
+    expect((await post({ action: 'pause' })).status).toBe(400);
+    release();
+    await __dubIdle();
+    expect(getDubRecord(M)).toMatchObject({ ok: true, stopped: true }); // l'arrêt n'est pas compté comme un succès ou un échec
   });
 });
 

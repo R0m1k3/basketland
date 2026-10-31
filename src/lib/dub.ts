@@ -762,6 +762,12 @@ export interface DubRecord {
   reason: string;
   /** Piste traduite doublée (db.commentaryKey). */
   key: string | null;
+  /**
+   * Arrêté à la demande (« Arrêter le doublage ») : plus aucune mise en file
+   * automatique (lecture, fond) tant qu'on ne le relance pas (« Reprendre le
+   * doublage », `requestDub`).
+   */
+  stopped?: boolean;
 }
 
 const recordKey = (matchId: number) => `dub:${matchId}`;
@@ -777,6 +783,7 @@ export function getDubRecord(matchId: number): DubRecord | undefined {
 
 /** Une mise en file AUTOMATIQUE est-elle permise maintenant ? */
 export function dubRetryAllowed(rec: DubRecord | undefined, key: string | null, now = Date.now()): boolean {
+  if (rec?.stopped) return false; // arrêté à la demande : seule une demande explicite le relance
   if (!rec || rec.ok) return true;
   if (key && rec.key && key !== rec.key) return true; // nouvelle piste traduite : on repart de zéro
   if (quickRetry(rec.kind)) return now - Date.parse(rec.at) >= networkBackoffMs(rec.netFailures ?? 1);
@@ -1194,6 +1201,8 @@ interface QueueState {
     preempted: boolean;
     /** Interrompu pour rendre la carte graphique à une traduction : remis en tête de file. */
     gpuYield?: boolean;
+    /** Arrêté à la demande (`stopDub`) : ni remis en file, ni compté comme échec. */
+    stopped?: boolean;
   } | null;
   runner: DubRunner | null;
   idle: Promise<void>;
@@ -1300,7 +1309,7 @@ export interface DubEnqueueResult {
 export function enqueueDub(matchId: number, opts: { priority?: boolean; explicit?: boolean } = {}): DubEnqueueResult {
   const disabled = dubDisabledReasonSync();
   if (disabled) return { queued: false, started: false, message: `Doublage inactif : ${disabled}` };
-  const running = st.running?.job;
+  const running = st.running?.stopped ? undefined : st.running?.job; // un doublage qui s'arrête ne compte plus
   if (running?.matchId === matchId) {
     if (opts.explicit) running.explicit = true; // le travail en cours devient explicite : il ira jusqu'au bout
     return { queued: false, started: true, message: 'Doublage déjà en cours' };
@@ -1441,6 +1450,11 @@ function start(job: Job): void {
     )
     .finally(() => clearTimeout(watchdog))
     .then((res) => {
+      if (state.stopped) {
+        endLog(true, 'arrêté à la demande');
+        console.log(`[doublage] match ${job.matchId} arrêté à la demande ; ce qui est doublé reste disponible`);
+        return;
+      }
       if (state.gpuYield) {
         endLog(true, 'interrompu : une traduction a besoin de la carte graphique');
         if (!st.queue.some((j) => j.matchId === job.matchId)) st.queue.unshift({ ...job });
@@ -1516,6 +1530,43 @@ export function prioritizeDubOnView(matchId: number): void {
   enqueueDub(matchId, { priority: true });
 }
 
+export interface DubStopResult {
+  stopped: boolean;
+  message: string;
+}
+
+/**
+ * « Arrêter le doublage » (tout utilisateur, depuis la fiche) : le doublage
+ * de ce match quitte la file, ou s'interrompt s'il tourne ; les tronçons
+ * déjà doublés restent jouables. Il ne repart plus tout seul (lecture du
+ * match, travail de fond) : seul « Reprendre le doublage » (`requestDub`)
+ * le relance. La traduction des commentaires n'est pas touchée.
+ */
+export function stopDub(matchId: number): DubStopResult {
+  const r = st.running?.job.matchId === matchId && !st.running.stopped ? st.running : null;
+  const queued = dubQueuePosition(matchId) !== null;
+  // Doublage automatique qui attend la traduction de ce match : arrêté aussi (il ne partira pas).
+  const awaited = autoDubEnabled() && translationPending(matchId) && !dubComplete(matchId);
+  if (!r && !queued && !awaited) return { stopped: false, message: 'Aucun doublage en cours pour ce match' };
+  st.queue = st.queue.filter((j) => j.matchId !== matchId);
+  const t = currentCommentaryTrack(matchId);
+  db.kvSet(recordKey(matchId), {
+    at: new Date().toISOString(),
+    ok: true,
+    failures: 0,
+    reason: 'doublage arrêté',
+    key: t ? db.commentaryKey(t) : null,
+    stopped: true,
+  } satisfies DubRecord);
+  console.log(`[doublage] match ${matchId} : arrêt demandé`);
+  if (r) {
+    r.stopped = true;
+    r.abort();
+  }
+  pump();
+  return { stopped: true, message: 'Doublage arrêté. Les passages déjà doublés restent disponibles.' };
+}
+
 /** Doublage complet et à jour (piste traduite complète, tous ses tronçons doublés) ? */
 function dubComplete(matchId: number): boolean {
   const t = currentCommentaryTrack(matchId);
@@ -1539,6 +1590,12 @@ export interface DubRequestResult extends DubEnqueueResult {
 export function requestDub(matchId: number, opts: { reset?: boolean } = {}): DubRequestResult {
   const disabled = dubDisabledReasonSync();
   if (disabled) return { queued: false, started: false, message: `Doublage inactif : ${disabled}` };
+  const rec = getDubRecord(matchId);
+  if (rec?.stopped) {
+    // Repris après un arrêt : les mises en file automatiques redeviennent permises.
+    const { stopped: _stopped, ...rest } = rec;
+    db.kvSet(recordKey(matchId), { ...rest, at: new Date().toISOString(), reason: 'doublage repris' } satisfies DubRecord);
+  }
   if (opts.reset) {
     if (st.running?.job.matchId === matchId) return { queued: false, started: true, message: 'Doublage en cours : relance possible une fois terminé' };
     db.deleteDub(matchId);
@@ -1590,7 +1647,7 @@ export interface DubActivity {
 }
 
 export function dubActivity(): DubActivity {
-  const r = st.running;
+  const r = st.running?.stopped ? null : st.running;
   return {
     running: r ? { matchId: r.job.matchId, done: r.progress?.done ?? 0, total: r.progress?.total ?? 0, watched: viewerActive(r.job.matchId) } : null,
     queued: st.queue.map((j) => j.matchId),
@@ -1618,6 +1675,8 @@ export interface DubManifest {
   progress?: { done: number; total: number };
   /** Étape en cours (`running`) ou téléchargement des voix qui avance pendant l'attente (`waiting`), en clair. */
   step?: string;
+  /** Arrêté à la demande (`none` ou `partial`) : « Reprendre le doublage » le relance. */
+  stopped?: true;
   chunks: DubManifestChunk[];
   voices: Partial<Record<VoiceRole, string>>;
 }
@@ -1650,7 +1709,7 @@ export function dubManifest(matchId: number): DubManifest {
   if (valid) for (const r of parseJson<string[]>(dub.voices, [])) if (r in ROLE_LABELS) voices[r as VoiceRole] = ROLE_LABELS[r as VoiceRole];
   const base = { chunks, voices };
   const download = downloadStep();
-  if (st.running?.job.matchId === matchId) {
+  if (st.running?.job.matchId === matchId && !st.running.stopped) {
     const p = st.running.progress;
     const step = download ?? p?.step;
     return { status: 'running', ...(p && p.total ? { progress: { done: p.done, total: p.total } } : {}), ...(step ? { step } : {}), ...base };
@@ -1669,6 +1728,8 @@ export function dubManifest(matchId: number): DubManifest {
     return { status: 'waiting', reason, ...(download ? { step: download } : {}), ...base };
   }
   if (valid && dub.complete === 1) return { status: 'ready', ...base };
+  const rec = getDubRecord(matchId);
+  if (rec?.stopped) return { status: chunks.length ? 'partial' : 'none', reason: 'doublage arrêté', stopped: true, ...base };
   // « Le doublage suivra » seulement s'il suit vraiment : doublage automatique (mode « doublage »).
   const translating = autoDubEnabled() && translationPending(matchId);
   if (!track) {
@@ -1676,7 +1737,6 @@ export function dubManifest(matchId: number): DubManifest {
       ? { status: 'waiting', reason: 'traduction des commentaires en cours : le doublage suivra', ...base }
       : { status: 'none', reason: 'pas encore de sous-titres français', ...base };
   }
-  const rec = getDubRecord(matchId);
   const failed = rec && !rec.ok && (!rec.key || rec.key === db.commentaryKey(track)) ? rec.reason : undefined;
   if (chunks.length) {
     const reason = failed ?? (translating ? 'la suite sera doublée après la traduction' : undefined);

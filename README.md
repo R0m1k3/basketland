@@ -388,8 +388,13 @@ part en « VF doublée » tant que l'utilisateur n'a rien choisi ; en mode
 Sous-titres, aucun doublage automatique (ceux déjà en file sont abandonnés),
 mais « Doubler ce match » double un match précis. Un doublage demandé ainsi
 va jusqu'au bout même si l'on quitte la fiche (en pause pendant la lecture
-d'un autre match et pendant une traduction) ; les administrateurs ont en
-plus « Relancer le doublage » (efface le doublage et le refait).
+d'un autre match et pendant une traduction). **« Arrêter le doublage »**
+(tout utilisateur, pendant le doublage ou son attente) le retire de la file
+ou l'interrompt, par exemple pour passer à une autre vidéo : les passages
+déjà doublés restent, la traduction continue, et il ne repart plus tout
+seul (même en doublage automatique) ; « Reprendre le doublage » le relance.
+Les administrateurs ont en plus « Relancer le doublage » (efface le
+doublage et le refait).
 
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
 et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
