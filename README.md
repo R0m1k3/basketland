@@ -619,9 +619,30 @@ diffusé) et un commentateur qui imiterait une femme en fausset plus de 10 s
 d'affilée dès ses premières répliques la prendrait ; certains noms (Shai,
 Jokic) gagneraient à un lexique de prononciation.
 
+**Voix MiniMax (en ligne, facultatif)** : avec une clé API MiniMax
+(`MINIMAX_API_KEY`), les répliques sont dites par les **voix françaises du
+catalogue MiniMax** (`speech-2.8-hd` par défaut) au lieu de Qwen3-TTS :
+meilleure qualité, rien à télécharger (2,5 Go en moins) et surtout **plus de
+carte graphique** pour la synthèse. Le doublage tourne alors en même temps
+que les traductions au lieu de leur céder la place. L'analyse des voix
+(empreintes, genre), qui répartit les répliques entre les commentateurs,
+reste locale, sur le processeur (`voice_worker.py --embed-only`, ~150 Mo de
+modèles). Voix par défaut : `A` commentateur `French_Male_Speech_New`,
+`B4` consultant `French_MaleNarrator`, `B1` troisième voix
+`French_CasualMan`, `F` voix féminine `French_FemaleAnchor`. La
+consommation se compte en caractères (abonnement ou crédit MiniMax) : de
+l'ordre de 60 000 à 100 000 caractères par match doublé.
+
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `DUB_DISABLED` | — | `1` désactive le doublage. |
+| `MINIMAX_API_KEY` | — | Clé API MiniMax : voix du doublage par MiniMax (voir plus haut). Sans clé, Qwen3-TTS embarqué. |
+| `TTS_ENGINE` | auto | `minimax` ou `local` (Qwen3-TTS). Auto : MiniMax si `MINIMAX_API_KEY` est défini. |
+| `MINIMAX_TTS_MODEL` | `speech-2.8-hd` | Modèle de voix MiniMax (`speech-2.8-turbo` : plus rapide et moins cher). |
+| `MINIMAX_VOICE_A`, `MINIMAX_VOICE_B4`, `MINIMAX_VOICE_B1`, `MINIMAX_VOICE_F` | voix françaises ci-dessus | `voice_id` MiniMax de chaque rôle (liste « System Voice ID » de la documentation MiniMax) ; vide : rôle retiré (repli sur une autre voix). |
+| `MINIMAX_TTS_SPEED` | `1` | Débit de parole MiniMax (0,5 à 2). |
+| `MINIMAX_API_URL` | `https://api.minimax.io` | Serveur de l'API (p. ex. `https://api-uw.minimax.io`). |
+| `TTS_EMBED_DEVICE` | `cpu` | Avec MiniMax : appareil de l'analyse des voix (`cpu`, ou `cuda`, le doublage attend alors de nouveau le GPU). |
 | `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` | Modèle Qwen3-TTS (dépôt Hugging Face ou dossier local), de type « Base » (clonage de voix). |
 | `TTS_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `VOICES_DIR` | `/app/assets/voices` | Dossier des voix : un sous-dossier par voix avec `reference.wav`, `reference.txt` et `voice.json`. |

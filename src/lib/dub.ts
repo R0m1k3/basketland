@@ -21,7 +21,9 @@
  * GPU PARTAGÉ : le doublage ne tourne jamais en même temps qu'une
  * traduction ou une analyse vidéo. Si l'une démarre, le doublage ferme son
  * moteur de voix à la prochaine réplique (ou au prochain tronçon) et se
- * remet en file ; il reprend quand le GPU est libre. Le téléchargement des
+ * remet en file ; il reprend quand le GPU est libre. Avec la synthèse en
+ * ligne (MiniMax, voir voiceMinimax.ts), le doublage n'utilise pas le GPU et
+ * tourne en même temps que les traductions. Le téléchargement des
  * modèles de voix (premier usage, ~2,5 Go) n'a pas besoin du GPU : il part
  * dès la mise en file, avance pendant l'attente, et n'est jamais interrompu
  * quand le doublage cède la place. La fiche voit l'étape en cours (manifeste
@@ -118,13 +120,20 @@ export interface VoiceEngine {
   prepare?(): Promise<void>;
   /** Téléchargement des modèles en cours (octets), sinon null. */
   download?(): { done: number; total: number } | null;
+  /**
+   * Le doublage occupe-t-il la carte graphique ? Non avec la synthèse en
+   * ligne (MiniMax) : il ne cède alors plus la place aux traductions et
+   * analyses. Absent : oui.
+   */
+  usesGpu?(): boolean;
 }
 
 interface VoiceAiModule {
-  VoiceSession: { open(signal?: AbortSignal): Promise<VoiceSessionLike> };
+  openVoiceSession(signal?: AbortSignal): Promise<VoiceSessionLike>;
   voiceConfig(): { disabledReason?: string };
   prepareVoiceModels(): Promise<void>;
   voiceModelsDownload(): { done: number; total: number } | null;
+  voiceUsesGpu(): boolean;
 }
 
 interface EngineState {
@@ -151,9 +160,10 @@ async function loadEngine(): Promise<VoiceEngine | null> {
       const m: VoiceAiModule = await import('./voiceAi');
       eng.engine = {
         config: () => m.voiceConfig(),
-        open: (signal) => m.VoiceSession.open(signal),
+        open: (signal) => m.openVoiceSession(signal),
         prepare: () => m.prepareVoiceModels(),
         download: () => m.voiceModelsDownload(),
+        usesGpu: () => m.voiceUsesGpu(),
       };
       eng.loadError = null;
       return eng.engine;
@@ -919,7 +929,7 @@ export async function runDub(
         step('extraction du son d’origine');
         await extract(exStart, Math.ceil((exEnd - exStart) * 10) / 10, audio);
         yieldCheck();
-        if (!session) step('démarrage du moteur de voix (chargement du modèle sur la carte graphique)');
+        if (!session) step('démarrage du moteur de voix');
         const voice = await openSession();
         step('reconnaissance des voix des commentateurs');
         // 2. Empreinte de chaque réplique ; en échec, voix de la précédente.
@@ -1117,6 +1127,19 @@ export function gpuBusy(): boolean {
   return gpuHolder(0) !== null;
 }
 
+/** Le moteur de voix utilise-t-il la carte graphique ? (Moteur pas encore chargé : oui, par prudence.) */
+function dubUsesGpu(): boolean {
+  const e = eng.override ?? eng.engine;
+  try {
+    return e?.usesGpu?.() ?? true;
+  } catch {
+    return true;
+  }
+}
+
+/** Le doublage doit-il attendre la carte graphique ? Seulement si son moteur s'en sert et qu'elle est prise. */
+const gpuBlocksDub = () => dubUsesGpu() && gpuBusy();
+
 /** Ce qui occupe le GPU, en clair et vu depuis le match `matchId` (« la traduction de ce match »…), sinon null. */
 function gpuHolder(matchId: number): string | null {
   const c = commentaryActivity().running;
@@ -1157,7 +1180,7 @@ const waitsForSubtitles = (job: Job) => !!job.explicit && !hasDubWork(job.matchI
 function controlFor(job: Job): DubControl {
   return {
     yieldReason: () => {
-      if (gpuBusy()) return 'gpu';
+      if (gpuBlocksDub()) return 'gpu';
       if (viewerActive(job.matchId)) return null;
       // Le spectateur est parti (ou travail de fond) : on continue seulement en tâche de fond permise.
       if (someoneWatching(job.matchId)) return 'viewer';
@@ -1247,6 +1270,7 @@ let repumpTimer: NodeJS.Timeout | undefined;
 export function releaseGpuForTranslation(maxWaitMs = 20_000): Promise<void> | null {
   const r = st.running;
   if (!r) return null; // rien à libérer : la traduction démarre aussitôt
+  if (!dubUsesGpu()) return null; // synthèse en ligne (MiniMax) : les deux tournent ensemble
   r.gpuYield = true;
   r.abort();
   return (async () => {
@@ -1269,7 +1293,7 @@ function pump(): void {
   if (!st.running && st.queue.length) {
     if (dubDisabledReasonSync()) st.queue.length = 0;
     st.queue = st.queue.filter((j) => !outsideWindow(j));
-    if (st.queue.length && gpuBusy()) scheduleRepump(); // GPU pris : on attend sa libération
+    if (st.queue.length && gpuBlocksDub()) scheduleRepump(); // GPU pris : on attend sa libération
     else {
       while (!st.running && st.queue.length) {
         // Premier travail qui peut partir : ceux des spectateurs toujours, ceux de fond quand personne ne regarde ;
@@ -1475,7 +1499,7 @@ export function dubActivity(): DubActivity {
   return {
     running: r ? { matchId: r.job.matchId, done: r.progress?.done ?? 0, total: r.progress?.total ?? 0, watched: viewerActive(r.job.matchId) } : null,
     queued: st.queue.map((j) => j.matchId),
-    waitingForGpu: !r && st.queue.length > 0 && gpuBusy(),
+    waitingForGpu: !r && st.queue.length > 0 && gpuBlocksDub(),
   };
 }
 
@@ -1539,7 +1563,7 @@ export function dubManifest(matchId: number): DubManifest {
   const position = dubQueuePosition(matchId);
   if (position) {
     const job = st.queue[position - 1];
-    const holder = gpuHolder(matchId);
+    const holder = dubUsesGpu() ? gpuHolder(matchId) : null;
     const reason = waitsForSubtitles(job)
       ? 'traduction des commentaires en cours : le doublage suivra'
       : holder

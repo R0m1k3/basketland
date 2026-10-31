@@ -27,12 +27,18 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { modelsDir, stopChild } from './localAi';
 import { lowerPriority } from './procPriority';
+import { minimaxConfig, MinimaxVoiceSession } from './voiceMinimax';
 
 export const DEFAULT_TTS_MODEL = 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
 
+/** Moteur de synthèse : Qwen3-TTS embarqué (GPU) ou API MiniMax (voiceMinimax.ts). */
+export type VoiceEngineName = 'local' | 'minimax';
+
 export interface VoiceConfig {
   disabledReason?: string;
+  engine: VoiceEngineName;
   model: string;
+  /** Appareil du processus Python (Qwen3-TTS, ou seulement l'analyse des voix avec MiniMax). */
   device: string;
   voicesDir: string;
   python: string;
@@ -63,19 +69,50 @@ function workerPath(): string {
   return process.env.TTS_WORKER || path.join(process.cwd(), 'scripts', 'voice_worker.py');
 }
 
+/**
+ * Moteur choisi : `TTS_ENGINE` ('minimax' ou 'local'), sinon MiniMax dès que
+ * `MINIMAX_API_KEY` est défini, sinon Qwen3-TTS embarqué.
+ */
+export function voiceEngineName(): VoiceEngineName {
+  const want = process.env.TTS_ENGINE?.trim().toLowerCase();
+  if (want === 'minimax' || want === 'local') return want;
+  return process.env.MINIMAX_API_KEY?.trim() ? 'minimax' : 'local';
+}
+
 export function voiceConfig(): VoiceConfig {
   const voicesDir = process.env.VOICES_DIR || defaultVoicesDir();
+  const engine = voiceEngineName();
   const cfg: VoiceConfig = {
+    engine,
     model: process.env.TTS_MODEL || DEFAULT_TTS_MODEL,
-    device: process.env.TTS_DEVICE || 'auto',
+    // Avec MiniMax, le processus local ne fait que l'analyse des voix : le processeur suffit.
+    device: engine === 'minimax' ? process.env.TTS_EMBED_DEVICE || 'cpu' : process.env.TTS_DEVICE || 'auto',
     voicesDir,
     python: process.env.TTS_PYTHON || (fs.existsSync('/opt/tts/bin/python') ? '/opt/tts/bin/python' : 'python3'),
     modelsDir: modelsDir(),
   };
   if (process.env.DUB_DISABLED === '1') cfg.disabledReason = 'doublage désactivé (DUB_DISABLED=1)';
+  else if (engine === 'minimax' && !minimaxConfig().key) cfg.disabledReason = 'clé MiniMax absente (MINIMAX_API_KEY)';
+  else if (engine === 'minimax' && !Object.keys(minimaxConfig().voices).length) cfg.disabledReason = 'aucune voix MiniMax configurée (MINIMAX_VOICE_A…)';
   else if (!fs.existsSync(workerPath())) cfg.disabledReason = `moteur de voix introuvable (${workerPath()})`;
-  else if (listVoices(voicesDir).length === 0) cfg.disabledReason = `aucune voix dans ${voicesDir}`;
+  else if (engine === 'local' && listVoices(voicesDir).length === 0) cfg.disabledReason = `aucune voix dans ${voicesDir}`;
   return cfg;
+}
+
+/** Le doublage occupe-t-il la carte graphique (Qwen3-TTS, ou analyse des voix placée sur le GPU) ? */
+export function voiceUsesGpu(): boolean {
+  return voiceConfig().device !== 'cpu';
+}
+
+/**
+ * Session de voix du moteur choisi : Qwen3-TTS embarqué, ou MiniMax (synthèse
+ * en ligne) avec l'analyse des voix locale (processus `--embed-only`).
+ */
+export async function openVoiceSession(signal?: AbortSignal): Promise<VoiceSession | MinimaxVoiceSession> {
+  if (voiceEngineName() !== 'minimax') return VoiceSession.open(signal);
+  const cfg = voiceConfig();
+  if (cfg.disabledReason) throw new Error(cfg.disabledReason);
+  return MinimaxVoiceSession.open(signal, (sig) => VoiceSession.open(sig, { embedOnly: true }));
 }
 
 /**
@@ -141,7 +178,9 @@ export function prepareVoiceModels(): Promise<void> {
   models.promise = new Promise<void>((resolve, reject) => {
     const hf = path.join(cfg.modelsDir, 'hf');
     fs.mkdirSync(hf, { recursive: true });
-    const child = spawn(cfg.python, [workerPath(), '--model', cfg.model, '--download-only', '--download-root', hf], {
+    // MiniMax : seuls les petits modèles de l'analyse des voix (pas Qwen3-TTS).
+    const embedOnly = cfg.engine === 'minimax' ? ['--embed-only'] : [];
+    const child = spawn(cfg.python, [workerPath(), '--model', cfg.model, '--download-only', ...embedOnly, '--download-root', hf], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, HF_HOME: hf, PYTHONUNBUFFERED: '1' },
     });
@@ -255,12 +294,12 @@ export class VoiceSession {
     return this.info.device;
   }
 
-  private constructor(cfg: VoiceConfig) {
+  private constructor(cfg: VoiceConfig, embedOnly: boolean) {
     fs.mkdirSync(cfg.modelsDir, { recursive: true });
     const hf = path.join(cfg.modelsDir, 'hf');
     this.child = spawn(
       cfg.python,
-      [workerPath(), '--model', cfg.model, '--device', cfg.device, '--download-root', hf, '--voices-dir', cfg.voicesDir],
+      [workerPath(), '--model', cfg.model, '--device', cfg.device, '--download-root', hf, '--voices-dir', cfg.voicesDir, ...(embedOnly ? ['--embed-only'] : [])],
       {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, HF_HOME: hf, PYTHONUNBUFFERED: '1' },
@@ -333,12 +372,12 @@ export class VoiceSession {
    * (10 min par défaut) SANS nouvelle du processus ; chaque ligne de journal
    * (progression du téléchargement du modèle) relance le délai.
    */
-  static async open(signal?: AbortSignal): Promise<VoiceSession> {
+  static async open(signal?: AbortSignal, o: { embedOnly?: boolean } = {}): Promise<VoiceSession> {
     const cfg = voiceConfig();
     if (cfg.disabledReason) throw new Error(cfg.disabledReason);
     if (signal?.aborted) throw new Error('chargement des voix interrompu');
     const timeoutMs = Number(process.env.TTS_LOAD_TIMEOUT_MS) || 10 * 60_000;
-    const s = new VoiceSession(cfg);
+    const s = new VoiceSession(cfg, !!o.embedOnly);
     let timer: NodeJS.Timeout | undefined;
     let onAbort: (() => void) | undefined;
     try {
@@ -356,7 +395,11 @@ export class VoiceSession {
         }),
       ]);
       s.info = info;
-      console.log(`[voix] Qwen3-TTS embarqué prêt (${cfg.model}, ${info.device}, voix ${info.voices.join(', ') || 'aucune'})`);
+      console.log(
+        o.embedOnly
+          ? `[voix] analyse des voix prête (${info.device})`
+          : `[voix] Qwen3-TTS embarqué prêt (${cfg.model}, ${info.device}, voix ${info.voices.join(', ') || 'aucune'})`,
+      );
       return s;
     } catch (e) {
       await s.close();
