@@ -19,6 +19,7 @@ pub mod ingest;
 pub mod ingest_db;
 pub mod js;
 pub mod jsval;
+pub mod media;
 pub mod node;
 pub mod okru;
 pub mod present;
@@ -29,7 +30,9 @@ pub mod routes_auth;
 pub mod routes_ingest;
 pub mod routes_match;
 pub mod routes_replay;
+pub mod routes_settings;
 pub mod routes_video;
+pub mod settings;
 pub mod state;
 pub mod time;
 pub mod vf;
@@ -88,6 +91,10 @@ pub fn app(state: state::AppState) -> Router {
         .route(
             "/api/admin/users",
             get(routes_auth::users_list).post(routes_auth::users_post),
+        )
+        .route(
+            "/api/admin/settings",
+            get(routes_settings::get).post(routes_settings::post),
         )
         .route("/api/video/{ok_id}/master.m3u8", get(routes_video::master))
         .route(

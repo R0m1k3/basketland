@@ -47,8 +47,9 @@ navigateur ──► basketland-server (Rust, :3012)
 | 4 | Proxy vidéo ok.ru `/api/video/[okId]/…` (`master.m3u8`, `playlist.m3u8`, `segment.ts`, `asset.ts`, `file.mp4`) : flux résolu en cache et rafraîchi avant expiration, cache de segments et préchargement, reprise des téléchargements bloqués, mêmes réglages (`SEGMENT_CACHE_MB`, `PREFETCH_*`, `SEGMENT_STALL_MS`, `SEGMENT_RETRIES`) | ✅ |
 | 5a | Synchronisation ESPN (calendrier, saison, stats + play-by-play), VF déterministe (`vf.ts`, `sync.ts`, `regenerateSubtitles`), cron interne de ces jobs, `POST /api/ingest` (`sync-videos` relayé à Node), `/stats` récupérées à la volée en Rust | ✅ |
 | 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus signalés aux files de Node par `POST /api/internal/replays` | ✅ |
-| 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity`, `/api/admin/settings` | à faire |
-| 7 | Doublage (voix Qwen3-TTS / MiniMax) et OCR du bandeau de score | à faire |
+| 6a | Fondations médias en bibliothèque Rust, **pas encore branchées** (Node fait toujours tourner les files) : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
+| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | à faire |
+| 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`) | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
 
 ## Développement
@@ -107,7 +108,7 @@ basketball-video au même rythme (`BV_RATE_MS`), cache des listes par saison
 minute), un seul scraping par match à la fois (job et demandes partagent la
 recherche), embed ok.ru lu par le client du proxy vidéo (étape 4).
 
-Les files de traduction et d'analyse restent côté Node (étapes 6 et 7). Un
+Les files de traduction et d'analyse restent côté Node (étapes 6b et 7). Un
 replay qui vient d'apparaître (ou de passer en HLS) leur est signalé par
 `POST /api/internal/replays`, appel interne avec le jeton d'ingestion :
 `{}` après un passage du job qui en a trouvé (`queueNewReplayWork`, même
@@ -119,3 +120,27 @@ analyseurs sur les captures réelles et des cas synthétiques
 `server/tests/node-fixtures-bv.mts`), et deux passages de `sync-videos` en
 direct sur deux copies d'une même base : colonnes vidéo, sous-titres
 régénérés et `ingest_log` identiques.
+
+### Fondations médias (étape 6a)
+
+Les modules du traitement des médias sont portés en bibliothèque
+(`server/src/media/`, voir `media/mod.rs` pour la correspondance avec les
+fichiers TypeScript) mais **aucune route ni aucun job ne les appelle encore** :
+les files de traduction, de doublage et d'analyse partagent un état en mémoire
+(spectateurs, accès au GPU, son complet extrait, activité) et seront basculées
+ensemble (étapes 6b et 7). Seule `GET/POST /api/admin/settings` est servie par
+Rust : elle ne fait que lire et écrire la table `settings`, que Node relit à
+chaque usage (`server/src/settings.rs`, `routes_settings.rs`).
+
+Vérifié contre Node : sorties du code TypeScript (`server/tests/node-fixtures-media.mts`
+→ `fixtures/media.expected.json`, 478 cas) — sous-titres, noms des joueurs,
+prompts et messages, corps exacts des requêtes de traduction, de
+transcription et de voix, réglages et configurations, enveloppe audio,
+fenêtre de nuit, planification et balayage vidéo — identiques à l'octet
+(`tests/media_node.rs`). Clients face à de faux serveurs locaux, processus
+Whisper, voix et Ollama remplacés par de faux processus Python au même
+protocole (`server/tests/helpers/*.py`, `python3` requis, test sauté sinon),
+extraction audio par le vrai ffmpeg (`tests/media.rs`). `/api/admin/settings`
+comparé en direct (Node sur 127.0.0.1:3013, Rust sur 3012, même base) : 31
+requêtes (lecture, écritures valides, chaque erreur de validation, accès,
+origine, Content-Type), mêmes statuts, corps et lignes écrites.
