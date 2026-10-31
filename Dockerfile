@@ -60,6 +60,28 @@ RUN python3 -m venv /opt/whisper \
       faster-whisper==1.2.1 ctranslate2==4.8.2 av==17.1.0 \
       nvidia-cublas-cu12==12.9.2.10 nvidia-cudnn-cu12==9.26.1.1
 
+# ---------------------------------------------------------------- Parakeet (NVIDIA)
+# Second moteur de transcription, au choix dans les Paramètres : NVIDIA
+# Parakeet TDT 0.6B v2 (anglais), exécuté par ONNX Runtime (bibliothèque
+# onnx-asr) dans un environnement Python séparé — onnxruntime-gpu remplace le
+# paquet onnxruntime (processeur) dont dépend faster-whisper. cuBLAS et cuDNN
+# sont ceux de Whisper (liens symboliques, comme pour les voix) ; s'y ajoutent
+# les seules bibliothèques CUDA qui leur manquent pour ONNX Runtime (cudart,
+# curand, cufft). Le contrôle final charge les bibliothèques CUDA d'ONNX
+# Runtime : un lien cassé fait échouer le build, pas la première traduction.
+# Modèle téléchargé au premier usage dans /data/models/hf.
+FROM whisper AS parakeet
+RUN python3 -m venv /opt/parakeet \
+ && /opt/parakeet/bin/pip install --no-cache-dir \
+      "onnx-asr[hub]==0.12.0" onnxruntime-gpu==1.23.2 \
+      nvidia-cuda-runtime-cu12==12.9.79 nvidia-cuda-nvrtc-cu12==12.9.86 nvidia-curand-cu12==10.3.10.19 \
+      nvidia-cufft-cu12==11.4.1.4 \
+ && SP="$(/opt/parakeet/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && WSP="$(/opt/whisper/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && ln -s "$WSP/nvidia/cublas" "$SP/nvidia/cublas" \
+ && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
+ && /opt/parakeet/bin/python -c "import ctypes, os, onnxruntime as rt, onnx_asr; rt.preload_dlls(directory=''); ctypes.CDLL(os.path.join(os.path.dirname(rt.__file__), 'capi', 'libonnxruntime_providers_cuda.so')); p = rt.get_available_providers(); print('onnxruntime', rt.__version__, p); assert 'CUDAExecutionProvider' in p"
+
 # ---------------------------------------------------------------- Voix
 # Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices),
 # SpeechBrain ECAPA (empreintes vocales des commentateurs) et le classifieur
@@ -134,12 +156,13 @@ COPY --from=ollama /ollama/bin/ollama /usr/bin/ollama
 COPY --from=ollama /ollama/lib /usr/lib/ollama
 COPY --from=whisper /opt/whisper /opt/whisper
 COPY --from=tts /opt/tts /opt/tts
+COPY --from=parakeet /opt/parakeet /opt/parakeet
 COPY --from=rust /basketland-server /usr/local/bin/basketland-server
 
 # Interface : export statique de Next, servi par le serveur Rust.
 COPY --from=builder --chown=node:node /app/out ./out
 ENV BL_STATIC_DIR=/app/out
-COPY --chown=node:node scripts/whisper_worker.py ./scripts/whisper_worker.py
+COPY --chown=node:node scripts/whisper_worker.py scripts/parakeet_worker.py ./scripts/
 COPY --chown=node:node scripts/voice_worker.py scripts/voice_gender.py ./scripts/
 # Voix figées du doublage (WAV de référence + transcription + voice.json).
 COPY --chown=node:node assets/voices ./assets/voices

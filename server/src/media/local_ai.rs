@@ -69,6 +69,33 @@ pub fn embedded_whisper_available() -> bool {
     Path::new(&p.python).exists() && Path::new(&p.worker).exists()
 }
 
+/// Modèle du moteur « NVIDIA » (Parakeet TDT 0.6B v2, anglais, par onnx-asr).
+pub const PARAKEET_MODEL: &str = "nemo-parakeet-tdt-0.6b-v2";
+
+/// Modèle de transcription NVIDIA Parakeet (sinon : Whisper).
+pub fn is_parakeet_model(model: &str) -> bool {
+    model.contains("parakeet")
+}
+
+/// Python et script du moteur Parakeet (`PARAKEET_PYTHON`, `PARAKEET_WORKER`).
+pub fn parakeet_paths() -> (String, String) {
+    (
+        env_or("PARAKEET_PYTHON", || "/opt/parakeet/bin/python".into()),
+        env_or("PARAKEET_WORKER", || {
+            cwd()
+                .join("scripts")
+                .join("parakeet_worker.py")
+                .to_string_lossy()
+                .into_owned()
+        }),
+    )
+}
+
+pub fn embedded_parakeet_available() -> bool {
+    let (python, worker) = parakeet_paths();
+    Path::new(&python).exists() && Path::new(&worker).exists()
+}
+
 pub fn embedded_ollama_available() -> bool {
     Path::new(&embedded_paths().ollama).exists()
 }
@@ -145,6 +172,15 @@ pub(crate) fn short(e: &str) -> String {
 
 // ---------------------------------------------------------------- Whisper
 
+/// `WHISPER_BEAM_SIZE` : largeur du faisceau de Whisper (1 à 10, 1 par défaut : glouton).
+pub fn whisper_beam_size() -> u32 {
+    std::env::var("WHISPER_BEAM_SIZE")
+        .ok()
+        .and_then(|v| js::trim(&v).parse::<u32>().ok())
+        .filter(|n| (1..=10).contains(n))
+        .unwrap_or(1)
+}
+
 /// Une session de transcription : un processus Python, un modèle chargé.
 #[derive(Clone)]
 pub struct WhisperSession {
@@ -157,6 +193,24 @@ fn whisper_ready_error(e: Option<&Value>) -> String {
         None | Some(Value::Null) => "Whisper : échec du chargement".into(),
         Some(v) => js_string(v),
     }
+}
+
+fn parakeet_ready_error(e: Option<&Value>) -> String {
+    match e {
+        None | Some(Value::Null) => "Parakeet : échec du chargement".into(),
+        Some(v) => js_string(v),
+    }
+}
+
+fn parakeet_exit_message(why: &str, tail: &str) -> String {
+    format!(
+        "Parakeet s'est arrêté ({why}){}",
+        if tail.is_empty() {
+            String::new()
+        } else {
+            format!(" : {tail}")
+        }
+    )
 }
 
 fn whisper_exit_message(why: &str, tail: &str) -> String {
@@ -174,10 +228,21 @@ impl WhisperSession {
     /// `WhisperSession.open` : lance le processus et attend que le modèle soit
     /// prêt (`WHISPER_LOAD_TIMEOUT_MS`, 30 min par défaut ; le premier
     /// lancement le télécharge).
+    ///
+    /// Modèle Parakeet ([`is_parakeet_model`]) : même protocole, processus
+    /// `scripts/parakeet_worker.py` (moteur « NVIDIA » de la page Paramètres).
     pub async fn open(model: &str, timeout: Option<Duration>) -> Result<WhisperSession, String> {
         let p = embedded_paths();
+        let parakeet = is_parakeet_model(model);
+        let (python, worker, name) = if parakeet {
+            let (py, w) = parakeet_paths();
+            (py, w, "Parakeet")
+        } else {
+            (p.python.clone(), p.worker.clone(), "Whisper")
+        };
         let models = models_dir();
         std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
+        // cuBLAS et cuDNN des paquets pip de l'environnement Whisper (Parakeet les partage).
         let lib = whisper_library_path(&p.python);
         let mut env = vec![
             (
@@ -196,40 +261,56 @@ impl WhisperSession {
                 .join(":");
             env.push(("LD_LIBRARY_PATH".into(), v));
         }
+        let mut args = vec![
+            worker,
+            "--model".into(),
+            model.into(),
+            "--device".into(),
+            env_or("WHISPER_DEVICE", || "auto".into()),
+            "--compute-type".into(),
+            env_or("WHISPER_COMPUTE_TYPE", || "auto".into()),
+            "--download-root".into(),
+            models.join("whisper").to_string_lossy().into_owned(),
+        ];
+        if !parakeet {
+            // Décodage glouton par défaut (`WHISPER_BEAM_SIZE`, 1) : 1,5 à 2 fois
+            // plus rapide que la recherche en faisceau (5), presque aussi juste.
+            args.push("--beam-size".into());
+            args.push(whisper_beam_size().to_string());
+        }
+        let tag = if parakeet { "[parakeet]" } else { "[whisper]" };
         let spec = WorkerSpec {
-            program: p.python.clone(),
-            args: vec![
-                p.worker.clone(),
-                "--model".into(),
-                model.into(),
-                "--device".into(),
-                env_or("WHISPER_DEVICE", || "auto".into()),
-                "--compute-type".into(),
-                env_or("WHISPER_COMPUTE_TYPE", || "auto".into()),
-                "--download-root".into(),
-                models.join("whisper").to_string_lossy().into_owned(),
-            ],
+            program: python.clone(),
+            args,
             env,
-            on_stderr: Box::new(|s: &str| {
+            on_stderr: Box::new(move |s: &str| {
                 for line in s.split('\n') {
                     let l = js::trim(line);
                     if !l.is_empty() {
-                        if l.starts_with("[whisper]") {
+                        if l.starts_with(tag) {
                             println!("{l}");
                         } else {
-                            println!("[whisper] {l}");
+                            println!("{tag} {l}");
                         }
                     }
                 }
             }),
             on_stderr_end: Box::new(|| {}),
-            ready_error: whisper_ready_error,
-            exit_message: whisper_exit_message,
+            ready_error: if parakeet {
+                parakeet_ready_error
+            } else {
+                whisper_ready_error
+            },
+            exit_message: if parakeet {
+                parakeet_exit_message
+            } else {
+                whisper_exit_message
+            },
         };
         let (worker, ready) = JsonWorker::spawn(spec).map_err(|e| {
             format!(
-                "Whisper ne démarre pas : {}",
-                short(&spawn_error_text(&p.python, &e))
+                "{name} ne démarre pas : {}",
+                short(&spawn_error_text(&python, &e))
             )
         })?;
         let s = WhisperSession {
@@ -252,9 +333,9 @@ impl WhisperSession {
             Ok(Err(_)) => Err(s
                 .worker
                 .exit_error()
-                .unwrap_or_else(|| "Whisper s'est arrêté".into())),
+                .unwrap_or_else(|| format!("{name} s'est arrêté"))),
             Err(_) => Err(format!(
-                "Whisper : modèle {model} pas prêt après {} min",
+                "{name} : modèle {model} pas prêt après {} min",
                 js_number_string(js::round(timeout.as_millis() as f64 / 60_000.0))
             )),
         };
@@ -264,7 +345,11 @@ impl WhisperSession {
                     None | Some(Value::Null) => "?".to_string(),
                     Some(v) => js_string(v),
                 };
-                println!("[commentaires] Whisper embarqué prêt ({model}, {device})");
+                if parakeet {
+                    println!("[commentaires] Parakeet (NVIDIA) embarqué prêt ({model}, {device})");
+                } else {
+                    println!("[commentaires] Whisper embarqué prêt ({model}, {device})");
+                }
                 Ok(s)
             }
             Err(e) => {

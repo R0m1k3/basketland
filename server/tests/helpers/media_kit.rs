@@ -1,12 +1,15 @@
 //! Files médias de test pour les routes : traduction configurée (serveurs
-//! fictifs), ffmpeg « présent », spectateurs à part, exécuteurs qui ne
-//! rendent jamais la main (un travail lancé reste « en cours »).
+//! fictifs), ffmpeg « présent », spectateurs à part ; un travail lancé
+//! reste « en cours » jusqu'à son interruption.
 
 #![allow(dead_code)]
 
 use basketland_server::db::Db;
+use basketland_server::media::abort::AbortSignal;
 use basketland_server::media::analysis::{Analysis, AnalysisDeps, AnalysisOptions};
-use basketland_server::media::commentary::{Commentary, CommentaryDeps, CommentaryOptions};
+use basketland_server::media::commentary::{
+    Commentary, CommentaryDeps, CommentaryError, CommentaryOptions,
+};
 use basketland_server::media::dub::Dub;
 use basketland_server::media::viewers::{now_ms, Viewers};
 use basketland_server::state::Media;
@@ -36,9 +39,13 @@ pub fn test_media(db: &Db, video: &Video) -> Media {
             ffmpeg_available: Arc::new(|| true),
         },
     );
-    commentary.set_runner(Some(Arc::new(
-        |_, _, _, _| Box::pin(std::future::pending()),
-    )));
+    // Comme un vrai travail : ne rend la main qu'interrompu.
+    commentary.set_runner(Some(Arc::new(|_, _, signal: AbortSignal, _| {
+        Box::pin(async move {
+            signal.aborted().await;
+            Err(CommentaryError::Other("travail interrompu".into()))
+        })
+    })));
     let analysis = Analysis::with_options(
         db.clone(),
         AnalysisDeps::defaults(db.clone(), video.clone()),

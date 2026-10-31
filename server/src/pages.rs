@@ -700,6 +700,7 @@ pub fn parametres(
             "users": crate::accounts::list_users(c)?,
             "auto_translate": settings::auto_translate_enabled(&s),
             "vf_mode": settings::vf_mode(&s),
+            "transcribe_engine": settings::transcribe_engine(&s),
             "voice_disabled_reason": media.dub_disabled_reason,
             "minimax": settings::minimax_settings_view(&s),
             "openai": settings::openai_settings_view(&s),

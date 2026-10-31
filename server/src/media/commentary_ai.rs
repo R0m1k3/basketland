@@ -19,7 +19,8 @@
 use super::abort::{is_aborted, sleep, wait_aborted, AbortSignal};
 use super::commentary_cues::{parse_verbose_json, Transcript};
 use super::local_ai::{
-    ai_client, embedded_ollama_available, embedded_ollama_url, embedded_whisper_available,
+    ai_client, embedded_ollama_available, embedded_ollama_url, embedded_parakeet_available,
+    embedded_whisper_available, PARAKEET_MODEL,
 };
 use super::roster_names::{name_rendered, RosterIndex};
 use crate::api::js_num_value;
@@ -240,7 +241,18 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         Some(o) => o.url.clone(),
         None => trim_url(env("TRANSLATE_URL")),
     };
-    let asr_ok = !remote_asr.is_empty() || embedded_whisper_available();
+    // Moteur embarqué choisi dans les Paramètres : Whisper (défaut) ou NVIDIA
+    // Parakeet ; `TRANSCRIBE_MODEL` l'emporte, et un serveur externe
+    // (`TRANSCRIBE_URL`) garde son propre modèle.
+    let nvidia = remote_asr.is_empty()
+        && env_trim("TRANSCRIBE_MODEL").is_none()
+        && crate::settings::transcribe_engine(s) == "nvidia";
+    let asr_ok = !remote_asr.is_empty()
+        || if nvidia {
+            embedded_parakeet_available()
+        } else {
+            embedded_whisper_available()
+        };
     let mt_ok = !remote_mt.is_empty() || embedded_ollama_available();
     let disabled_reason = if env("COMMENTARY_DISABLED").as_deref() == Some("1") {
         Some("traduction des commentaires désactivée (COMMENTARY_DISABLED=1)")
@@ -264,8 +276,11 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         transcribe_mode: mode(&remote_asr),
         translate_mode: mode(&remote_mt),
         transcribe_url: remote_asr.clone(),
-        transcribe_model: env_trim("TRANSCRIBE_MODEL")
-            .unwrap_or_else(|| DEFAULT_TRANSCRIBE_MODEL.into()),
+        transcribe_model: if nvidia {
+            PARAKEET_MODEL.into()
+        } else {
+            env_trim("TRANSCRIBE_MODEL").unwrap_or_else(|| DEFAULT_TRANSCRIBE_MODEL.into())
+        },
         translate_url: if remote_mt.is_empty() {
             format!("{}/v1", embedded_ollama_url())
         } else {

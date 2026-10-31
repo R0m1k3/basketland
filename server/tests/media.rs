@@ -29,7 +29,10 @@ use std::time::Duration;
 
 static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-const ENV_KEYS: [&str; 44] = [
+const ENV_KEYS: [&str; 47] = [
+    "PARAKEET_PYTHON",
+    "PARAKEET_WORKER",
+    "WHISPER_BEAM_SIZE",
     "TRANSCRIBE_URL",
     "TRANSLATE_URL",
     "TRANSCRIBE_MODEL",
@@ -948,6 +951,59 @@ async fn interruption_d_une_traduction() {
 
 // ---------------------------------------------------------------- Whisper embarqué (faux processus)
 
+/// Moteur « NVIDIA » : même protocole, autre processus (`PARAKEET_PYTHON`,
+/// `PARAKEET_WORKER`), sans largeur de faisceau ; `WHISPER_BEAM_SIZE` borné.
+#[tokio::test]
+async fn parakeet_embarque_protocole() {
+    let Some(py) = python() else { return };
+    let _g = clean_env().await;
+    let dir = tempfile::tempdir().unwrap();
+    // Whisper introuvable : seul le processus Parakeet peut répondre.
+    set("WHISPER_PYTHON", "/introuvable/python");
+    set("PARAKEET_PYTHON", &py);
+    set("PARAKEET_WORKER", helper("fake_whisper_worker.py"));
+    set("MODELS_DIR", dir.path().join("models"));
+    let log = dir.path().join("req.log");
+    set("FAKE_LOG", &log);
+    let model = basketland_server::media::local_ai::PARAKEET_MODEL;
+    let s = WhisperSession::open(model, None).await.unwrap();
+    let a = s
+        .transcribe("/tmp/chunk-000.ogg", None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(a.segments.len(), 1);
+    let env: Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{}.env", log.display())).unwrap())
+            .unwrap();
+    let argv: Vec<&str> = env["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(argv[..2], ["--model", "nemo-parakeet-tdt-0.6b-v2"]);
+    assert!(!argv.contains(&"--beam-size"), "{argv:?}");
+    s.close().await;
+    // Processus absent : message au nom du moteur.
+    set("PARAKEET_PYTHON", "/introuvable/python");
+    let e = WhisperSession::open(model, None).await.err().unwrap();
+    assert!(e.starts_with("Parakeet ne démarre pas"), "{e}");
+    use basketland_server::media::local_ai::whisper_beam_size;
+    for (v, want) in [
+        (None, 1),
+        (Some("5"), 5),
+        (Some("0"), 1),
+        (Some("x"), 1),
+        (Some("11"), 1),
+    ] {
+        match v {
+            Some(v) => set("WHISPER_BEAM_SIZE", v),
+            None => std::env::remove_var("WHISPER_BEAM_SIZE"),
+        }
+        assert_eq!(whisper_beam_size(), want, "{v:?}");
+    }
+}
+
 #[tokio::test]
 async fn whisper_embarque_protocole() {
     let Some(py) = python() else { return };
@@ -1001,7 +1057,10 @@ async fn whisper_embarque_protocole() {
             "--compute-type",
             "auto",
             "--download-root",
-            dir.path().join("models/whisper").to_string_lossy()
+            dir.path().join("models/whisper").to_string_lossy(),
+            // Décodage glouton par défaut (`WHISPER_BEAM_SIZE`).
+            "--beam-size",
+            "1"
         ])
         .as_array()
         .unwrap()[..]

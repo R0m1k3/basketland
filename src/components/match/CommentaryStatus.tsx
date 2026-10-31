@@ -14,6 +14,8 @@ export interface CommentaryState {
   available_until?: number;
   /** Plages de vidéo déjà traduites (piste partielle). */
   covered?: [number, number][];
+  /** Arrêtée à la demande : « Reprendre la traduction » la relance. */
+  stopped?: boolean;
 }
 
 /** État du doublage, tiré du manifeste GET /api/matches/[id]/dub. */
@@ -205,6 +207,7 @@ export default function CommentaryStatus({
   onDub,
   onDubRelaunch,
   onDubStop,
+  onStop,
   position = 0,
 }: {
   state: CommentaryState | null;
@@ -225,6 +228,8 @@ export default function CommentaryStatus({
   onDubRelaunch?: () => Promise<CommandResult>;
   /** « Arrêter le doublage » : retiré de la file ou interrompu, sans rien effacer. */
   onDubStop?: () => Promise<CommandResult>;
+  /** « Arrêter la traduction » : retirée de la file ou interrompue, ce qui est traduit reste. */
+  onStop?: () => Promise<CommandResult>;
   /** Position de lecture (s), lue à chaque mise à jour du statut. */
   position?: number;
 }) {
@@ -258,8 +263,12 @@ export default function CommentaryStatus({
   let title: string;
   let detail: string | null = null;
   let spinning = false;
+  /** Traduction arrêtée à la demande : bouton « Reprendre la traduction ». */
+  const stopped = status === 'none' && !!state.stopped && !state.reason;
   /** Match pas encore traduit, traduction automatique désactivée : bouton « Sous-titrer ce match ». */
-  const manualStart = !autoTranslate && status === 'none' && !state.reason;
+  const manualStart = (!autoTranslate && status === 'none' && !state.reason) || stopped;
+  /** « Arrêter la traduction » : pendant la traduction de ce match ou son attente. */
+  const translationStop = !!onStop && (status === 'running' || status === 'queued');
   /** Match sans replay exploitable (ou introuvable) : ni traduction ni doublage possibles. */
   const noReplay = status === 'none' && !!state.reason;
   const dubStatus = dub?.status;
@@ -311,6 +320,12 @@ export default function CommentaryStatus({
   } else if (status === 'disabled') {
     title = 'Traduction des commentaires non configurée';
     detail = state.reason ?? 'Voir le README, section « Traduction des commentaires ».';
+  } else if (stopped) {
+    const partial = !!state.covered?.length;
+    title = partial ? 'Traduction arrêtée en cours de route' : 'Traduction arrêtée';
+    detail = partial
+      ? 'Les sous-titres déjà traduits restent affichés ; « Reprendre la traduction » termine le match.'
+      : 'La lecture ne la relance pas : « Reprendre la traduction » la relance.';
   } else if (manualStart) {
     const partial = !!state.covered?.length;
     title = partial ? 'Commentaires traduits en partie' : 'Commentaires pas encore traduits';
@@ -341,7 +356,7 @@ export default function CommentaryStatus({
   // Les deux boutons proposés : le mode « Version française » choisit celui qui est mis en avant.
   const dubFirst = vfMode === 'doublage';
   const showButtons =
-    manualStart || status === 'failed' || dubStart || dubStop || (canRelaunch && confirming !== 'traduction') || (canRelaunchDub && confirming !== 'doublage');
+    manualStart || translationStop || status === 'failed' || dubStart || dubStop || (canRelaunch && confirming !== 'traduction') || (canRelaunchDub && confirming !== 'doublage');
 
   return (
     <div className="panel-soft px-4 py-3">
@@ -358,9 +373,21 @@ export default function CommentaryStatus({
                 onClick={() => void run(onStart, false)}
                 disabled={busy}
                 className={`${dubStart && dubFirst ? 'btn' : 'btn-primary'} !py-1.5 text-xs`}
-                title="Traduire les commentaires en sous-titres français"
+                title={stopped ? 'Terminer la traduction des commentaires de ce match' : 'Traduire les commentaires en sous-titres français'}
               >
-                Sous-titrer ce match
+                {stopped ? 'Reprendre la traduction' : 'Sous-titrer ce match'}
+              </button>
+            )}
+            {translationStop && onStop && (
+              <button
+                type="button"
+                onClick={() => void run(onStop, true)}
+                disabled={busy}
+                className={RELAUNCH_CLASS}
+                title="Arrêter la traduction de ce match (les sous-titres déjà traduits restent disponibles)"
+              >
+                {STOP_ICON}
+                Arrêter la traduction
               </button>
             )}
             {status === 'failed' && (

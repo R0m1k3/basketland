@@ -126,6 +126,9 @@ export interface StandingsPage {
   conferences: Standings;
 }
 
+/** Moteur de transcription embarqué (Paramètres). */
+export type TranscribeEngine = 'whisper' | 'nvidia';
+
 /** `GET /api/pages/parametres`. */
 export interface SettingsPage {
   user: { id: number; username: string; role: UserRole };
@@ -134,6 +137,7 @@ export interface SettingsPage {
     users: PublicUser[];
     auto_translate: boolean;
     vf_mode: VfMode;
+    transcribe_engine: TranscribeEngine;
     voice_disabled_reason: string | null;
     minimax: MinimaxSettingsView;
     openai: OpenAiSettingsView;

@@ -493,6 +493,11 @@ pub fn kv_get_at(
     Ok(crate::jsval::js_parse(&value))
 }
 
+pub fn kv_delete(c: &Connection, key: &str) -> rusqlite::Result<()> {
+    c.execute("DELETE FROM kv_cache WHERE key = ?1", [key])
+        .map(|_| ())
+}
+
 pub fn kv_set(c: &Connection, key: &str, value: &Value) -> rusqlite::Result<()> {
     c.execute(
         "INSERT OR REPLACE INTO kv_cache (key, value, updated_at) VALUES (?1, ?2, ?3)",

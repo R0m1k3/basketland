@@ -118,7 +118,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   // file même pendant le délai d'attente après un échec. `retry` : relance
   // forcée, réservée aux administrateurs.
   const command = useCallback(
-    (action: 'start' | 'retry', manual = false): Promise<CommandResult> =>
+    (action: 'start' | 'retry' | 'stop', manual = false): Promise<CommandResult> =>
       fetch(`/api/matches/${matchId}/commentary`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -209,6 +209,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
 
   const startManually = useCallback(() => command('start', true), [command]);
   const relaunch = useCallback(() => command('retry'), [command]);
+  const stopTranslation = useCallback(() => command('stop'), [command]);
 
   // Doublage : manifeste lu SANS `?t=` (aucun effet de bord : seul le lecteur,
   // VF doublée choisie, signale la position), au chargement, quand l'état de
@@ -329,6 +330,7 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
           onDub={startDub}
           onDubRelaunch={isAdmin ? relaunchDub : undefined}
           onDubStop={stopDub}
+          onStop={stopTranslation}
           position={playback.currentTime}
         />
         {commentary?.status === 'ready' && subtitles.length > 0 && (

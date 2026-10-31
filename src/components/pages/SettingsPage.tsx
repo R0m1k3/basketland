@@ -6,6 +6,7 @@ import MiniMaxSettings from '@/components/settings/MiniMaxSettings';
 import OpenAiSettings from '@/components/settings/OpenAiSettings';
 import SubtitleSettings from '@/components/settings/SubtitleSettings';
 import UsersAdmin from '@/components/settings/UsersAdmin';
+import TranscribeEngineSettings from '@/components/settings/TranscribeEngineSettings';
 import VfModeSettings from '@/components/settings/VfModeSettings';
 import { PageData } from '@/components/page/pageData';
 import type { SettingsPage as SettingsData } from '@/components/page/types';
@@ -73,6 +74,7 @@ function Settings({ d }: { d: SettingsData }) {
           </SectionTitle>
           <AutoTranslateSettings initial={a.auto_translate} />
           <VfModeSettings initial={a.vf_mode} voiceDisabledReason={a.voice_disabled_reason} />
+          <TranscribeEngineSettings initial={a.transcribe_engine} />
           <MiniMaxSettings initial={a.minimax} />
           <OpenAiSettings initial={a.openai} placeholderModel={a.openai_model_placeholder} />
         </section>

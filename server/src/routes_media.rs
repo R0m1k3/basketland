@@ -269,9 +269,11 @@ pub async fn commentary_get(
 }
 
 /// `POST /api/matches/[id]/commentary` : `{ action: 'start' }` (lancement
-/// automatique à la lecture), `{ action: 'start', manual: true }` (clic
-/// « Sous-titrer ce match »), `{ action: 'retry' }` (administrateurs :
-/// piste refaite).
+/// automatique à la lecture, mené jusqu'au bout), `{ action: 'start',
+/// manual: true }` (clic « Sous-titrer ce match » ou « Reprendre la
+/// traduction »), `{ action: 'stop' }` (« Arrêter la traduction » : plus de
+/// relance à la lecture jusqu'à une reprise), `{ action: 'retry' }`
+/// (administrateurs : piste refaite).
 pub async fn commentary_post(
     State(st): State<AppState>,
     Path(raw): Path<String>,
@@ -289,10 +291,10 @@ pub async fn commentary_post(
             Err(r) => return r,
         };
         let action = body.get("action").and_then(Value::as_str);
-        if !matches!(action, Some("start" | "retry")) {
+        if !matches!(action, Some("start" | "retry" | "stop")) {
             return error(
                 StatusCode::BAD_REQUEST,
-                "action invalide (attendu : 'start' ou 'retry')",
+                "action invalide (attendu : 'start', 'retry' ou 'stop')",
             );
         }
         let enqueue = |opts: EnqueueOptions| {
@@ -310,6 +312,18 @@ pub async fn commentary_post(
             Ok((code, v)) => json_response(status_of(code), &v),
             Err(r) => r,
         };
+        if action == Some("stop") {
+            // « Arrêter la traduction » (tout utilisateur connecté) : ce qui est traduit reste.
+            let r = blocking(&st, move |md| {
+                let (_, message) = md.commentary.stop(id);
+                (
+                    200,
+                    json!({ "commentary": md.commentary.status(id).to_json(), "message": message }),
+                )
+            })
+            .await;
+            return reply(r);
+        }
         if action == Some("retry") {
             // Écrase une traduction existante : réservé aux administrateurs (401 / 403 sinon).
             if let Err(r) = require_admin(&st, &headers).await {
@@ -351,9 +365,22 @@ pub async fn commentary_post(
                     }),
                 );
             }
-            // Lancement à l'ouverture : en tête de file, sauf piste prête ou backoff après un échec.
+            if c.stopped(id) {
+                // Arrêtée à la demande : la lecture ne la relance pas.
+                return (
+                    200,
+                    json!({
+                        "commentary": c.status(id).to_json(),
+                        "message": "Traduction arrêtée : « Reprendre la traduction » la relance.",
+                    }),
+                );
+            }
+            // Lancement à la lecture : en tête de file, sauf piste prête ou
+            // backoff après un échec ; puis jusqu'au bout, même si la lecture
+            // s'arrête ou que la fiche est quittée (« Arrêter la traduction »
+            // l'interrompt).
             let before = c.status(id).status;
-            c.prioritize_on_view(id);
+            c.prioritize_on_view_with(id, true);
             let after = c.status(id);
             let started = matches!(after.status, "running" | "queued");
             let message = if started {
