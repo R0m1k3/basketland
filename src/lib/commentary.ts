@@ -57,7 +57,7 @@ import { inNightWindow } from './nightWindow';
 import { lowerPriority } from './procPriority';
 import { fixRosterNames, rosterIndex } from './rosterNames';
 
-import { __clearViewersForTests, someoneWatching, touchViewer, viewerActive, viewerPosition } from './viewers';
+import { __clearViewersForTests, someoneWatching, touchViewer, viewerActive, viewerPlaying, viewerPosition } from './viewers';
 
 export { inNightWindow, touchViewer, viewerActive, viewerPosition };
 
@@ -211,6 +211,216 @@ export function extractAudioChunk(sourceUrl: string, start: number, length: numb
   });
 }
 
+// ------------------------------------------------------------------ son complet du match (une seule lecture du flux)
+
+/**
+ * Son de TOUT le match en une passe, dès le départ (même format que les
+ * tronçons : mono 16 kHz, Opus 24 kb/s, ~11 Mo par heure), écrit au fil de
+ * l'eau dans `outFile`. `onProgress(s)` : secondes déjà extraites. Le flux
+ * ok.ru est ainsi lu une seule fois, vite, au lieu d'un tronçon de temps en
+ * temps pendant la lecture (gels de la vidéo) ; tronçons de la traduction
+ * et du doublage en sont ensuite découpés sur place (`cutAudio`).
+ * `COMMENTARY_AUDIO_READRATE` (facultatif) : vitesse de lecture maximale du
+ * flux, en multiple du temps réel (ffmpeg `-readrate`). Arrêtée sans
+ * progression pendant `idleMs` (2 min).
+ */
+export function extractFullAudio(
+  sourceUrl: string,
+  outFile: string,
+  o: ExtractOptions & { onProgress?: (sec: number) => void; idleMs?: number } = {},
+): Promise<void> {
+  const http = /^https?:\/\//i.test(sourceUrl);
+  const readrate = Number(process.env.COMMENTARY_AUDIO_READRATE);
+  return new Promise((resolve, reject) => {
+    const ff = spawn(
+      process.env.FFMPEG_PATH || 'ffmpeg',
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-nostats',
+        '-progress',
+        'pipe:1',
+        ...(http && o.userAgent ? ['-user_agent', o.userAgent] : []),
+        ...(http && o.referer ? ['-headers', `Referer: ${o.referer}\r\n`] : []),
+        ...(Number.isFinite(readrate) && readrate > 0 ? ['-readrate', String(readrate)] : []),
+        '-i',
+        sourceUrl,
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-c:a',
+        'libopus',
+        '-b:a',
+        '24k',
+        '-application',
+        'voip',
+        '-f',
+        'ogg',
+        '-y',
+        outFile,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    lowerPriority(ff);
+    let err = '';
+    let last = Date.now();
+    const kill = () => ff.kill('SIGKILL');
+    const idleMs = o.idleMs ?? 2 * 60_000;
+    const watchdog = setInterval(() => {
+      if (Date.now() - last > idleMs) {
+        err = `aucune progression depuis ${Math.round(idleMs / 1000)} s ${err}`;
+        kill();
+      }
+    }, Math.min(5_000, idleMs));
+    o.signal?.addEventListener('abort', kill);
+    let partial = '';
+    ff.stdout.on('data', (b: Buffer) => {
+      const lines = (partial + b.toString()).split('\n');
+      partial = lines.pop() ?? '';
+      for (const l of lines) {
+        const m = /^out_time_(?:us|ms)=(\d+)/.exec(l.trim());
+        if (m) {
+          last = Date.now();
+          o.onProgress?.(Number(m[1]) / 1e6);
+        }
+      }
+    });
+    ff.stderr.on('data', (b: Buffer) => (err = (err + b.toString()).slice(-600)));
+    const done = () => {
+      clearInterval(watchdog);
+      o.signal?.removeEventListener('abort', kill);
+    };
+    ff.on('error', (e) => {
+      done();
+      reject(e);
+    });
+    ff.on('close', (code) => {
+      done();
+      let size = 0;
+      try {
+        size = fs.statSync(outFile).size;
+      } catch {
+        size = 0;
+      }
+      if (code === 0 && size > 1024) resolve();
+      else reject(new Error(`ffmpeg son complet code ${code}${size <= 1024 ? ', aucun son lu' : ''}: ${err.replace(/\s+/g, ' ').trim()}`));
+    });
+  });
+}
+
+/** Découpe sur place `length` s du son local `file` à partir de `start` (réencodé : coupe exacte), écrit `<out>.part` puis renomme. */
+export function cutAudio(file: string, start: number, length: number, outFile: string, signal?: AbortSignal): Promise<void> {
+  return extractAudioChunk(file, start, length, outFile, { signal, timeoutMs: 2 * 60_000 });
+}
+
+interface FullAudioState {
+  /** Fichier en cours d'écriture, puis fichier final une fois complet. */
+  path: string;
+  /** Secondes déjà extraites (∞ : complet). */
+  doneSec: number;
+  complete: boolean;
+  failed: string | null;
+  running: boolean;
+}
+
+const gfa = globalThis as unknown as { __fullAudio?: Map<string, FullAudioState> };
+const fullAudios: Map<string, FullAudioState> = (gfa.__fullAudio ??= new Map());
+
+const fullAudioFile = (okId: string) => path.join(workDir(okId), 'full.ogg');
+
+/** Son complet voulu (`COMMENTARY_FULL_AUDIO=0` : extraction tronçon par tronçon, comme avant). */
+const fullAudioWanted = () => process.env.COMMENTARY_FULL_AUDIO !== '0';
+
+/**
+ * Extraction complète du son d'une vidéo, lancée une fois et partagée
+ * (traduction, doublage) ; elle ne dépend d'aucun travail : interrompre la
+ * traduction ne l'arrête pas, la reprise en profite. Déjà sur disque :
+ * rien à faire. Échec : on retombe sur l'extraction tronçon par tronçon (un
+ * prochain travail réessaie).
+ */
+function startFullAudio(
+  okId: string,
+  sourceUrl: string,
+  headers: { userAgent?: string; referer?: string },
+  extractFull: NonNullable<CommentaryDeps['extractFull']>,
+): FullAudioState {
+  const file = fullAudioFile(okId);
+  const prev = fullAudios.get(okId);
+  if (prev && (prev.running || (prev.complete && fs.existsSync(prev.path)))) return prev;
+  if (fs.existsSync(file)) {
+    const s: FullAudioState = { path: file, doneSec: Number.POSITIVE_INFINITY, complete: true, failed: null, running: false };
+    fullAudios.set(okId, s);
+    return s;
+  }
+  fs.mkdirSync(workDir(okId), { recursive: true });
+  const part = `${file}.part`;
+  fs.rmSync(part, { force: true });
+  const s: FullAudioState = { path: part, doneSec: 0, complete: false, failed: null, running: true };
+  fullAudios.set(okId, s);
+  const t0 = Date.now();
+  extractFull(sourceUrl, part, { ...headers, onProgress: (sec) => (s.doneSec = Math.max(s.doneSec, sec)) })
+    .then(() => {
+      fs.renameSync(part, file);
+      Object.assign(s, { path: file, complete: true, doneSec: Number.POSITIVE_INFINITY });
+      console.log(`[commentaires] son complet de la vidéo ${okId} extrait en ${Math.max(1, Math.round((Date.now() - t0) / 1000))} s`);
+    })
+    .catch((e) => {
+      s.failed = short(e);
+      fs.rmSync(part, { force: true });
+      console.error(`[commentaires] son complet de la vidéo ${okId} impossible (${s.failed}) : extraction tronçon par tronçon`);
+    })
+    .finally(() => (s.running = false));
+  return s;
+}
+
+/**
+ * Attend que le son complet couvre jusqu'à `endSec` : 'ready', 'failed'
+ * (extraction en échec ou arrêtée), ou 'far' — la position demandée est
+ * encore loin (> 10 min) devant l'extraction : mieux vaut lire ce tronçon
+ * directement dans le flux que faire attendre le spectateur.
+ */
+async function waitFullAudio(s: FullAudioState, endSec: number, signal?: AbortSignal): Promise<'ready' | 'failed' | 'far'> {
+  for (;;) {
+    if (s.complete) return 'ready';
+    if (s.doneSec >= endSec + 2) return 'ready';
+    if (!s.running) return 'failed';
+    if (endSec - s.doneSec > 600) return 'far';
+    if (signal?.aborted) return 'failed';
+    await new Promise((r) => setTimeout(r, Number(process.env.COMMENTARY_FULL_AUDIO_POLL_MS) || 500));
+  }
+}
+
+/**
+ * Découpe `length` s du son complet d'une vidéo à partir de `start` (pour le
+ * doublage) s'il est là et couvre la plage ; rend false sinon (l'appelant lit
+ * alors le flux).
+ */
+export async function sliceFullAudio(okId: string, start: number, length: number, outFile: string, signal?: AbortSignal): Promise<boolean> {
+  let s = fullAudios.get(okId);
+  if (!s && fs.existsSync(fullAudioFile(okId))) {
+    s = { path: fullAudioFile(okId), doneSec: Number.POSITIVE_INFINITY, complete: true, failed: null, running: false };
+    fullAudios.set(okId, s);
+  }
+  if (!s || !(s.complete || s.doneSec >= start + length + 2) || !fs.existsSync(s.path)) return false;
+  try {
+    await cutAudio(s.path, start, length, outFile, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Le son complet d'une vidéo ne sert plus (traduction et doublage finis) : effacé. */
+export function dropFullAudio(okId: string): void {
+  const s = fullAudios.get(okId);
+  if (s?.running || st.running?.okId === okId) return;
+  fullAudios.delete(okId);
+  fs.rmSync(fullAudioFile(okId), { force: true });
+}
+
 /** Sources audio d'un flux, de la plus légère à la plus lourde (l'image ne sert à rien). */
 export function audioSources(stream: Pick<OkStream, 'variants'>): { url: string; label: string }[] {
   const out: { url: string; label: string }[] = [];
@@ -245,6 +455,15 @@ function writeJson(file: string, value: unknown): void {
 const chunkName = (p: ChunkPlan) => `chunk-${String(Math.round(p.start)).padStart(5, '0')}-${p.length}`;
 const chunkAudio = (dir: string, p: ChunkPlan) => path.join(dir, `${chunkName(p)}.ogg`);
 const chunkJson = (dir: string, p: ChunkPlan) => path.join(dir, `${chunkName(p)}.json`);
+
+/** Le doublage veut-il le son complet de ce match (branché par dub.ts, via globalThis : pas d'import circulaire) ? */
+function dubWantsAudio(matchId: number): boolean {
+  try {
+    return (globalThis as { __dubWantsAudio?: (id: number) => boolean }).__dubWantsAudio?.(matchId) ?? false;
+  } catch {
+    return false;
+  }
+}
 
 interface ChunkCache {
   model: string;
@@ -377,6 +596,7 @@ function controlFor(job: Job): CommentaryControl {
       viewerActive(job.matchId) || ((job.explicit || (!job.viewer && inNightWindow())) && !someoneWatching(job.matchId)),
     target: () => viewerPosition(job.matchId) ?? 0,
     watching: () => viewerActive(job.matchId),
+    playing: () => viewerPlaying(job.matchId),
   };
 }
 
@@ -834,6 +1054,13 @@ export interface CommentaryDeps {
    */
   resolveStream: (okId: string, force?: boolean) => Promise<Pick<OkStream, 'variants' | 'duration'>>;
   extract: (sourceUrl: string, start: number, length: number, outFile: string, o: ExtractOptions) => Promise<void>;
+  /**
+   * Son complet du match en une passe (`extractFullAudio`) et découpe locale
+   * (`cutAudio`) : le flux n'est lu qu'une fois. Absents (tests) : extraction
+   * tronçon par tronçon depuis le flux.
+   */
+  extractFull?: (sourceUrl: string, outFile: string, o: ExtractOptions & { onProgress?: (sec: number) => void }) => Promise<void>;
+  cut?: (file: string, start: number, length: number, outFile: string, signal?: AbortSignal) => Promise<void>;
   transcribe: (file: string, cfg: CommentaryConfig, o: { prompt?: string; signal?: AbortSignal }) => Promise<Transcript>;
   translate: (lines: TranslateLine[], context: string[], cfg: CommentaryConfig, o: TranslateContext) => Promise<TranslatedLine[]>;
   /**
@@ -862,6 +1089,8 @@ export interface Transcriber {
 const defaultDeps: CommentaryDeps = {
   resolveStream: (okId, force) => resolveOkStream(okId, { force: !!force }),
   extract: extractAudioChunk,
+  extractFull: extractFullAudio,
+  cut: cutAudio,
   envelope: (file, signal) => audioEnvelope(file, signal),
   transcribe: transcribeAudio,
   translate: translateBatch,
@@ -991,24 +1220,29 @@ class StreamUnavailable extends Error {}
 export interface CommentaryControl {
   keepGoing(): boolean;
   target(): number;
-  /**
-   * Quelqu'un regarde : avec `COMMENTARY_MAX_LEAD_SEC`, la traduction ne prend
-   * pas plus d'avance que cela sur la lecture (elle attend). Sans plafond par
-   * défaut : elle va jusqu'au bout du match, dans l'ordre de lecture.
-   */
+  /** Quelqu'un regarde ce match. */
   watching?(): boolean;
+  /**
+   * La vidéo est en cours de lecture : la traduction ne prend pas plus de
+   * `COMMENTARY_MAX_LEAD_SEC` d'avance (elle attend), pour ne pas télécharger
+   * le flux ok.ru en concurrence avec le lecteur (gels de la vidéo). Lecture
+   * en pause : aucun plafond, elle avance jusqu'au bout du match.
+   */
+  playing?(): boolean;
 }
 
 const RUN_TO_END: CommentaryControl = { keepGoing: () => true, target: () => 0 };
 
 /**
- * Avance maximale (s) de la traduction sur la lecture quand on regarde ;
- * 0 (défaut) : aucune. Un plafond laissait le serveur à l'arrêt dès que la
- * lecture était en pause (traduction et doublage bloqués à quelques minutes).
+ * Avance maximale (s) de la traduction sur la lecture PENDANT la lecture
+ * (5 min par défaut ; 0 : aucune). Lecture en pause, pas de plafond : sinon
+ * le serveur restait à l'arrêt (traduction et doublage bloqués à quelques
+ * minutes) alors que le lecteur ne télécharge plus rien.
  */
 function maxLeadSec(): number {
-  const n = Number(process.env.COMMENTARY_MAX_LEAD_SEC);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  const raw = process.env.COMMENTARY_MAX_LEAD_SEC;
+  const n = Number(raw);
+  return raw !== undefined && raw !== '' && Number.isFinite(n) && n >= 0 ? n : 300;
 }
 
 const pause = (ms: number, signal: AbortSignal) =>
@@ -1192,6 +1426,21 @@ export async function runCommentary(
   /** Extrait l'audio d'un tronçon (toutes les sources, puis une re-résolution du flux). */
   const extract = async (plan: ChunkPlan, out: string) => {
     let lastErr = '';
+    // Son complet du match (une seule lecture du flux), découpé sur place.
+    const src = deps.extractFull && deps.cut && fullAudioWanted() ? audioSources(stream)[0] : undefined;
+    if (src && deps.extractFull && deps.cut) {
+      const fa = startFullAudio(okId, src.url, headers, deps.extractFull);
+      const r = await waitFullAudio(fa, Math.min(plan.start + plan.length, duration), signal);
+      checkAborted(signal);
+      if (r === 'ready') {
+        try {
+          await deps.cut(fa.path, plan.start, plan.length, out, signal);
+          return;
+        } catch (e) {
+          lastErr = short(e); // fichier renommé entre-temps, disque… : lecture du flux
+        }
+      }
+    }
     // URL signée expirée pendant un long travail : on re-résout une fois.
     for (let round = 0; round < 2; round++) {
       if (round === 1) {
@@ -1247,7 +1496,7 @@ export async function runCommentary(
     checkAborted(signal);
     if (env) transcript = withEnergy(transcript, env);
     writeJson(cacheJson, { model: cfg.transcribeModel, transcript } satisfies ChunkCache);
-    fs.rmSync(audio, { force: true }); // transcrit : l'audio ne sert plus
+    fs.rmSync(audio, { force: true }); // transcrit : l'audio du tronçon ne sert plus
     return transcript;
   };
 
@@ -1332,7 +1581,7 @@ export async function runCommentary(
       // Assez d'avance sur la lecture : on attend que le spectateur avance.
       const target = ctl.target();
       const lead = maxLeadSec();
-      if (lead > 0 && ctl.watching?.() && coveredFrom(plans, done, target, duration) - target >= lead) {
+      if (lead > 0 && ctl.playing?.() && coveredFrom(plans, done, target, duration) - target >= lead) {
         await pause(Number(process.env.COMMENTARY_LEAD_POLL_MS) || 5_000, signal);
         continue;
       }
@@ -1377,7 +1626,13 @@ export async function runCommentary(
   if (!t || !t.cues) {
     return { ok: false, kind: 'contenu', reason: 'Aucune parole détectée dans le replay (transcription vide après filtrage)' };
   }
-  fs.rmSync(dir, { recursive: true, force: true });
+  // Dossier de travail effacé ; le son complet reste si ce match va être doublé (le doublage l'efface ensuite).
+  if (dubWantsAudio(job.matchId) && fs.existsSync(fullAudioFile(okId))) {
+    for (const f of fs.readdirSync(dir)) if (f !== 'full.ogg') fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+  } else {
+    if (!fullAudios.get(okId)?.running) fullAudios.delete(okId);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   return {
     ok: true,
     reason:

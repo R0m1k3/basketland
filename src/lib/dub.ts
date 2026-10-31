@@ -66,8 +66,10 @@ import {
   commentaryQueuePosition,
   commentaryReady,
   commentaryRunningMatchId,
+  dropFullAudio,
   enqueueCommentary,
   extractAudioChunk,
+  sliceFullAudio,
   type ExtractOptions,
 } from './commentary';
 import { BROWSER_UA } from './http';
@@ -96,8 +98,11 @@ const ROLE_ORDER: VoiceRole[] = ['A', 'B4', 'B1', 'F'];
 export interface VoiceSessionLike {
   /** Voix présentes : 'A', 'B4', 'B1' et peut-être 'F'. */
   readonly voices: string[];
-  /** Synthèse d'une réplique dans un WAV mono. */
-  synth(text: string, voice: string, outFile: string, signal?: AbortSignal): Promise<{ duration: number; sampleRate: number }>;
+  /**
+   * Synthèse d'une réplique dans un WAV mono. `emphasis` (0 à 2, moments
+   * forts) : le moteur peut en tirer le ton (émotion MiniMax).
+   */
+  synth(text: string, voice: string, outFile: string, signal?: AbortSignal, o?: { emphasis?: number }): Promise<{ duration: number; sampleRate: number }>;
   /**
    * Empreintes ECAPA (192-d, normées), hauteur médiane (Hz) et probabilité
    * « voix de femme » (facultative) de chaque segment [début, fin] (s, dans le fichier).
@@ -562,6 +567,64 @@ export function cuesSignature(cues: readonly db.CommentaryCueRow[]): string {
   return h.digest('hex').slice(0, 16);
 }
 
+export interface CueGroup {
+  /** Indices (dans le tronçon) des sous-titres dits d'une traite. */
+  idx: number[];
+  text: string;
+  start: number;
+  end: number;
+  /** Emphase la plus forte du groupe. */
+  emphasis: number;
+}
+
+/** Fin de phrase : ponctuation finale (guillemets ou parenthèse fermants permis après). */
+const SENTENCE_END = /[.!?…:;]["'»”’)\]\s]*$/;
+
+/**
+ * Répliques dites d'une seule traite : les sous-titres sont courts (≤ 5 s,
+ * coupés sur les respirations) et une phrase en couvre souvent plusieurs.
+ * Synthétiser chaque morceau à part casse l'intonation (le ton retombe en
+ * fin de morceau, au milieu de la phrase). Les morceaux consécutifs d'une
+ * même phrase — même locuteur, pas de ponctuation finale, écart ≤ `maxGap`
+ * s — sont donc réunis, jusqu'à `maxSec` s. Sous-titres non traduits ou
+ * vides : ignorés (et ils coupent le groupe).
+ */
+export function groupCues(
+  cues: readonly Pick<db.CommentaryCueRow, 'text_fr' | 'untranslated' | 'start_ts' | 'end_ts' | 'emphasis'>[],
+  speakers: readonly (number | null)[],
+  maxSec = 12,
+  maxGap = 0.8,
+): CueGroup[] {
+  const groups: CueGroup[] = [];
+  let cur: CueGroup | null = null;
+  let curSpeaker: number | null = null;
+  for (let i = 0; i < cues.length; i++) {
+    const c = cues[i];
+    const text = c.text_fr.trim();
+    if (c.untranslated || !text) {
+      cur = null;
+      continue;
+    }
+    const joinable =
+      cur &&
+      speakers[i] === curSpeaker &&
+      !SENTENCE_END.test(cur.text) &&
+      c.start_ts - cur.end <= maxGap &&
+      c.end_ts - cur.start <= maxSec;
+    if (cur && joinable) {
+      cur.idx.push(i);
+      cur.text = `${cur.text} ${text}`;
+      cur.end = c.end_ts;
+      cur.emphasis = Math.max(cur.emphasis, c.emphasis ?? 0);
+    } else {
+      cur = { idx: [i], text, start: c.start_ts, end: c.end_ts, emphasis: c.emphasis ?? 0 };
+      curSpeaker = speakers[i] ?? null;
+      groups.push(cur);
+    }
+  }
+  return groups;
+}
+
 /** Prochain tronçon à doubler : celui de la position visée (spectateur) ou le suivant, sinon le premier. */
 export function nextDubChunk<T extends { keepFrom: number; keepTo: number }>(todo: readonly T[], target: number): T | undefined {
   return todo.find((c) => c.keepTo > target) ?? todo[0];
@@ -774,6 +837,12 @@ export interface DubDeps {
   extract: (sourceUrl: string, start: number, length: number, outFile: string, o: ExtractOptions) => Promise<void>;
   openVoice: (signal: AbortSignal) => Promise<VoiceSessionLike>;
   assemble: (clips: AssembleClip[], duration: number, outFile: string, signal: AbortSignal) => Promise<void>;
+  /**
+   * Découpe la plage dans le son complet du match extrait par la traduction
+   * (pas de nouvelle lecture du flux ok.ru) ; false s'il n'est pas là ou ne
+   * couvre pas encore la plage (l'audio est alors lu dans le flux).
+   */
+  localAudio?: (okId: string, start: number, length: number, outFile: string, signal: AbortSignal) => Promise<boolean>;
 }
 
 const defaultDeps: DubDeps = {
@@ -789,6 +858,7 @@ const defaultDeps: DubDeps = {
     return e.open(signal);
   },
   assemble: (clips, duration, outFile, signal) => assembleChunk(clips, duration, outFile, signal),
+  localAudio: sliceFullAudio,
 };
 
 const RUN_TO_END: DubControl = { yieldReason: () => null, target: () => 0 };
@@ -932,13 +1002,17 @@ export async function runDub(
       let failed = 0;
       let lastErr = '';
       if (cues.length) {
-        // 1. Audio d'origine du tronçon (empreintes vocales).
+        // 1. Audio d'origine du tronçon (empreintes vocales) : découpé dans le
+        // son complet du match extrait par la traduction, sinon lu dans le flux.
         const exStart = Math.max(0, Math.min(ch.keepFrom, cues[0].start_ts) - 0.5);
         const exEnd = Math.max(Number.isFinite(ch.keepTo) ? ch.keepTo : 0, ...cues.map((c) => c.end_ts)) + 0.5;
+        const exLen = Math.ceil((exEnd - exStart) * 10) / 10;
         const audio = path.join(tmp, `source-${ch.idx}.ogg`);
         chunkFiles.push(audio);
-        step('extraction du son d’origine');
-        await extract(exStart, Math.ceil((exEnd - exStart) * 10) / 10, audio);
+        if (!(await deps.localAudio?.(okId, exStart, exLen, audio, signal))) {
+          step('extraction du son d’origine');
+          await extract(exStart, exLen, audio);
+        }
         yieldCheck();
         if (!session) step('démarrage du moteur de voix');
         const voice = await openSession();
@@ -975,35 +1049,36 @@ export async function runDub(
               `(P(femme) ${(s.femaleP ?? 0).toFixed(2).replace('.', ',')} sur ${Math.round(s.femaleSec ?? 0)} s) : voix ${s.roleBefore} → F`,
           );
         }
-        // 4-5. Synthèse et calage de chaque réplique traduite.
-        const toSay = cues.filter((c) => !c.untranslated && c.text_fr.trim()).length;
+        // 4-5. Synthèse et calage : les morceaux d'une même phrase d'une seule traite (intonation).
+        const groups = groupCues(cues, speakers);
+        const toSay = groups.length;
         let said = 0;
-        for (let i = 0; i < cues.length; i++) {
-          const c = cues[i];
-          if (c.untranslated || !c.text_fr.trim()) continue;
+        for (const g of groups) {
+          const first = cues[g.idx[0]];
+          const lastCue = cues[g.idx[g.idx.length - 1]];
           step(`synthèse des répliques : ${++said} / ${toSay}`);
           yieldCheck();
           checkAborted(signal);
-          const sp = state.speakers.find((s) => s.id === speakers[i]);
+          const sp = state.speakers.find((s) => s.id === speakers[g.idx[0]]);
           const role: VoiceRole = sp?.role ?? 'A';
-          const out = path.join(tmp, `cue-${c.seq}.wav`);
+          const out = path.join(tmp, `cue-${first.seq}.wav`);
           chunkFiles.push(out);
           let r: { duration: number };
           try {
-            r = await voice.synth(emphasize(c.text_fr, c.emphasis), voiceFor(role, voice.voices), out, signal);
+            r = await voice.synth(emphasize(g.text, g.emphasis), voiceFor(role, voice.voices), out, signal, { emphasis: g.emphasis });
             if (!(r.duration > 0)) throw new Error('synthèse vide');
           } catch (e) {
             checkAborted(signal);
-            failed++;
+            failed += g.idx.length;
             lastErr = short(e);
-            console.error(`[doublage] match ${job.matchId} : réplique ${c.seq} ignorée (${clock(c.start_ts)}) : ${lastErr}`);
+            console.error(`[doublage] match ${job.matchId} : réplique ${first.seq} ignorée (${clock(first.start_ts)}) : ${lastErr}`);
             continue;
           }
-          const k = allCues.findIndex((x) => x.seq === c.seq);
+          const k = allCues.findIndex((x) => x.seq === lastCue.seq);
           const nextStart = k >= 0 && k + 1 < allCues.length ? allCues[k + 1].start_ts : null;
-          const fit = fitCue(r.duration, c.start_ts, c.end_ts, nextStart);
-          clips.push({ file: out, start: c.start_ts, slotEnd: c.start_ts + fit.slot, fitted: fit.fitted, tempo: fit.tempo, overrun: fit.overrun });
-          if (sp) talk.set(sp.id, (talk.get(sp.id) ?? 0) + (c.end_ts - c.start_ts));
+          const fit = fitCue(r.duration, g.start, g.end, nextStart);
+          clips.push({ file: out, start: g.start, slotEnd: g.start + fit.slot, fitted: fit.fitted, tempo: fit.tempo, overrun: fit.overrun });
+          if (sp) talk.set(sp.id, (talk.get(sp.id) ?? 0) + (g.end - g.start));
         }
         if (toSay && !clips.length) throw new Error(`synthèse impossible pour tout le tronçon ${ch.idx} (${failed} réplique(s)) : ${lastErr}`);
       }
@@ -1095,6 +1170,7 @@ export async function runDub(
   // Doublage complet : piste traduite complète et tous ses tronçons doublés.
   const complete = currentCommentaryTrack(job.matchId)?.complete === 1 && planDub(job.matchId).chunks.every((c) => c.done);
   db.setDubComplete(job.matchId, complete);
+  if (complete && deps.localAudio) dropFullAudio(okId); // son complet gardé pour le doublage : il ne sert plus
   const minutes = Math.max(1, Math.round((Date.now() - t0) / 60_000));
   return {
     ok: true,
@@ -1292,6 +1368,14 @@ export function releaseGpuForTranslation(maxWaitMs = 20_000): Promise<void> | nu
 // Branché sur la file des traductions (via globalThis : pas d'import circulaire, et un seul
 // point d'entrée même si le module est chargé par plusieurs bundles).
 (globalThis as { __commentaryGpuGate?: () => Promise<void> | null }).__commentaryGpuGate = () => releaseGpuForTranslation();
+/**
+ * La traduction garde le son complet du match quand il va être doublé
+ * (doublage en cours ou en file, ou doublage automatique) : le doublage le
+ * découpe au lieu de relire le flux ok.ru en concurrence avec le lecteur,
+ * puis l'efface une fois le doublage complet.
+ */
+(globalThis as { __dubWantsAudio?: (id: number) => boolean }).__dubWantsAudio = (id) =>
+  st.running?.job.matchId === id || dubQueuePosition(id) !== null || autoDubEnabled();
 
 function scheduleRepump(): void {
   clearTimeout(repumpTimer);

@@ -306,7 +306,16 @@ export class VoiceSession {
       [workerPath(), '--model', cfg.model, '--device', cfg.device, '--download-root', hf, '--voices-dir', cfg.voicesDir, ...(embedOnly ? ['--embed-only'] : [])],
       {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, HF_HOME: hf, PYTHONUNBUFFERED: '1' },
+        env: {
+          ...process.env,
+          HF_HOME: hf,
+          PYTHONUNBUFFERED: '1',
+          // Analyse des voix sur le processeur : 2 cœurs (TTS_EMBED_THREADS), pas tous —
+          // le serveur sert la vidéo en même temps.
+          ...(embedOnly && cfg.device === 'cpu'
+            ? { OMP_NUM_THREADS: process.env.TTS_EMBED_THREADS || '2', MKL_NUM_THREADS: process.env.TTS_EMBED_THREADS || '2' }
+            : {}),
+        },
       },
     );
     lowerPriority(this.child);

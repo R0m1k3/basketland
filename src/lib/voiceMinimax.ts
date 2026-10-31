@@ -199,6 +199,21 @@ export function toWav(audio: Buffer, sampleRate = SAMPLE_RATE): { wav: Buffer; d
   return { wav: Buffer.concat([header, audio]), duration: audio.length / (sampleRate * 2), sampleRate };
 }
 
+/**
+ * Ton d'un moment fort (emphase des sous-titres, 0 à 2) : 2 → « surprised »
+ * (exclamation, action qui emballe le commentateur), 1 → « happy » (voix
+ * enjouée). 0 : rien d'imposé. `MINIMAX_EMOTIONS=0` désactive.
+ */
+export function minimaxEmotion(emphasis: number | undefined): 'surprised' | 'happy' | null {
+  if (process.env.MINIMAX_EMOTIONS === '0') return null;
+  return (emphasis ?? 0) >= 2 ? 'surprised' : (emphasis ?? 0) >= 1 ? 'happy' : null;
+}
+
+function emotionField(emphasis: number | undefined): { emotion?: string } {
+  const e = minimaxEmotion(emphasis);
+  return e ? { emotion: e } : {};
+}
+
 /** Session de voix MiniMax : même contrat que `VoiceSession` (voiceAi.ts). */
 export class MinimaxVoiceSession {
   private closed = false;
@@ -244,8 +259,18 @@ export class MinimaxVoiceSession {
     return new MinimaxVoiceSession(cfg, embedder);
   }
 
-  /** Synthétise `text` dans la voix du rôle `voice` vers `outFile` (WAV mono PCM 16 bits, 24 kHz). */
-  async synth(text: string, voice: string, outFile: string, signal?: AbortSignal): Promise<{ duration: number; sampleRate: number }> {
+  /**
+   * Synthétise `text` dans la voix du rôle `voice` vers `outFile` (WAV mono
+   * PCM 16 bits, 24 kHz). Moment fort (`emphasis`, voir `minimaxEmotion`) :
+   * ton imposé ; sinon le modèle choisit d'après le texte.
+   */
+  async synth(
+    text: string,
+    voice: string,
+    outFile: string,
+    signal?: AbortSignal,
+    o: { emphasis?: number } = {},
+  ): Promise<{ duration: number; sampleRate: number }> {
     if (this.closed) throw new Error('session de voix fermée');
     const voiceId = this.cfg.voices[voice];
     if (!voiceId) throw new Error(`voix inconnue : ${voice}`);
@@ -260,7 +285,7 @@ export class MinimaxVoiceSession {
         stream: false,
         language_boost: 'French',
         output_format: 'hex',
-        voice_setting: { voice_id: voiceId, speed: this.cfg.speed, vol: 1, pitch: 0 },
+        voice_setting: { voice_id: voiceId, speed: this.cfg.speed, vol: 1, pitch: 0, ...emotionField(o.emphasis) },
         audio_setting: { sample_rate: SAMPLE_RATE, format: 'wav', channel: 1 },
       },
       signal,

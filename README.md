@@ -448,7 +448,9 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
 | `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
 | `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
-| `COMMENTARY_MAX_LEAD_SEC` | — (aucun plafond) | Si défini : quand quelqu'un regarde, la traduction ne prend pas plus d'avance que cela sur la lecture (elle attend). Par défaut, elle va jusqu'au bout du match, dans l'ordre de lecture, même lecture en pause. |
+| `COMMENTARY_MAX_LEAD_SEC` | `300` (5 min) | Pendant la lecture (position qui avance), la traduction ne prend pas plus d'avance que cela (elle attend). Lecture en pause : aucun plafond, elle va jusqu'au bout du match. `0` : jamais de plafond. |
+| `COMMENTARY_FULL_AUDIO` | `1` | Le son de tout le match est extrait en une seule passe dès le début de la traduction ; traduction et doublage en découpent leurs tronçons sur place, sans relire le flux ok.ru pendant la lecture (gels de la vidéo). `0` : extraction tronçon par tronçon. |
+| `COMMENTARY_AUDIO_READRATE` | — | Vitesse maximale de cette extraction, en multiple du temps réel (ffmpeg `-readrate`), si elle gêne la lecture. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
 | `OPENAI_API_KEY` | — | Clé API OpenAI : si définie (ou enregistrée dans la page Paramètres, prioritaire), la traduction passe par l'API OpenAI au lieu d'Ollama. La transcription reste locale. Facturée à l'usage par OpenAI (ce n'est pas l'abonnement ChatGPT). |
@@ -643,6 +645,8 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 | `MINIMAX_TRANSLATE_MODEL` | `MiniMax-M3.1-Flash` | Modèle texte MiniMax de la traduction (`MiniMax-M3` : plus soigné, plus lent). |
 | `MINIMAX_TTS_MODEL` | `speech-2.8-hd` | Modèle de voix MiniMax (`speech-2.8-turbo` : plus rapide et moins cher). |
 | `MINIMAX_VOICE_A`, `MINIMAX_VOICE_B4`, `MINIMAX_VOICE_B1`, `MINIMAX_VOICE_F` | voix françaises ci-dessus | `voice_id` MiniMax de chaque rôle (liste « System Voice ID » de la documentation MiniMax) ; vide : rôle retiré (repli sur une autre voix). |
+| `MINIMAX_EMOTIONS` | `1` | Moments forts : ton imposé à MiniMax (emphase 2 → « surprised », 1 → « happy »). `0` : le modèle choisit seul. |
+| `TTS_EMBED_THREADS` | `2` | Avec MiniMax : cœurs du processeur pour l'analyse des voix. |
 | `MINIMAX_TTS_SPEED` | `1` | Débit de parole MiniMax (0,5 à 2). |
 | `MINIMAX_API_URL` | `https://api.minimax.io` | Serveur de l'API (p. ex. `https://api-uw.minimax.io`). |
 | `TTS_EMBED_DEVICE` | `cpu` | Avec MiniMax : appareil de l'analyse des voix (`cpu`, ou `cuda`, le doublage attend alors de nouveau le GPU). |
