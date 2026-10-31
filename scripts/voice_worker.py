@@ -96,19 +96,61 @@ def dir_size(path: str) -> int:
     return total
 
 
+# Posé dans le dossier du modèle (snapshot du cache) une fois un téléchargement
+# allé au bout : un dossier sans cette marque peut être un téléchargement
+# interrompu (fichiers de configuration présents, poids absents).
+COMPLETE_MARK = ".basketland-complet"
+WEIGHTS_EXT = (".safetensors", ".bin", ".ckpt", ".pt", ".pth", ".h5", ".msgpack")
+
+
+def has_weights(path: str) -> bool:
+    try:
+        return any(f.endswith(WEIGHTS_EXT) and os.path.isfile(os.path.join(path, f)) for f in os.listdir(path))
+    except OSError:
+        return False
+
+
+def mark_complete(path: str) -> None:
+    try:
+        with open(os.path.join(path, COMPLETE_MARK), "w", encoding="utf-8") as f:
+            f.write("ok\n")
+    except OSError as e:
+        log(f"marque de téléchargement complet impossible ({e})")
+
+
 def fetch_model(name: str, on_progress=None) -> str:
     """
     Chemin local du modèle ; téléchargement au premier usage, progression dans
     les journaux (et toutes les 5 s à `on_progress(fait, total)`, en octets).
+
+    Le cache seul ne suffit pas : `snapshot_download(local_files_only=True)`
+    rend aussi le dossier d'un téléchargement interrompu, sans les poids. Sans
+    la marque `COMPLETE_MARK`, le téléchargement est repris (ce qui est déjà
+    là n'est pas retéléchargé) ; hors ligne, le cache sert s'il a des poids.
     """
     if os.path.isdir(name):
         return name
     from huggingface_hub import constants, snapshot_download
 
+    local = None
     try:
-        return snapshot_download(name, local_files_only=True)
+        local = snapshot_download(name, local_files_only=True)
+        if os.path.exists(os.path.join(local, COMPLETE_MARK)):
+            return local
     except Exception:
         pass
+    try:
+        path = download_snapshot(name, constants.HF_HUB_CACHE, snapshot_download, on_progress, resume=local is not None)
+    except Exception as e:
+        if local and has_weights(local):
+            log(f"modèle {name} : vérification impossible ({e}), version du cache utilisée")
+            return local
+        raise
+    mark_complete(path)
+    return path
+
+
+def download_snapshot(name: str, cache: str, snapshot_download, on_progress, resume: bool) -> str:
     total = 0
     try:
         from huggingface_hub import HfApi
@@ -118,8 +160,11 @@ def fetch_model(name: str, on_progress=None) -> str:
     except Exception:
         pass
     size = f", {total / 1e9:.1f} Go".replace(".", ",") if total else ""
-    log(f"téléchargement du modèle {name} (premier usage{size})…")
-    folder = os.path.join(constants.HF_HUB_CACHE, "models--" + name.replace("/", "--"))
+    if resume:
+        log(f"modèle {name} incomplet ou pas encore vérifié dans le cache : reprise du téléchargement{size}…")
+    else:
+        log(f"téléchargement du modèle {name} (premier usage{size})…")
+    folder = os.path.join(cache, "models--" + name.replace("/", "--"))
     stop = threading.Event()
 
     def watch() -> None:
@@ -483,14 +528,11 @@ def download_only(args) -> int:
     """Modèles mis en cache sans rien charger (ni GPU, ni voix) ; progression sur le protocole."""
     try:
         fetch_model(args.model, lambda done, total: send({"event": "progress", "done": done, "total": total}))
-        from huggingface_hub import hf_hub_download, snapshot_download
+        from huggingface_hub import hf_hub_download
 
         # Petits modèles de l'analyse des voix (≈ 150 Mo), chargés plus tard par la
         # session : le cache d'abord (aucun appel réseau quand tout est déjà là).
-        try:
-            snapshot_download(EMBED_MODEL, local_files_only=True)
-        except Exception:
-            snapshot_download(EMBED_MODEL)
+        fetch_model(EMBED_MODEL)
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from voice_gender import GENDER_MODEL, GENDER_REVISION
 
