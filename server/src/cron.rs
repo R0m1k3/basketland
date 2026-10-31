@@ -77,6 +77,19 @@ fn schedule(st: AppState) {
         ingest::RUST_JOBS.join(", ")
     );
 
+    // Moteur NVIDIA déjà choisi : son modèle est téléchargé dès le démarrage
+    // (rien à faire s'il est déjà là), pas à la première traduction.
+    let d = db.clone();
+    tokio::spawn(async move {
+        if let Ok(set) = d.run(crate::settings::Settings::load).await {
+            if crate::settings::transcribe_engine(&set) == "nvidia"
+                && crate::media::commentary_ai::transcribe_engine_override(&set).is_none()
+            {
+                crate::media::local_ai::prefetch_parakeet();
+            }
+        }
+    });
+
     // Premier démarrage : base vide → saison complète.
     let d = db.clone();
     tokio::spawn(async move {

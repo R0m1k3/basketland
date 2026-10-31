@@ -1076,6 +1076,8 @@ async fn son_complet_reel_pendant_un_travail() {
     let _g = LOCK.lock().await;
     let t = ondemand();
     set_env("COMMENTARY_FULL_AUDIO_POLL_MS", "5");
+    // Son complet : la voie sans téléchargement parallèle des segments.
+    set_env("COMMENTARY_PARALLEL_FETCH", "0");
     set_env("COMMENTARY_CHUNK_SEC", "120"); // premier tronçon à moins de 10 min de l'extraction : on l'attend
     let src = t._dir.path().join("match.wav");
     let st = std::process::Command::new("ffmpeg")

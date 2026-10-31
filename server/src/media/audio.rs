@@ -336,20 +336,35 @@ pub async fn extract_audio_chunk(
     out_file: &str,
     o: &ExtractOptions,
 ) -> Result<(), String> {
+    extract_chunk(source_url, start, length, out_file, o, false).await
+}
+
+/// `exact` : `-ss` APRÈS `-i` (son décodé puis écarté jusqu'à `start`), au
+/// lieu d'un saut d'image clé : seul moyen d'être juste sur des segments
+/// MPEG-TS recollés, où le saut tombait plus d'une seconde trop loin.
+async fn extract_chunk(
+    source_url: &str,
+    start: f64,
+    length: f64,
+    out_file: &str,
+    o: &ExtractOptions,
+    exact: bool,
+) -> Result<(), String> {
     let part = format!("{out_file}.part");
     let bin = ffmpeg_bin();
     let mut args: Vec<String> = ["-hide_banner", "-loglevel", "error"]
         .map(String::from)
         .to_vec();
     args.extend(header_args(source_url, &o.headers));
-    args.extend([
-        "-ss".into(),
-        js_number_string(start),
-        "-i".into(),
-        source_url.into(),
-        "-t".into(),
-        js_number_string(length),
-    ]);
+    let seek = ["-ss".to_string(), js_number_string(start)];
+    if !exact {
+        args.extend(seek.clone());
+    }
+    args.extend(["-i".into(), source_url.into()]);
+    if exact {
+        args.extend(seek);
+    }
+    args.extend(["-t".into(), js_number_string(length)]);
     args.extend(OPUS_ARGS.map(String::from));
     args.extend(["ogg".into(), "-y".into(), part.clone()]);
     let mut child = Command::new(&bin)
@@ -401,6 +416,57 @@ pub async fn extract_audio_chunk(
             squash(&err)
         ))
     }
+}
+
+/// Tronçon d'un flux HLS par téléchargement PARALLÈLE des segments
+/// ([`super::hls_fetch`]) puis découpe locale. Erreur aussi quand
+/// `source_url` n'est pas une playlist média lisible ainsi (MP4…) : l'appelant
+/// passe alors par ffmpeg. Rend le résumé du téléchargement (journal).
+pub async fn extract_hls_chunk_parallel(
+    source_url: &str,
+    start: f64,
+    length: f64,
+    out_file: &str,
+    o: &ExtractOptions,
+) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
+    let ts = std::path::PathBuf::from(format!("{out_file}.src.ts"));
+    let stats = super::hls_fetch::fetch_range(
+        source_url,
+        start,
+        length,
+        &o.headers,
+        o.signal.as_ref(),
+        &ts,
+    )
+    .await?;
+    let fetched = t0.elapsed().as_secs_f64();
+    let ts_s = ts.to_string_lossy().into_owned();
+    let cut = ExtractOptions {
+        signal: o.signal.clone(),
+        timeout: Some(Duration::from_secs(120)),
+        ..Default::default()
+    };
+    let r = extract_chunk(
+        &ts_s,
+        (start - stats.first_start).max(0.0),
+        length,
+        out_file,
+        &cut,
+        true,
+    )
+    .await;
+    let _ = std::fs::remove_file(&ts);
+    r?;
+    let mb = stats.bytes as f64 / 1e6;
+    Ok(format!(
+        "{} segment(s), {:.1} Mo en {:.1} s ({:.0} kb/s, {} connexions)",
+        stats.segments,
+        mb,
+        fetched,
+        mb * 8000.0 / fetched.max(0.001),
+        super::hls_fetch::fetch_parallel()
+    ))
 }
 
 /// `cutAudio` : découpe sur place `length` s du son local `file` (coupe exacte, délai 2 min).

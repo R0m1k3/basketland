@@ -127,6 +127,13 @@ pub async fn post(State(st): State<AppState>, uri: OriginalUri, req: Request) ->
             .await;
         match r {
             Ok(set) => {
+                // Moteur NVIDIA choisi : modèle téléchargé tout de suite, pas à
+                // la première traduction.
+                if body.get("transcribeEngine").and_then(Value::as_str) == Some("nvidia")
+                    && crate::media::commentary_ai::transcribe_engine_override(&set).is_none()
+                {
+                    crate::media::local_ai::prefetch_parakeet();
+                }
                 let mut out = Map::new();
                 out.insert("ok".into(), Value::Bool(true));
                 if let Value::Object(v) = s::settings_view(&set) {

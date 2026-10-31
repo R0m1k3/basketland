@@ -224,6 +224,103 @@ fn whisper_exit_message(why: &str, tail: &str) -> String {
     )
 }
 
+/// Environnement des processus Whisper et Parakeet : cache Hugging Face
+/// (`/data/models/hf`) et cuBLAS/cuDNN des paquets pip de l'environnement
+/// Whisper (Parakeet les partage).
+fn worker_env(models: &Path) -> Vec<(String, String)> {
+    let lib = whisper_library_path(&embedded_paths().python);
+    let mut env = vec![
+        (
+            "HF_HOME".to_string(),
+            models.join("hf").to_string_lossy().into_owned(),
+        ),
+        ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
+    ];
+    if !lib.is_empty() {
+        let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let v = [lib.as_str(), prev.as_str()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(":");
+        env.push(("LD_LIBRARY_PATH".into(), v));
+    }
+    env
+}
+
+/// Téléchargement du modèle Parakeet en cours (un seul à la fois).
+static PARAKEET_PREFETCH: AtomicBool = AtomicBool::new(false);
+
+/// Télécharge en arrière-plan le modèle Parakeet (`parakeet_worker.py
+/// --prefetch` : fichiers seulement, rien n'est chargé sur le GPU), pour que
+/// la première traduction n'attende pas les ~2,5 Go du modèle. Appelé dès que
+/// le moteur NVIDIA est choisi dans les Paramètres, et au démarrage s'il l'est
+/// déjà ; sans effet si un téléchargement est déjà en cours ou si Parakeet est
+/// absent de l'image. Modèle déjà présent : le processus le constate et quitte.
+pub fn prefetch_parakeet() {
+    if !embedded_parakeet_available() || PARAKEET_PREFETCH.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(async move {
+        let r = run_parakeet_prefetch().await;
+        PARAKEET_PREFETCH.store(false, Ordering::SeqCst);
+        if let Err(e) = r {
+            eprintln!("[parakeet] téléchargement anticipé du modèle impossible : {e}");
+        }
+    });
+}
+
+async fn run_parakeet_prefetch() -> Result<(), String> {
+    let (python, worker) = parakeet_paths();
+    let models = models_dir();
+    std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
+    let mut child = Command::new(&python)
+        .args([
+            worker.as_str(),
+            "--model",
+            PARAKEET_MODEL,
+            "--device",
+            &env_or("WHISPER_DEVICE", || "auto".into()),
+            "--prefetch",
+        ])
+        .envs(worker_env(&models))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| short(&spawn_error_text(&python, &e)))?;
+    lower_priority(child.id());
+    if let Some(mut err) = child.stderr.take() {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match err.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+            while let Some(i) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=i).collect();
+                let l = String::from_utf8_lossy(&line);
+                let l = js::trim(&l);
+                if !l.is_empty() {
+                    if l.starts_with("[parakeet]") {
+                        println!("{l}");
+                    } else {
+                        println!("[parakeet] {l}");
+                    }
+                }
+            }
+        }
+    }
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("le processus s'est arrêté ({status})"))
+    }
+}
+
 impl WhisperSession {
     /// `WhisperSession.open` : lance le processus et attend que le modèle soit
     /// prêt (`WHISPER_LOAD_TIMEOUT_MS`, 30 min par défaut ; le premier
@@ -242,25 +339,7 @@ impl WhisperSession {
         };
         let models = models_dir();
         std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
-        // cuBLAS et cuDNN des paquets pip de l'environnement Whisper (Parakeet les partage).
-        let lib = whisper_library_path(&p.python);
-        let mut env = vec![
-            (
-                "HF_HOME".to_string(),
-                models.join("hf").to_string_lossy().into_owned(),
-            ),
-            ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
-        ];
-        if !lib.is_empty() {
-            let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-            let v = [lib.as_str(), prev.as_str()]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(":");
-            env.push(("LD_LIBRARY_PATH".into(), v));
-        }
+        let env = worker_env(&models);
         let mut args = vec![
             worker,
             "--model".into(),

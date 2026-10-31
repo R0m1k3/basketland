@@ -198,15 +198,53 @@ impl CommentaryDeps {
             }),
             extract: Arc::new(|r| {
                 Box::pin(async move {
+                    // Segments HLS sur plusieurs connexions : ok.ru bride chacune.
+                    if crate::media::hls_fetch::parallel_fetch_enabled() {
+                        let t0 = std::time::Instant::now();
+                        match crate::media::audio::extract_hls_chunk_parallel(
+                            &r.source_url,
+                            r.start,
+                            r.length,
+                            &r.out_file,
+                            &r.options,
+                        )
+                        .await
+                        {
+                            Ok(how) => {
+                                println!(
+                                    "[commentaires] audio {}–{} s : {how} ; prêt en {:.1} s",
+                                    r.start.round(),
+                                    (r.start + r.length).round(),
+                                    t0.elapsed().as_secs_f64()
+                                );
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                if crate::media::abort::is_aborted(r.options.signal.as_ref()) {
+                                    return Err(e);
+                                }
+                                eprintln!(
+                                    "[commentaires] téléchargement parallèle impossible ({}) : lecture par ffmpeg",
+                                    short(&e)
+                                );
+                            }
+                        }
+                    }
                     extract_audio_chunk(&r.source_url, r.start, r.length, &r.out_file, &r.options)
                         .await
                 })
             }),
-            extract_full: Some(Arc::new(|url, out, o, progress| {
-                Box::pin(
-                    async move { extract_full_audio(&url, &out, &o, Some(&*progress), None).await },
-                )
-            })),
+            // Son complet lu d'une traite par ffmpeg (une connexion, depuis le
+            // début du match) : seulement sans le téléchargement parallèle,
+            // bien plus rapide et qui commence là où regarde le spectateur.
+            extract_full: (!crate::media::hls_fetch::parallel_fetch_enabled()).then(|| {
+                let f: ExtractFullFn = Arc::new(|url, out, o, progress| {
+                    Box::pin(async move {
+                        extract_full_audio(&url, &out, &o, Some(&*progress), None).await
+                    })
+                });
+                f
+            }),
             cut: Some(Arc::new(|file, start, length, out, signal| {
                 Box::pin(async move { cut_audio(&file, start, length, &out, signal).await })
             })),
@@ -653,6 +691,7 @@ impl RunCtx {
             self.total as f64,
         );
         let audio_s = path_str(&audio);
+        let t0 = std::time::Instant::now();
         let mut transcript = (asr.transcribe)(
             audio_s.clone(),
             self.prompt.clone(),
@@ -660,6 +699,13 @@ impl RunCtx {
             self.hotwords.clone(),
         )
         .await?;
+        println!(
+            "[commentaires] match {} tronçon {}/{} : transcrit en {:.1} s",
+            self.match_id,
+            plan.index + 1,
+            self.total,
+            t0.elapsed().as_secs_f64()
+        );
         // Intensité de la voix mot par mot, tant que l'audio est là.
         let env = match &self.deps.envelope {
             Some(f) => f(audio_s, self.signal.clone()).await,
@@ -688,6 +734,26 @@ impl RunCtx {
 
     /// Traduit et publie les sous-titres d'un tronçon.
     async fn translate_and_publish(
+        &self,
+        plan: &ChunkPlan,
+        cues: Vec<ChunkCue>,
+    ) -> Result<(), CommentaryError> {
+        let t0 = std::time::Instant::now();
+        let n = cues.len();
+        let r = self.translate_and_publish_inner(plan, cues).await;
+        if r.is_ok() {
+            println!(
+                "[commentaires] match {} tronçon {}/{} : {n} ligne(s) traduite(s) en {:.1} s",
+                self.match_id,
+                plan.index + 1,
+                self.total,
+                t0.elapsed().as_secs_f64()
+            );
+        }
+        r
+    }
+
+    async fn translate_and_publish_inner(
         &self,
         plan: &ChunkPlan,
         cues: Vec<ChunkCue>,

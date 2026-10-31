@@ -1346,12 +1346,13 @@ impl Commentary {
         let ok_id = self.get_match(match_id).and_then(|m| m.video_ok_id);
         let t0 = std::time::Instant::now();
         println!(
-            "[commentaires] match {match_id} : traduction démarrée{}",
+            "[commentaires] match {match_id} : traduction démarrée{} — {}",
             if waiting > 0 {
                 format!(" ({waiting} en attente)")
             } else {
                 String::new()
-            }
+            },
+            self.config().engines_label()
         );
         let w = self.weak();
         let progress: ProgressFn = Arc::new(move |p: CommentaryProgress| {

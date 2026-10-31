@@ -78,19 +78,121 @@ def providers_for(device: str):
     return ["CPUExecutionProvider"], "cpu"
 
 
+def _dir_bytes(path: str) -> int:
+    """Taille des fichiers du dossier, liens suivis mais comptés une fois
+    (cache Hugging Face : snapshots/ et blobs/ pointent vers les mêmes données)."""
+    seen = set()
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            real = os.path.realpath(os.path.join(root, f))
+            if real in seen:
+                continue
+            seen.add(real)
+            try:
+                total += os.path.getsize(real)
+            except OSError:
+                pass
+    return total
+
+
+def model_cache_dir(model_name: str) -> str:
+    """Dossier du cache Hugging Face du modèle (HF_HOME/hub/models--…)."""
+    try:
+        from onnx_asr.resolver import model_repos
+
+        repo = model_repos.get(model_name, model_name)
+    except Exception:
+        repo = model_name
+    home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    return os.path.join(home, "hub", "models--" + repo.replace("/", "--"))
+
+
+def watch_download(cache: str):
+    """Journalise la taille téléchargée toutes les 10 s, jusqu'à `stop.set()`
+    (les barres de progression de Hugging Face, faites de retours chariot,
+    ne passent pas dans les journaux ligne à ligne)."""
+    import threading
+    import time
+
+    stop = threading.Event()
+    start = time.monotonic()
+
+    def run():
+        last = -1
+        while not stop.wait(10):
+            mb = _dir_bytes(cache) // 1_000_000
+            if mb != last:
+                log(f"téléchargement du modèle : {mb} Mo reçus ({int(time.monotonic() - start)} s)")
+                last = mb
+
+    threading.Thread(target=run, daemon=True).start()
+    return stop
+
+
+def quantization_for(dev: str) -> str:
+    """Sur processeur, int8 (deux à trois fois plus rapide) ; sur GPU, le
+    modèle d'origine (int8 n'y gagne rien et dégrade un peu la précision).
+    `PARAKEET_QUANTIZATION` : `auto` (défaut), `int8` ou `fp32`. "" = fp32."""
+    quantization = (os.environ.get("PARAKEET_QUANTIZATION") or "auto").strip().lower()
+    if quantization == "auto":
+        return "int8" if dev == "cpu" else ""
+    return "" if quantization == "fp32" else quantization
+
+
+def with_download_log(model_name: str, dev: str, q: str, fetch, *, prefetching: bool = False):
+    """Exécute `fetch()` en journalisant le téléchargement du modèle s'il
+    n'est pas encore dans le cache (taille reçue toutes les 10 s)."""
+    cache = model_cache_dir(model_name)
+    # Déjà téléchargé dans la précision voulue (int8 : `*.int8.onnx`).
+    want = (lambda f: f.endswith(f".{q}.onnx")) if q else (lambda f: f.endswith(".onnx") and ".int8." not in f)
+    cached = any(want(f) for _, _, fs in os.walk(cache) for f in fs)
+    if not cached:
+        log(f"téléchargement de {model_name} ({q or 'fp32'}, pour {dev}) depuis Hugging Face vers {cache}…")
+    elif prefetching:
+        log(f"{model_name} ({q or 'fp32'}) déjà téléchargé dans {cache}")
+    else:
+        log(f"chargement de {model_name} sur {dev} ({q or 'fp32'}) depuis {cache}")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    stop = None if cached else watch_download(cache)
+    try:
+        return fetch()
+    finally:
+        if stop is not None:
+            stop.set()
+        if not cached:
+            log(f"modèle présent dans le cache ({_dir_bytes(cache) // 1_000_000} Mo)")
+
+
+def prefetch(model_name: str, device: str) -> int:
+    """Télécharge seulement les fichiers du modèle (et du VAD) dans la
+    précision qu'utilisera la transcription, sans rien charger sur le GPU :
+    lancé dès que le moteur NVIDIA est choisi, pour que la première
+    traduction n'attende pas le téléchargement."""
+    from onnx_asr.loader import create_asr_resolver, create_vad_resolver
+
+    _, dev = providers_for(device)
+    q = quantization_for(dev)
+    with_download_log(
+        model_name,
+        dev,
+        q,
+        lambda: create_asr_resolver(model_name).resolve_model(quantization=q or None),
+        prefetching=True,
+    )
+    create_vad_resolver("silero").resolve_model()
+    log(f"modèle {model_name} prêt pour la transcription ({q or 'fp32'}, {dev})")
+    return 0
+
+
 def load(model_name: str, device: str):
     import onnx_asr
 
     providers, dev = providers_for(device)
-    # Sur processeur, int8 (deux à trois fois plus rapide) ; sur GPU, le
-    # modèle d'origine (int8 n'y gagne rien et dégrade un peu la précision).
-    # `PARAKEET_QUANTIZATION` : `auto` (défaut), `int8` ou `fp32`.
-    quantization = (os.environ.get("PARAKEET_QUANTIZATION") or "auto").strip().lower()
-    if quantization == "auto":
-        q = "int8" if dev == "cpu" else ""
-    else:
-        q = "" if quantization == "fp32" else quantization
-    model = onnx_asr.load_model(model_name, quantization=q or None, providers=providers)
+    q = quantization_for(dev)
+    model = with_download_log(
+        model_name, dev, q, lambda: onnx_asr.load_model(model_name, quantization=q or None, providers=providers)
+    )
     vad = onnx_asr.load_vad("silero", providers=["CPUExecutionProvider"])
     try:
         batch = max(1, min(64, int(os.environ.get("PARAKEET_BATCH_SIZE") or "8")))
@@ -159,7 +261,15 @@ def main() -> int:
     ap.add_argument("--device", default="auto")
     ap.add_argument("--compute-type", default="auto")
     ap.add_argument("--download-root", default="")
+    ap.add_argument("--prefetch", action="store_true", help="télécharger le modèle puis quitter")
     args, _ = ap.parse_known_args()
+    if args.prefetch:
+        try:
+            return prefetch(args.model, args.device)
+        except Exception as e:
+            log(f"téléchargement du modèle {args.model} impossible : {e}")
+            traceback.print_exc()
+            return 1
     # Modèles téléchargés depuis Hugging Face (HF_HOME, posé par le serveur).
     try:
         engine, device, precision = load(args.model, args.device)

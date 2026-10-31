@@ -433,6 +433,7 @@ pub fn settings_view(s: &Settings) -> Value {
         "autoTranslate": auto_translate_enabled(s),
         "vfMode": vf_mode(s),
         "transcribeEngine": transcribe_engine(s),
+        "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
     })
 }
 
