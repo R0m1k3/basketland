@@ -51,8 +51,8 @@ export async function GET(req: Request, ctx: RouteCtx<{ id: string }>) {
  *   pendant que ce match est doublé) ;
  * - { action: 'stop' } → « Arrêter le doublage » (tout utilisateur
  *   connecté) : retiré de la file ou interrompu, ce qui est doublé reste ;
- *   il ne repart plus tout seul, « Reprendre le doublage » (`start`) le
- *   relance. La traduction n'est pas touchée.
+ *   « Reprendre le doublage » (`start`) le relance. La traduction n'est
+ *   pas touchée.
  * Réponse : `{ dub: manifeste, commentary: statut de la traduction, message }`.
  * Mêmes garde-fous que la route commentary : origine contrôlée, Content-Type
  * JSON exigé (une requête « simple » text/plain n'est pas préflightée).

@@ -66,12 +66,11 @@ export function setAutoTranslate(enabled: boolean): void {
 /**
  * « Version française » (réglage administrateur) :
  * - 'sous-titres' (DÉFAUT, clé absente ou valeur inconnue) : les
- *   commentaires sont traduits et affichés en sous-titres ; aucun doublage
- *   de fond (un match se double seulement sur un clic « Doubler ce match ») ;
- * - 'doublage' : les commentaires sont traduits puis dits par des voix
- *   françaises — avec la traduction automatique, chaque replay traduit est
- *   aussi doublé en tâche de fond, et le lecteur part en « VF doublée » tant
- *   que l'utilisateur n'a rien choisi.
+ *   commentaires sont traduits et affichés en sous-titres ;
+ * - 'doublage' : « Doubler ce match » est mis en avant sur la fiche et le
+ *   lecteur part en « VF doublée » tant que l'utilisateur n'a rien choisi.
+ *   Une traduction ne lance jamais le doublage, dans aucun mode : seul
+ *   « Doubler ce match » le lance (avec la traduction s'il le faut).
  * Le doublage part toujours des sous-titres : la traduction est faite dans
  * les deux modes.
  */
@@ -89,11 +88,6 @@ export function vfMode(): VfMode {
 
 export function setVfMode(mode: VfMode): void {
   setSetting(SETTING_KEYS.vfMode, mode);
-}
-
-/** Doublage AUTOMATIQUE (tâches de fond, match regardé) : traduction automatique activée ET mode « doublage ». */
-export function autoDubEnabled(): boolean {
-  return autoTranslateEnabled() && vfMode() === 'doublage';
 }
 
 /**

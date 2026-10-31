@@ -29,14 +29,12 @@
  * quand le doublage cède la place. La fiche voit l'étape en cours (manifeste
  * `step`) et ce qui occupe le GPU.
  *
- * PRIORITÉ À LA LECTURE (même règle que la traduction) : un doublage de
- * fond s'efface pendant qu'on regarde un AUTRE match ; le doublage du match
- * regardé passe en premier (à partir de la position du spectateur), mais
- * seulement si ses sous-titres existent et qu'aucune traduction ne tourne.
- * En tâche de fond (fenêtre `COMMENTARY_NIGHT_WINDOW`, paramètres
- * `auto_translate` ET `vf_mode` = 'doublage'), les matchs récents traduits
- * sont doublés. En mode « sous-titres », ni doublage de fond ni lancement à
- * l'ouverture d'un match : seulement les demandes explicites.
+ * PAS DE DOUBLAGE AUTOMATIQUE : une traduction (automatique ou demandée),
+ * l'ouverture d'un match ou le réglage « Version française » ne lancent
+ * jamais le doublage. Seule la demande explicite le lance. PRIORITÉ À LA
+ * LECTURE : le doublage demandé d'un match regardé passe en tête de file (à
+ * partir de la position du spectateur) ; un doublage s'efface pendant qu'on
+ * regarde un AUTRE match.
  *
  * DEMANDE EXPLICITE (« Doubler ce match », « Relancer le doublage » :
  * `requestDub`) : la traduction est mise en file si besoin, puis le doublage
@@ -58,7 +56,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as db from './db';
-import { analysisActivity, backoffMs, MAX_AUTO_FAILURES, networkBackoffMs } from './analysis';
+import { analysisActivity } from './analysis';
 import { ffmpegAvailable } from './audio';
 import {
   audioSources,
@@ -73,11 +71,8 @@ import {
   type ExtractOptions,
 } from './commentary';
 import { BROWSER_UA } from './http';
-import { inNightWindow } from './nightWindow';
 import { OK_REFERER, resolveOkStream, type OkStream } from './okru';
 import { lowerPriority } from './procPriority';
-import { autoDubEnabled } from './settings';
-import { addDays } from './time';
 import { someoneWatching, viewerActive, viewerPosition } from './viewers';
 
 // ------------------------------------------------------------------ moteur de voix (contrat de voiceAi.ts)
@@ -763,9 +758,8 @@ export interface DubRecord {
   /** Piste traduite doublée (db.commentaryKey). */
   key: string | null;
   /**
-   * Arrêté à la demande (« Arrêter le doublage ») : plus aucune mise en file
-   * automatique (lecture, fond) tant qu'on ne le relance pas (« Reprendre le
-   * doublage », `requestDub`).
+   * Arrêté à la demande (« Arrêter le doublage ») : la fiche propose
+   * « Reprendre le doublage » (`requestDub`, qui efface la marque).
    */
   stopped?: boolean;
 }
@@ -779,16 +773,6 @@ export function getDubRecord(matchId: number): DubRecord | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** Une mise en file AUTOMATIQUE est-elle permise maintenant ? */
-export function dubRetryAllowed(rec: DubRecord | undefined, key: string | null, now = Date.now()): boolean {
-  if (rec?.stopped) return false; // arrêté à la demande : seule une demande explicite le relance
-  if (!rec || rec.ok) return true;
-  if (key && rec.key && key !== rec.key) return true; // nouvelle piste traduite : on repart de zéro
-  if (quickRetry(rec.kind)) return now - Date.parse(rec.at) >= networkBackoffMs(rec.netFailures ?? 1);
-  if (rec.failures >= MAX_AUTO_FAILURES) return false;
-  return now - Date.parse(rec.at) >= backoffMs(rec.failures);
 }
 
 // ------------------------------------------------------------------ exécution d'un travail
@@ -1262,10 +1246,11 @@ function downloadStep(): string | undefined {
   return d ? downloadText(d) : undefined;
 }
 
-/** Doublage de fond permis : fenêtre ouverte (traduction automatique comprise) ET mode « doublage ». */
-const backgroundAllowed = () => inNightWindow() && autoDubEnabled();
-/** Travail de fond hors de la fenêtre autorisée, ou mode « sous-titres » (et personne ne regarde ce match) : abandonné. */
-const outsideWindow = (job: Job) => !job.viewer && !job.explicit && !viewerActive(job.matchId) && !backgroundAllowed();
+/**
+ * Pas de doublage de fond : un travail ni demandé (« Doubler ce match ») ni
+ * regardé est abandonné. Une traduction ne lance jamais le doublage.
+ */
+const unwanted = (job: Job) => !job.viewer && !job.explicit && !viewerActive(job.matchId);
 /** Travail de fond (ou explicite, fiche fermée) qui doit attendre : quelqu'un regarde un autre match. */
 const mustWait = (job: Job) => (!job.viewer || !!job.explicit) && !viewerActive(job.matchId) && someoneWatching(job.matchId);
 /** La traduction de ce match tourne ou est en file : d'autres tronçons de sous-titres vont arriver. */
@@ -1278,11 +1263,11 @@ function controlFor(job: Job): DubControl {
     yieldReason: () => {
       if (gpuBlocksDub()) return 'gpu';
       if (viewerActive(job.matchId)) return null;
-      // Le spectateur est parti (ou travail de fond) : on continue seulement en tâche de fond permise.
+      // Le spectateur est parti : un autre match est regardé, ou plus personne.
       if (someoneWatching(job.matchId)) return 'viewer';
       if (job.explicit) return null; // demande explicite : jusqu'au bout
-      if (!backgroundAllowed()) return 'window';
-      return null;
+      return 'window'; // pas de doublage de fond
+
     },
     target: () => viewerPosition(job.matchId) ?? 0,
   };
@@ -1335,7 +1320,7 @@ export function enqueueDub(matchId: number, opts: { priority?: boolean; explicit
   pump();
   if (st.running?.job.matchId === matchId) return { queued: true, started: true, message: 'Doublage lancé' };
   const position = dubQueuePosition(matchId);
-  if (!position) return { queued: false, started: false, message: 'Doublage de fond hors de la fenêtre autorisée' };
+  if (!position) return { queued: false, started: false, message: 'Doublage abandonné : ni demandé ni regardé' };
   if (waitsForSubtitles(job)) return { queued: true, started: false, position, message: 'Doublage en file : il commencera dès les premiers sous-titres français' };
   return { queued: true, started: false, position, message: `Doublage en file (position ${position})` };
 }
@@ -1379,12 +1364,12 @@ export function releaseGpuForTranslation(maxWaitMs = 20_000): Promise<void> | nu
 (globalThis as { __commentaryGpuGate?: () => Promise<void> | null }).__commentaryGpuGate = () => releaseGpuForTranslation();
 /**
  * La traduction garde le son complet du match quand il va être doublé
- * (doublage en cours ou en file, ou doublage automatique) : le doublage le
+ * (doublage en cours ou en file) : le doublage le
  * découpe au lieu de relire le flux ok.ru en concurrence avec le lecteur,
  * puis l'efface une fois le doublage complet.
  */
 (globalThis as { __dubWantsAudio?: (id: number) => boolean }).__dubWantsAudio = (id) =>
-  st.running?.job.matchId === id || dubQueuePosition(id) !== null || autoDubEnabled();
+  st.running?.job.matchId === id || dubQueuePosition(id) !== null;
 
 function scheduleRepump(): void {
   clearTimeout(repumpTimer);
@@ -1396,7 +1381,7 @@ function pump(): void {
   clearTimeout(repumpTimer);
   if (!st.running && st.queue.length) {
     if (dubDisabledReasonSync()) st.queue.length = 0;
-    st.queue = st.queue.filter((j) => !outsideWindow(j));
+    st.queue = st.queue.filter((j) => !unwanted(j));
     if (st.queue.length && gpuBlocksDub()) scheduleRepump(); // GPU pris : on attend sa libération
     else {
       while (!st.running && st.queue.length) {
@@ -1510,23 +1495,15 @@ function start(job: Job): void {
 }
 
 /**
- * Le match est regardé : son doublage passe en tête de file s'il a des
- * sous-titres français pas encore doublés et que le backoff le permet.
- * (Il ne démarre qu'une fois le GPU libre : la traduction passe d'abord.)
- * Doublage automatique désactivé (mode « sous-titres » ou traduction
- * automatique coupée) : regarder un match ne lance pas son doublage ; un
- * doublage déjà demandé (« Doubler ce match ») passe quand même devant.
+ * Le match est regardé : son doublage, s'il a été demandé (« Doubler ce
+ * match ») et attend en file, passe en tête (il démarre quand le GPU est
+ * libre : la traduction passe d'abord). Regarder un match ne lance jamais
+ * son doublage, pas plus qu'une traduction.
  */
 export function prioritizeDubOnView(matchId: number): void {
-  const m = db.getMatch(matchId);
-  if (!m || m.status !== 'final' || !m.video_ok_id || !m.video_available) return;
-  if (st.running?.job.matchId === matchId || dubQueuePosition(matchId) === 1) return;
-  const queued = dubQueuePosition(matchId) !== null;
-  if (!queued && !autoDubEnabled()) return;
-  if (dubDisabledReasonSync()) return;
-  const t = currentCommentaryTrack(matchId);
-  if (!t || !hasDubWork(matchId)) return;
-  if (!queued && !dubRetryAllowed(getDubRecord(matchId), db.commentaryKey(t))) return;
+  const pos = dubQueuePosition(matchId);
+  if (pos === null || pos === 1 || st.running?.job.matchId === matchId) return;
+  if (dubDisabledReasonSync() || !hasDubWork(matchId)) return;
   enqueueDub(matchId, { priority: true });
 }
 
@@ -1538,16 +1515,13 @@ export interface DubStopResult {
 /**
  * « Arrêter le doublage » (tout utilisateur, depuis la fiche) : le doublage
  * de ce match quitte la file, ou s'interrompt s'il tourne ; les tronçons
- * déjà doublés restent jouables. Il ne repart plus tout seul (lecture du
- * match, travail de fond) : seul « Reprendre le doublage » (`requestDub`)
+ * déjà doublés restent jouables ; « Reprendre le doublage » (`requestDub`)
  * le relance. La traduction des commentaires n'est pas touchée.
  */
 export function stopDub(matchId: number): DubStopResult {
   const r = st.running?.job.matchId === matchId && !st.running.stopped ? st.running : null;
   const queued = dubQueuePosition(matchId) !== null;
-  // Doublage automatique qui attend la traduction de ce match : arrêté aussi (il ne partira pas).
-  const awaited = autoDubEnabled() && translationPending(matchId) && !dubComplete(matchId);
-  if (!r && !queued && !awaited) return { stopped: false, message: 'Aucun doublage en cours pour ce match' };
+  if (!r && !queued) return { stopped: false, message: 'Aucun doublage en cours pour ce match' };
   st.queue = st.queue.filter((j) => j.matchId !== matchId);
   const t = currentCommentaryTrack(matchId);
   db.kvSet(recordKey(matchId), {
@@ -1615,25 +1589,6 @@ export function requestDub(matchId: number, opts: { reset?: boolean } = {}): Dub
   const r = enqueueDub(matchId, { priority: true, explicit: true });
   const message = r.queued && !r.started && translation ? 'Doublage demandé : la traduction des commentaires passe d’abord' : r.message;
   return { ...r, message, ...(translation ? { translation } : {}) };
-}
-
-/**
- * Job périodique (fenêtre de fond, paramètres `auto_translate` et
- * `vf_mode` = 'doublage') : matchs terminés depuis ≤ `days` jours, traduits
- * (piste complète ou partielle), dont le doublage est incomplet, backoff échu.
- */
-export async function enqueueRecentDubs(days = 10, limit = 30): Promise<number> {
-  if (!inNightWindow() || !autoDubEnabled()) return 0;
-  if (await dubDisabledReason()) return 0;
-  const since = addDays(new Date(), -days).toISOString();
-  let n = 0;
-  for (const m of db.finalMatchesNeedingDub(since, limit)) {
-    if (st.running?.job.matchId === m.id || dubQueuePosition(m.id)) continue;
-    const t = currentCommentaryTrack(m.id);
-    if (!t || !dubRetryAllowed(getDubRecord(m.id), db.commentaryKey(t))) continue;
-    if (enqueueDub(m.id).queued) n++;
-  }
-  return n;
 }
 
 // ------------------------------------------------------------------ activité et manifeste
@@ -1730,20 +1685,12 @@ export function dubManifest(matchId: number): DubManifest {
   if (valid && dub.complete === 1) return { status: 'ready', ...base };
   const rec = getDubRecord(matchId);
   if (rec?.stopped) return { status: chunks.length ? 'partial' : 'none', reason: 'doublage arrêté', stopped: true, ...base };
-  // « Le doublage suivra » seulement s'il suit vraiment : doublage automatique (mode « doublage »).
-  const translating = autoDubEnabled() && translationPending(matchId);
-  if (!track) {
-    return translating
-      ? { status: 'waiting', reason: 'traduction des commentaires en cours : le doublage suivra', ...base }
-      : { status: 'none', reason: 'pas encore de sous-titres français', ...base };
-  }
+  if (!track) return { status: 'none', reason: 'pas encore de sous-titres français', ...base };
   const failed = rec && !rec.ok && (!rec.key || rec.key === db.commentaryKey(track)) ? rec.reason : undefined;
   if (chunks.length) {
-    const reason = failed ?? (translating ? 'la suite sera doublée après la traduction' : undefined);
-    return { status: 'partial', ...(reason ? { reason } : {}), ...base };
+    return { status: 'partial', ...(failed ? { reason: failed } : {}), ...base };
   }
   if (failed) return { status: 'failed', reason: failed, ...base };
-  if (translating) return { status: 'waiting', reason: 'traduction des commentaires en cours : le doublage suivra', ...base };
   return { status: 'none', ...base };
 }
 

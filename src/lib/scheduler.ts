@@ -7,17 +7,16 @@
  *
  * Traduction et analyse de fond : seulement si la « Traduction automatique »
  * est activée (/parametres, activée par défaut) et dans la fenêtre autorisée
- * (COMMENTARY_NIGHT_WINDOW) — voir `queueRecentWork`. Doublage de fond : en
- * plus, « Version française » en mode « doublage » — voir `queueRecentDubs`.
+ * (COMMENTARY_NIGHT_WINDOW) — voir `queueRecentWork`. Pas de doublage de
+ * fond : un match n'est doublé que sur « Doubler ce match » (dub.ts).
  */
 import { countMatches } from './db';
 import { currentSeason } from './time';
 import { syncSchedule, syncSeason, syncStats, syncSubtitles, syncVideos } from './ingest';
 import { enqueueRecentAnalyses } from './analysis';
 import { enqueueRecentCommentaries, inNightWindow } from './commentary';
-import { enqueueRecentDubs } from './dub';
 import { VIDEO_JOB_INTERVAL_MS } from './replayCadence';
-import { autoDubEnabled, autoTranslateEnabled } from './settings';
+import { autoTranslateEnabled } from './settings';
 
 const g = globalThis as unknown as { __basketlandCron?: boolean };
 
@@ -35,18 +34,6 @@ export function queueRecentWork(what: { commentaries?: boolean; analyses?: boole
     commentaries: what.commentaries ? enqueueRecentCommentaries() : 0,
     analyses: what.analyses ? enqueueRecentAnalyses() : 0,
   };
-}
-
-/**
- * Met en file le doublage de fond des replays récents traduits : seulement
- * si la « Traduction automatique » est activée, en mode « doublage »
- * (réglage « Version française ») et dans la fenêtre autorisée. En mode
- * « sous-titres », rien : un match n'est doublé que sur un clic « Doubler ce
- * match ». Renvoie le nombre de matchs mis en file.
- */
-export async function queueRecentDubs(): Promise<number> {
-  if (!autoDubEnabled() || !inNightWindow()) return 0;
-  return enqueueRecentDubs();
 }
 
 function every(ms: number, fn: () => Promise<unknown>, initialDelayMs: number) {
@@ -99,8 +86,5 @@ export function startScheduler(): void {
   every(10 * MIN, async () => {
     const n = queueRecentWork({ commentaries: true }).commentaries;
     if (n) console.log(`[cron] pré-traduction : ${n} match(s) mis en file`);
-    // Doublage des matchs traduits (même règle, et mode « doublage »), quand le GPU est libre.
-    const d = await queueRecentDubs();
-    if (d) console.log(`[cron] doublage : ${d} match(s) mis en file`);
   }, 6 * MIN);
 }

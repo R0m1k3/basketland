@@ -1104,9 +1104,6 @@ export interface CommentaryChunkRow {
   keep_to: number;
 }
 
-// Même clé en TypeScript et en SQL (finalMatchesNeedingDub) : garder les deux en phase.
-const COMMENTARY_KEY_SQL = `t.ok_id || '|' || t.transcribe_model || '|' || t.translate_model || '|' || COALESCE(t.chunk_sec, '')`;
-
 /** Identité d'une piste traduite : un doublage fait pour une autre clé est à refaire. */
 export function commentaryKey(t: Pick<CommentaryTrackRow, 'ok_id' | 'transcribe_model' | 'translate_model' | 'chunk_sec'>): string {
   return `${t.ok_id}|${t.transcribe_model}|${t.translate_model}|${t.chunk_sec ?? ''}`;
@@ -1203,27 +1200,6 @@ export function dubPendingChunks(matchId: number, key: string): number {
         WHERE c.match_id = $id AND NOT EXISTS (SELECT 1 FROM dub_chunks x WHERE x.match_id = c.match_id AND x.idx = c.idx)`,
       { id: matchId },
     )?.n ?? 0
-  );
-}
-
-/**
- * Matchs terminés depuis `sinceIso`, avec replay et une piste traduite
- * (complète ou partielle) pour la vidéo actuelle, dont le doublage est à
- * faire : absent, fait pour une autre piste traduite, ou avec des tronçons
- * traduits pas encore doublés.
- */
-export function finalMatchesNeedingDub(sinceIso: string, limit = 30): MatchRow[] {
-  return all<MatchRow>(
-    `SELECT m.* FROM matches m JOIN commentary_tracks t ON t.match_id = m.id
-      WHERE m.status = 'final' AND m.video_available = 1 AND m.video_ok_id IS NOT NULL AND m.date_utc >= $since
-        AND t.ok_id = m.video_ok_id AND t.cues > 0
-        AND (
-          NOT EXISTS (SELECT 1 FROM dub_tracks d WHERE d.match_id = m.id AND d.commentary_key = ${COMMENTARY_KEY_SQL})
-          OR EXISTS (SELECT 1 FROM commentary_chunks c WHERE c.match_id = m.id
-                       AND NOT EXISTS (SELECT 1 FROM dub_chunks x WHERE x.match_id = m.id AND x.idx = c.idx))
-        )
-      ORDER BY m.date_utc DESC LIMIT $limit`,
-    { since: sinceIso, limit },
   );
 }
 

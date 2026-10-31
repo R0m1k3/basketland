@@ -24,7 +24,7 @@ export interface DubBannerState {
   progress?: { done: number; total: number };
   /** Étape en cours, ou téléchargement des voix qui avance pendant l'attente. */
   step?: string;
-  /** Arrêté à la demande : ne repart plus tout seul, « Reprendre le doublage » le relance. */
+  /** Arrêté à la demande : « Reprendre le doublage » le relance. */
   stopped?: boolean;
   /** Tronçons déjà doublés (jouables). */
   chunks: number;
@@ -184,13 +184,12 @@ function Confirm({ text, busy, onConfirm, onCancel }: { text: string; busy: bool
  * - Traduction automatique désactivée (Paramètres) : un match pas encore
  *   traduit affiche le bouton « Sous-titrer ce match ».
  * - « Doubler ce match » (tout utilisateur ; moteur de voix actif, match pas
- *   entièrement doublé ni déjà en file) : traduction automatique
- *   désactivée, ou mode « sous-titres » (doubler ce seul match). En doublage
- *   automatique (mode « doublage » + traduction automatique), pas de bouton.
+ *   entièrement doublé ni déjà en file), dans les deux modes : seul ce
+ *   bouton lance le doublage (et la traduction s'il le faut) ; une
+ *   traduction ne le lance jamais. Mis en avant en mode « doublage ».
  * - « Arrêter le doublage » (tout utilisateur) pendant que le match est
- *   doublé ou en file : ce qui est doublé reste ; il ne repart plus tout
- *   seul, même en doublage automatique, et « Reprendre le doublage »
- *   (le bouton « Doubler ce match ») le relance.
+ *   doublé ou en file : ce qui est doublé reste, et « Reprendre le
+ *   doublage » (le bouton « Doubler ce match ») le relance.
  * - Administrateurs : « Relancer la traduction » et « Relancer le doublage »
  *   (avec confirmation) — refont la piste même terminée ; inactifs pendant
  *   que ce match est traduit (ou doublé).
@@ -263,19 +262,11 @@ export default function CommentaryStatus({
   const manualStart = !autoTranslate && status === 'none' && !state.reason;
   /** Match sans replay exploitable (ou introuvable) : ni traduction ni doublage possibles. */
   const noReplay = status === 'none' && !!state.reason;
-  // « Doubler ce match » : jamais en doublage automatique (tout y est doublé).
-  const autoDub = autoTranslate && vfMode === 'doublage';
   const dubStatus = dub?.status;
   const dubEngineOn = !!dub && dubStatus !== 'disabled';
-  // Après un arrêt, le doublage automatique ne repart pas tout seul : le bouton revient (« Reprendre le doublage »).
   const dubStopped = !!dub?.stopped;
   const dubStart =
-    !!onDub &&
-    dubEngineOn &&
-    (!autoDub || dubStopped) &&
-    status !== 'disabled' &&
-    !noReplay &&
-    (dubStatus === 'none' || dubStatus === 'partial' || dubStatus === 'failed');
+    !!onDub && dubEngineOn && status !== 'disabled' && !noReplay && (dubStatus === 'none' || dubStatus === 'partial' || dubStatus === 'failed');
   /** « Arrêter le doublage » : pendant le doublage de ce match ou son attente. */
   const dubStop = !!onDubStop && dubEngineOn && (dubStatus === 'running' || dubStatus === 'waiting');
 
