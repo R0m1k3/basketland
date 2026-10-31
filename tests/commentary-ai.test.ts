@@ -443,7 +443,7 @@ describe('API OpenAI (clé dans les paramètres ou OPENAI_API_KEY)', () => {
       translateModel: 'gpt-5.4-mini',
       translateEngine: 'chat',
       translateApiKey: 'sk-test-0123456789abcd',
-      parallel: 4,
+      parallel: 8,
     });
     setSetting('openai_model', 'gpt-5.4-nano');
     expect(commentaryConfig().translateModel).toBe('gpt-5.4-nano');
@@ -495,7 +495,7 @@ describe('API MiniMax (traduction demandée dans les paramètres, même clé que
       translateModel: 'MiniMax-M3.1-Flash',
       translateEngine: 'chat',
       translateApiKey: 'mm-key-0123456789abcdef',
-      parallel: 4,
+      parallel: 8,
     });
     setSetting('minimax_translate_model', 'MiniMax-M3');
     expect(commentaryConfig().translateModel).toBe('MiniMax-M3');

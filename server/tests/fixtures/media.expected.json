@@ -37915,7 +37915,7 @@
      "translateProvider": "openai",
      "translateApiKey": "sk-test-0123456789abcd",
      "batch": 14,
-     "parallel": 4,
+     "parallel": 8,
      "chunkSec": 120,
      "disabledReason": "serveur de transcription non configuré (TRANSCRIBE_URL)"
     },
@@ -38005,7 +38005,7 @@
      "translateProvider": "minimax",
      "translateApiKey": "mm-key-0123456789abcdef",
      "batch": 14,
-     "parallel": 4,
+     "parallel": 8,
      "chunkSec": 120,
      "disabledReason": "serveur de transcription non configuré (TRANSCRIBE_URL)"
     },
@@ -38098,7 +38098,7 @@
      "translateProvider": "openai",
      "translateApiKey": "sk-env",
      "batch": 14,
-     "parallel": 4,
+     "parallel": 8,
      "chunkSec": 120,
      "disabledReason": "serveur de transcription non configuré (TRANSCRIBE_URL)"
     },
@@ -38187,7 +38187,7 @@
      "translateProvider": "minimax",
      "translateApiKey": "mm-env",
      "batch": 14,
-     "parallel": 4,
+     "parallel": 8,
      "chunkSec": 120,
      "disabledReason": "serveur de transcription non configuré (TRANSCRIBE_URL)"
     },
@@ -38529,7 +38529,7 @@
      "translateProvider": "openai",
      "translateApiKey": "sk",
      "batch": 14,
-     "parallel": 4,
+     "parallel": 8,
      "chunkSec": 120,
      "disabledReason": "serveur de transcription non configuré (TRANSCRIBE_URL)"
     },

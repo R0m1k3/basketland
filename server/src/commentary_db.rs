@@ -11,12 +11,15 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{named_params, Connection, Row};
 use std::collections::{HashMap, HashSet};
 
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     crate::time::iso_utc(chrono::Utc::now())
 }
 
 /// `tx` de `db.ts` : BEGIN … COMMIT, ROLLBACK en cas d'erreur.
-fn tx<T>(c: &Connection, f: impl FnOnce() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+pub(crate) fn tx<T>(
+    c: &Connection,
+    f: impl FnOnce() -> rusqlite::Result<T>,
+) -> rusqlite::Result<T> {
     c.execute_batch("BEGIN")?;
     match f() {
         Ok(v) => {
@@ -30,7 +33,7 @@ fn tx<T>(c: &Connection, f: impl FnOnce() -> rusqlite::Result<T>) -> rusqlite::R
     }
 }
 
-fn num(v: &SqlValue) -> f64 {
+pub(crate) fn num(v: &SqlValue) -> f64 {
     match v {
         SqlValue::Integer(i) => *i as f64,
         SqlValue::Real(f) => *f,
@@ -515,4 +518,44 @@ pub fn final_matches_with_untranslated_cues(
      ORDER BY m.date_utc DESC LIMIT :limit",
         named_params! { ":since": since_iso, ":limit": limit as f64 },
     )
+}
+
+/// Tronçon publié de la traduction (`CommentaryChunkRow` ; `keep_to` = 1e9 pour le dernier).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommentaryChunkRow {
+    pub idx: i64,
+    pub keep_from: f64,
+    pub keep_to: f64,
+}
+
+/// `commentaryKey` : identité d'une piste traduite (vidéo, modèles,
+/// découpage) ; un doublage fait pour une autre clé est à refaire.
+pub fn commentary_key(t: &CommentaryTrackRow) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        t.ok_id,
+        t.transcribe_model,
+        t.translate_model,
+        t.chunk_sec
+            .map(crate::jsval::js_number_string)
+            .unwrap_or_default()
+    )
+}
+
+/// `getCommentaryChunks` : tronçons publiés, dans l'ordre de la vidéo.
+pub fn get_commentary_chunks(
+    c: &Connection,
+    match_id: i64,
+) -> rusqlite::Result<Vec<CommentaryChunkRow>> {
+    let mut st = c.prepare(
+        "SELECT idx, keep_from, keep_to FROM commentary_chunks WHERE match_id = ?1 ORDER BY keep_from",
+    )?;
+    let rows = st.query_map([match_id as f64], |r| {
+        Ok(CommentaryChunkRow {
+            idx: col_int(r, "idx").unwrap_or(0),
+            keep_from: num(&col(r, "keep_from")),
+            keep_to: num(&col(r, "keep_to")),
+        })
+    })?;
+    rows.collect()
 }

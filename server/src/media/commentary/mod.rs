@@ -27,8 +27,9 @@
 //!
 //! # Points de branchement du doublage
 //!
-//! Le doublage (`dub.ts`, porté ensuite) se branche par deux crochets posés
-//! APRÈS la construction (le doublage tient lui-même un `Commentary`) :
+//! Le doublage ([`crate::media::dub`]) se branche par deux crochets posés
+//! APRÈS la construction, par `Dub::new` / `Dub::with_options` (le doublage
+//! tient lui-même un `Commentary`) :
 //! - [`Commentary::set_gpu_gate`] (`__commentaryGpuGate`) : appelé de façon
 //!   synchrone au démarrage de chaque travail de traduction ; rend `None`
 //!   s'il n'y a rien à libérer (la traduction part aussitôt), sinon une

@@ -290,7 +290,8 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         },
         batch: int_env("TRANSLATE_BATCH", 14.0, 1.0, 60.0) as usize,
         parallel: if online.is_some() {
-            int_env("TRANSLATE_PARALLEL", 4.0, 1.0, 16.0) as usize
+            // API en ligne (MiniMax, OpenAI) : 8 lots à la fois par défaut, comme Node.
+            int_env("TRANSLATE_PARALLEL", 8.0, 1.0, 16.0) as usize
         } else {
             translate_parallel()
         },
