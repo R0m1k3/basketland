@@ -45,7 +45,8 @@ navigateur ──► basketland-server (Rust, :3012)
 | 2 | Lecture seule : `GET /api/matches/[id]`, `/stats` (stats pas encore récupérées : relayé à Node), `/clips`, `/api/standings` (client ESPN, cache 30 min) | ✅ |
 | 3 | Comptes : `/api/auth/login`, `/logout`, `/setup`, `/api/account/password`, `/api/admin/users` (scrypt au même format, limitation des tentatives) | ✅ |
 | 4 | Proxy vidéo ok.ru `/api/video/[okId]/…` (`master.m3u8`, `playlist.m3u8`, `segment.ts`, `asset.ts`, `file.mp4`) : flux résolu en cache et rafraîchi avant expiration, cache de segments et préchargement, reprise des téléchargements bloqués, mêmes réglages (`SEGMENT_CACHE_MB`, `PREFETCH_*`, `SEGMENT_STALL_MS`, `SEGMENT_RETRIES`) | ✅ |
-| 5 | Synchronisation ESPN et basketball-video, cron interne, `/api/ingest` | à faire |
+| 5a | Synchronisation ESPN (calendrier, saison, stats + play-by-play), VF déterministe (`vf.ts`, `sync.ts`, `regenerateSubtitles`), cron interne de ces jobs, `POST /api/ingest` (`sync-videos` relayé à Node), `/stats` récupérées à la volée en Rust | ✅ |
+| 5b | Recherche des replays basketball-video (`syncVideos`, `searchReplay`, `/api/matches/[id]/replay`) et son job `sync-videos`, après le proxy vidéo (étape 4) | à faire |
 | 6 | Sous-titres et file de traduction (Whisper, Ollama/MiniMax, ffmpeg), `/api/activity`, `/api/admin/settings` | à faire |
 | 7 | Doublage (voix Qwen3-TTS / MiniMax) et OCR du bandeau de score | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
@@ -68,6 +69,28 @@ Variables du serveur Rust :
 | `BL_NODE_CMD` | `node --disable-warning=ExperimentalWarning server.js` | Commande de l'application Node ; vide : Node lancé à part (par ex. `npm run dev -- -p 3013`). |
 | `BL_NODE_URL` | `http://127.0.0.1:$BL_NODE_PORT` | Adresse de l'application Node relayée. |
 | `DB_PATH`, `DATA_DIR` | comme Node | Emplacement de la base SQLite. |
+| `DISABLE_CRON` | | `1` : ni le cron Rust ni celui de Node ne tournent. |
+| `INGEST_TOKEN` | fichier `$DATA_DIR/ingest_token` | Jeton de `POST /api/ingest`, comme Node. |
+| `BL_ESPN_SITE` | API ESPN | Autre adresse de l'API ESPN (tests hors réseau). |
+
+### Jobs d'ingestion (étape 5a)
+
+Le cron Rust lance `sync-season` (base de moins de 50 matchs, 2 s après le
+démarrage), `sync-schedule` (toutes les 15 min, dès 5 s), `sync-stats`
+(5 min, dès 60 s) et `sync-subtitles` (60 min, dès 10 min), avec le même
+journal `ingest_log` et la même règle « déjà en cours » que Node. Il pose
+`BL_RUST_JOBS=sync-schedule,sync-season,sync-stats,sync-subtitles` pour
+l'application Node, dont le planificateur saute alors ces jobs et garde les
+siens (vidéos, analyses, traductions). Node lancé à part
+(`BL_NODE_CMD=` vide) : poser soi-même `BL_RUST_JOBS` pour éviter que les
+jobs tournent deux fois.
+
+Node garde ses propres appels à `ingestMatchDetails` et `regenerateSubtitles`
+(analyse vidéo, ancrage manuel, replay trouvé) : les deux implémentations
+écrivent les mêmes lignes. Vérifié contre Node : parseurs ESPN, VF et
+sous-titres sur les captures réelles (`server/tests/fixtures/*.expected.json`,
+produits par le code TypeScript), et `sync-schedule` + `sync-stats` en direct
+sur deux copies d'une même base (tables identiques à l'octet).
 
 Si Node s'arrête, le serveur Rust s'arrête aussi (le conteneur redémarre le
 tout) ; un arrêt du serveur, même brutal, arrête Node.

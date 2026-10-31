@@ -1,0 +1,124 @@
+//! Cron interne des jobs portés (équivalent de la part de
+//! `src/lib/scheduler.ts` qui les concerne) : mêmes délais initiaux, mêmes
+//! intervalles. Calendrier 15 min, stats 5 min, VF 60 min ; base presque
+//! vide au démarrage (< 50 matchs) : saison complète. `DISABLE_CRON=1` le
+//! désactive. Node ne lance plus ces jobs (`BL_RUST_JOBS`, voir `node.rs`).
+
+use crate::db::{self, Db, MatchFilters};
+use crate::ingest;
+use std::future::Future;
+use std::time::Duration;
+
+const MIN: u64 = 60;
+
+/// `every` : premier passage après `initial`, puis toutes les `period`
+/// (sans attendre la fin du précédent, comme `setInterval` : un job encore
+/// en cours répond « déjà en cours »).
+fn every<F, Fut>(period: Duration, initial: Duration, f: F)
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        tokio::time::sleep(initial).await;
+        tokio::spawn(f());
+        let mut iv = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            iv.tick().await;
+            tokio::spawn(f());
+        }
+    });
+}
+
+/// Schéma présent : la base est créée et migrée par Node (au démarrage de
+/// son planificateur). Sur une installation neuve, le fichier n'existe pas
+/// encore quand le serveur Rust démarre.
+async fn schema_ready(db: &Db) -> bool {
+    db.run(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('matches', 'ingest_log')",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+    })
+    .await
+    .map(|n| n == 2)
+    .unwrap_or(false)
+}
+
+/// Démarre les jobs (à appeler depuis le runtime tokio) une fois la base
+/// prête : mêmes délais qu'avant, comptés à partir de ce moment.
+pub fn start(db: Db) {
+    if std::env::var("DISABLE_CRON").as_deref() == Ok("1") {
+        return;
+    }
+    tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
+        let mut warned = false;
+        while !schema_ready(&db).await {
+            if !warned && t0.elapsed() > Duration::from_secs(30) {
+                eprintln!("[cron] base pas encore créée par l'application Node : jobs en attente");
+                warned = true;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        schedule(db);
+    });
+}
+
+fn schedule(db: Db) {
+    println!(
+        "[cron] démarrage des jobs internes : {}",
+        ingest::RUST_JOBS.join(", ")
+    );
+
+    // Premier démarrage : base vide → saison complète.
+    let d = db.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        match d
+            .run(|c| db::count_matches(c, &MatchFilters::default()))
+            .await
+        {
+            Ok(n) if n < 50 => {
+                ingest::sync_season(&d, f64::from(ingest::current_season())).await;
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[cron] init {e}"),
+        }
+    });
+
+    let d = db.clone();
+    every(
+        Duration::from_secs(15 * MIN),
+        Duration::from_secs(5),
+        move || {
+            let d = d.clone();
+            async move {
+                ingest::sync_schedule(&d).await;
+            }
+        },
+    );
+    let d = db.clone();
+    every(
+        Duration::from_secs(5 * MIN),
+        Duration::from_secs(60),
+        move || {
+            let d = d.clone();
+            async move {
+                ingest::sync_stats(&d, 15).await;
+            }
+        },
+    );
+    every(
+        Duration::from_secs(60 * MIN),
+        Duration::from_secs(10 * MIN),
+        move || {
+            let d = db.clone();
+            async move {
+                ingest::sync_subtitles(&d, 50).await;
+            }
+        },
+    );
+}

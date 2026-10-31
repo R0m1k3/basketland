@@ -48,6 +48,8 @@ pub fn spawn(cfg: &NodeConfig) -> std::io::Result<Child> {
     cmd.args(&cfg.cmd[1..])
         .env("PORT", cfg.port.to_string())
         .env("HOSTNAME", "127.0.0.1")
+        // Jobs repris par le cron Rust : le planificateur de Node les saute.
+        .env("BL_RUST_JOBS", crate::ingest::RUST_JOBS.join(","))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

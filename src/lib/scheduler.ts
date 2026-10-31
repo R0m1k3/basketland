@@ -9,6 +9,9 @@
  * est activée (/parametres, activée par défaut) et dans la fenêtre autorisée
  * (COMMENTARY_NIGHT_WINDOW) — voir `queueRecentWork`. Pas de doublage de
  * fond : un match n'est doublé que sur « Doubler ce match » (dub.ts).
+ *
+ * Jobs repris par le serveur Rust (`BL_RUST_JOBS`, posé par server/src/node.rs) :
+ * Node ne les lance plus, voir `rustJobs`.
  */
 import { countMatches } from './db';
 import { currentSeason } from './time';
@@ -36,6 +39,21 @@ export function queueRecentWork(what: { commentaries?: boolean; analyses?: boole
   };
 }
 
+/**
+ * Jobs lancés par le cron du serveur Rust, que Node ne doit plus lancer :
+ * `BL_RUST_JOBS=sync-schedule,sync-stats,sync-subtitles,sync-season`
+ * (`sync-season` : chargement de la saison au premier démarrage). Les autres
+ * (vidéos, analyses, traductions) restent à Node.
+ */
+export function rustJobs(): Set<string> {
+  return new Set(
+    (process.env.BL_RUST_JOBS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
 function every(ms: number, fn: () => Promise<unknown>, initialDelayMs: number) {
   const tick = () => fn().catch((e) => console.error('[cron]', e));
   setTimeout(() => {
@@ -48,19 +66,30 @@ export function startScheduler(): void {
   if (g.__basketlandCron || process.env.DISABLE_CRON === '1') return;
   g.__basketlandCron = true;
   const MIN = 60_000;
-  console.log('[cron] démarrage des jobs internes');
+  const rust = rustJobs();
+  // Ouvre (et crée au besoin) la base tout de suite : le cron du serveur Rust
+  // attend qu'elle existe, et plus aucun job Node n'y touche au démarrage
+  // quand ils sont repris par Rust.
+  try {
+    countMatches({});
+  } catch (e) {
+    console.error('[cron] base', e);
+  }
+  console.log(`[cron] démarrage des jobs internes${rust.size ? ` (repris par Rust : ${[...rust].join(', ')})` : ''}`);
 
   // Premier démarrage : base vide → on charge l'année civile en cours (saison complète).
-  setTimeout(async () => {
-    try {
-      if (countMatches({}) < 50) await syncSeason(currentSeason());
-    } catch (e) {
-      console.error('[cron] init', e);
-    }
-  }, 2_000).unref?.();
+  if (!rust.has('sync-season')) {
+    setTimeout(async () => {
+      try {
+        if (countMatches({}) < 50) await syncSeason(currentSeason());
+      } catch (e) {
+        console.error('[cron] init', e);
+      }
+    }, 2_000).unref?.();
+  }
 
-  every(15 * MIN, () => syncSchedule(), 5_000);
-  every(5 * MIN, () => syncStats(), 60_000);
+  if (!rust.has('sync-schedule')) every(15 * MIN, () => syncSchedule(), 5_000);
+  if (!rust.has('sync-stats')) every(5 * MIN, () => syncStats(), 60_000);
   // Recherche des replays ; un replay qui vient d'apparaître est mis en file
   // de traduction et d'analyse tout de suite (pas d'attente du job suivant).
   every(
@@ -72,7 +101,7 @@ export function startScheduler(): void {
     },
     3 * MIN,
   );
-  every(60 * MIN, () => syncSubtitles(), 10 * MIN);
+  if (!rust.has('sync-subtitles')) every(60 * MIN, () => syncSubtitles(), 10 * MIN);
   // Tâches de fond lourdes (analyse vidéo OCR, pré-traduction des
   // commentaires) : seulement si la traduction automatique est activée, et
   // dans la fenêtre autorisée (COMMENTARY_NIGHT_WINDOW : en continu par

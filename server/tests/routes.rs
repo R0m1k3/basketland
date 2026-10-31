@@ -355,11 +355,16 @@ async fn fiche_stats_et_clips() {
 }
 
 #[tokio::test]
-async fn stats_pas_encore_recuperees_relayees_a_node() {
+async fn stats_pas_encore_recuperees_espn_injoignable() {
     let env = setup();
-    // Match terminé sans stats_synced_at : Node les récupère chez ESPN (ici injoignable → 502).
-    let (s, _, _) = get(&env, "/api/matches/1/stats", Some("jeton-frais")).await;
+    // Match terminé sans stats_synced_at : récupérées chez ESPN à la volée (ici injoignable → 502).
+    std::env::set_var("BL_ESPN_SITE", "http://127.0.0.1:9");
+    let (s, _, v) = get(&env, "/api/matches/1/stats", Some("jeton-frais")).await;
     assert_eq!(s, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        v,
+        serde_json::json!({ "available": false, "status": "final", "reason": "Récupération ESPN impossible : fetch failed" })
+    );
 }
 
 async fn post(

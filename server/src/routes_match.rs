@@ -5,7 +5,7 @@ use crate::db;
 use crate::present::to_dto;
 use crate::routes::{db_error, guarded};
 use crate::state::AppState;
-use axum::extract::{OriginalUri, Path, Request, State};
+use axum::extract::{OriginalUri, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Value};
@@ -44,35 +44,28 @@ const STAT_COLUMNS: [&str; 14] = [
 ];
 
 /// Stats équipe + joueurs. Match terminé dont les stats ne sont pas encore
-/// en base : relayé à Node, qui les récupère chez ESPN à la volée.
-pub async fn stats(State(st): State<AppState>, Path(raw): Path<String>, req: Request) -> Response {
-    let uri = OriginalUri(req.uri().clone());
-    let headers = req.headers().clone();
-    let st2 = st.clone();
-    let fut = async move {
+/// en base : récupérées chez ESPN à la volée (`ingestMatchDetails`).
+pub async fn stats(
+    State(st): State<AppState>,
+    Path(raw): Path<String>,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let fut = async {
         let Some(id) = parse_id(&raw) else {
             return error(StatusCode::BAD_REQUEST, "id invalide");
         };
-        let r = st2
+        let r = st
             .db
             .run(move |c| {
                 let Some(m) = db::get_match(c, id)? else {
                     return Ok(None);
                 };
-                if m.status != "final" || !db::stats_synced(c, id)? {
-                    return Ok(Some((m, None)));
-                }
-                Ok(Some((
-                    m,
-                    Some((
-                        db::team_stats(c, id)?,
-                        db::player_stats(c, id)?,
-                        db::leaders(c, id)?,
-                    )),
-                )))
+                let synced = db::stats_synced(c, id)?;
+                Ok(Some((m, synced)))
             })
             .await;
-        let (m, data) = match r {
+        let (mut m, synced) = match r {
             Ok(Some(x)) => x,
             Ok(None) => return error(StatusCode::NOT_FOUND, "match introuvable"),
             Err(e) => return db_error(e),
@@ -82,8 +75,32 @@ pub async fn stats(State(st): State<AppState>, Path(raw): Path<String>, req: Req
                 json!({ "available": false, "status": m.status, "reason": "Statistiques disponibles à la fin du match" }),
             );
         }
-        let Some((teams, players, leaders)) = data else {
-            return crate::proxy::forward(State(st2.clone()), req).await;
+        if !synced {
+            if let Err(e) = crate::ingest::ingest_match_details(&st.db, &m).await {
+                return json_response(
+                    StatusCode::BAD_GATEWAY,
+                    &json!({ "available": false, "status": m.status, "reason": format!("Récupération ESPN impossible : {e}") }),
+                );
+            }
+            match st.db.run(move |c| db::get_match(c, id)).await {
+                Ok(Some(fresh)) => m = fresh,
+                Ok(None) => {}
+                Err(e) => return db_error(e),
+            }
+        }
+        let r = st
+            .db
+            .run(move |c| {
+                Ok((
+                    db::team_stats(c, id)?,
+                    db::player_stats(c, id)?,
+                    db::leaders(c, id)?,
+                ))
+            })
+            .await;
+        let (teams, players, leaders) = match r {
+            Ok(x) => x,
+            Err(e) => return db_error(e),
         };
         if players.is_empty() {
             return ok(
