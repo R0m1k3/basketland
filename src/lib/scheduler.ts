@@ -67,6 +67,14 @@ export function startScheduler(): void {
   g.__basketlandCron = true;
   const MIN = 60_000;
   const rust = rustJobs();
+  // Ouvre (et crée au besoin) la base tout de suite : le cron du serveur Rust
+  // attend qu'elle existe, et plus aucun job Node n'y touche au démarrage
+  // quand ils sont repris par Rust.
+  try {
+    countMatches({});
+  } catch (e) {
+    console.error('[cron] base', e);
+  }
   console.log(`[cron] démarrage des jobs internes${rust.size ? ` (repris par Rust : ${[...rust].join(', ')})` : ''}`);
 
   // Premier démarrage : base vide → on charge l'année civile en cours (saison complète).

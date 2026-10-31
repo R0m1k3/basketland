@@ -31,11 +31,43 @@ where
     });
 }
 
-/// Démarre les jobs (à appeler depuis le runtime tokio).
+/// Schéma présent : la base est créée et migrée par Node (au démarrage de
+/// son planificateur). Sur une installation neuve, le fichier n'existe pas
+/// encore quand le serveur Rust démarre.
+async fn schema_ready(db: &Db) -> bool {
+    db.run(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('matches', 'ingest_log')",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+    })
+    .await
+    .map(|n| n == 2)
+    .unwrap_or(false)
+}
+
+/// Démarre les jobs (à appeler depuis le runtime tokio) une fois la base
+/// prête : mêmes délais qu'avant, comptés à partir de ce moment.
 pub fn start(db: Db) {
     if std::env::var("DISABLE_CRON").as_deref() == Ok("1") {
         return;
     }
+    tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
+        let mut warned = false;
+        while !schema_ready(&db).await {
+            if !warned && t0.elapsed() > Duration::from_secs(30) {
+                eprintln!("[cron] base pas encore créée par l'application Node : jobs en attente");
+                warned = true;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        schedule(db);
+    });
+}
+
+fn schedule(db: Db) {
     println!(
         "[cron] démarrage des jobs internes : {}",
         ingest::RUST_JOBS.join(", ")
