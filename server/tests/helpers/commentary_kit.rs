@@ -68,6 +68,7 @@ const ENV_KEYS: &[&str] = &[
     "COMMENTARY_FULL_AUDIO",
     "COMMENTARY_FULL_AUDIO_POLL_MS",
     "COMMENTARY_PARALLEL_FETCH",
+    "COMMENTARY_TRANSLATE_AHEAD",
     "WHISPER_PROMPT",
     "WHISPER_HOTWORDS",
     "COMMENTARY_TIMEOUT_MS",
@@ -338,6 +339,7 @@ pub fn fake_deps(o: Fake) -> (CommentaryDeps, CallsRef) {
         resolve_stream: Arc::new(|_, _| {
             Box::pin(async {
                 Ok(StreamInfo {
+                    dash_url: None,
                     variants: vec![Variant {
                         key: "low".into(),
                         bandwidth: 600_000.0,
@@ -360,6 +362,7 @@ pub fn fake_deps(o: Fake) -> (CommentaryDeps, CallsRef) {
                 std::fs::write(&r.out_file, vec![0u8; 4096]).map_err(|e| e.to_string())
             })
         }),
+        extract_dash: None,
         extract_full: None,
         cut: None,
         transcribe,

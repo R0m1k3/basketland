@@ -802,6 +802,61 @@ async fn lecture_en_pause_pas_de_plafond_d_avance() {
     assert!(t.svc.ready(D));
 }
 
+/// Flux avec manifeste DASH (son seul) et `extract_dash` factice : réussit
+/// (écrit le tronçon) ou échoue toujours ; rend les URL demandées.
+fn with_dash(deps: &mut CommentaryDeps, ok: bool) -> Arc<Mutex<Vec<String>>> {
+    let inner = deps.resolve_stream.clone();
+    deps.resolve_stream = Arc::new(move |id, force| {
+        let f = inner(id, force);
+        Box::pin(async move {
+            let mut s = f.await?;
+            s.dash_url = Some("https://vd.okcdn.ru/?type=mpd".into());
+            Ok(s)
+        })
+    });
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let a = asked.clone();
+    deps.extract_dash = Some(Arc::new(move |r: cm::ExtractRequest| {
+        a.lock().unwrap().push(r.source_url.clone());
+        Box::pin(async move {
+            if !ok {
+                return Err("aucune piste audio seule dans le manifeste".into());
+            }
+            std::fs::write(&r.out_file, vec![0u8; 4096]).map_err(|e| e.to_string())
+        })
+    }));
+    asked
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn son_seul_dash_avant_le_flux_hls() {
+    let _g = LOCK.lock().await;
+    // Manifeste DASH annoncé : chaque tronçon vient du son seul, jamais du HLS.
+    let t = ondemand();
+    let (mut deps, calls) = fake_deps(Fake::default());
+    let asked = with_dash(&mut deps, true);
+    let (r, _) = run(&t.svc, D, false, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    assert!(calls.lock().unwrap().extract.is_empty());
+    assert_eq!(asked.lock().unwrap().len(), 3);
+    assert!(asked
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|u| u.ends_with("type=mpd")));
+    assert!(t.svc.ready(D));
+
+    // Son seul en échec : flux HLS à la place, et plus d'essai après deux échecs.
+    let t = ondemand();
+    let (mut deps, calls) = fake_deps(Fake::default());
+    let asked = with_dash(&mut deps, false);
+    let (r, _) = run(&t.svc, D, false, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    assert_eq!(calls.lock().unwrap().extract, vec![0, 1, 2]);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+    assert!(t.svc.ready(D));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn piste_complete_d_avant_rattrapage_par_la_file() {
     let _g = LOCK.lock().await;
@@ -1104,6 +1159,7 @@ async fn son_complet_reel_pendant_un_travail() {
         let url = src_s.clone();
         Box::pin(async move {
             Ok(cm::StreamInfo {
+                dash_url: None,
                 variants: vec![basketland_server::okru::Variant {
                     key: "low".into(),
                     bandwidth: 1.0,
@@ -1259,11 +1315,13 @@ async fn recouvrement_transcription_pendant_la_traduction() {
     let t = setup(&[A, B, C]);
     set_env("COMMENTARY_CHUNK_SEC", "600");
     set_env("COMMENTARY_OVERLAP", "1");
+    set_env("COMMENTARY_TRANSLATE_AHEAD", "1");
     let (deps, log) = timed_fake(150);
     let t0 = std::time::Instant::now();
     let (r, events) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
     let elapsed = t0.elapsed();
     set_env("COMMENTARY_OVERLAP", "0");
+    unset_env("COMMENTARY_TRANSLATE_AHEAD");
     assert!(r.unwrap().ok);
     let log = log.lock().unwrap().clone();
     let pos = |s: &str| {
@@ -1301,19 +1359,73 @@ async fn recouvrement_transcription_pendant_la_traduction() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn recouvrement_echec_de_traduction() {
+async fn recouvrement_plusieurs_traductions_en_meme_temps() {
     let _g = LOCK.lock().await;
+    // Référence : un tronçon après l'autre.
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    let (deps, _) = timed_fake(300);
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    let sequential = published(&t.db);
+
+    // Trois tronçons traduits à la fois (défaut) : la traduction du tronçon 2
+    // commence avant la fin de celle du tronçon 1, et ainsi de suite.
     let t = setup(&[A, B, C]);
     set_env("COMMENTARY_CHUNK_SEC", "600");
     set_env("COMMENTARY_OVERLAP", "1");
-    let (deps, calls) = queue_fake(false, true);
-    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    let (deps, log) = timed_fake(300);
+    let t0 = std::time::Instant::now();
+    let (r, events) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    let elapsed = t0.elapsed();
     set_env("COMMENTARY_OVERLAP", "0");
-    // L'échec de la traduction du tronçon 1 arrête le travail : rien de publié,
-    // au plus le tronçon suivant transcrit (son résultat reste en cache).
-    assert!(matches!(r, Err(CommentaryError::Service(_))));
-    assert!(published(&t.db).is_empty());
-    let n = calls.lock().unwrap().transcribe.len();
-    assert!((1..=2).contains(&n), "{n}");
-    assert_eq!(t.svc.status(A).to_json()["status"], "none");
+    assert!(r.unwrap().ok);
+    let log = log.lock().unwrap().clone();
+    let pos = |s: &str| {
+        log.iter()
+            .position(|x| x == s)
+            .unwrap_or_else(|| panic!("{s} : {log:?}"))
+    };
+    assert!(
+        pos("début Play number 2 is good.") < pos("fin Play number 1 is good."),
+        "{log:?}"
+    );
+    assert!(
+        pos("début Play number 3 is good.") < pos("fin Play number 2 is good."),
+        "{log:?}"
+    );
+    // Mêmes sous-titres publiés, piste complète, avancement jusqu'au bout.
+    assert_eq!(published(&t.db), sequential);
+    assert_eq!(t.svc.status(A).to_json()["status"], "ready");
+    let last = events
+        .iter()
+        .rev()
+        .find(|p| p.phase == CommentaryPhase::Traduction)
+        .unwrap();
+    assert_eq!((last.done, last.total), (3.0, 3.0));
+    // Trois traductions de 300 ms en même temps, pas l'une après l'autre (900 ms).
+    assert!(elapsed < Duration::from_millis(800), "{elapsed:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recouvrement_echec_de_traduction() {
+    let _g = LOCK.lock().await;
+    // Un tronçon traduit à la fois, puis trois (défaut).
+    for (ahead, max_transcribed) in [("1", 2), ("3", 3)] {
+        let t = setup(&[A, B, C]);
+        set_env("COMMENTARY_CHUNK_SEC", "600");
+        set_env("COMMENTARY_OVERLAP", "1");
+        set_env("COMMENTARY_TRANSLATE_AHEAD", ahead);
+        let (deps, calls) = queue_fake(false, true);
+        let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+        set_env("COMMENTARY_OVERLAP", "0");
+        unset_env("COMMENTARY_TRANSLATE_AHEAD");
+        // L'échec de la traduction arrête le travail : rien de publié, au plus
+        // les tronçons transcrits d'avance (leur résultat reste en cache).
+        assert!(matches!(r, Err(CommentaryError::Service(_))), "{ahead}");
+        assert!(published(&t.db).is_empty(), "{ahead}");
+        let n = calls.lock().unwrap().transcribe.len();
+        assert!((1..=max_transcribed).contains(&n), "{ahead} : {n}");
+        assert_eq!(t.svc.status(A).to_json()["status"], "none");
+    }
 }

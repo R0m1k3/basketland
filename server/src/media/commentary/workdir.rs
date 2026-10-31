@@ -50,7 +50,11 @@ pub(crate) fn read_json(file: &Path) -> Option<Value> {
 
 /// `writeJson` : écrit `<fichier>.part` puis renomme.
 pub(crate) fn write_json(file: &Path, value: &Value) -> std::io::Result<()> {
-    let tmp = PathBuf::from(format!("{}.part", file.display()));
+    // Fichier temporaire propre à chaque écriture : deux écritures simultanées
+    // du même fichier ne se volent pas leur `.part`.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = PathBuf::from(format!("{}.{n}.part", file.display()));
     std::fs::write(&tmp, value.to_string())?;
     std::fs::rename(&tmp, file)
 }

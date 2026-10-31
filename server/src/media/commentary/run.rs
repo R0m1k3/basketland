@@ -139,6 +139,9 @@ pub struct TranslatorSession {
 pub struct CommentaryDeps {
     pub resolve_stream: ResolveStreamFn,
     pub extract: ExtractFn,
+    /// Son seul par le manifeste DASH d'ok.ru (`source_url` = manifeste),
+    /// essayé avant les sources HLS ; absent : HLS seulement.
+    pub extract_dash: Option<ExtractFn>,
     pub extract_full: Option<ExtractFullFn>,
     pub cut: Option<CutFn>,
     pub transcribe: TranscribeFn,
@@ -233,6 +236,29 @@ impl CommentaryDeps {
                     extract_audio_chunk(&r.source_url, r.start, r.length, &r.out_file, &r.options)
                         .await
                 })
+            }),
+            extract_dash: crate::media::hls_fetch::parallel_fetch_enabled().then(|| {
+                let f: ExtractFn = Arc::new(|r| {
+                    Box::pin(async move {
+                        let t0 = std::time::Instant::now();
+                        let how = crate::media::audio::extract_dash_audio_chunk(
+                            &r.source_url,
+                            r.start,
+                            r.length,
+                            &r.out_file,
+                            &r.options,
+                        )
+                        .await?;
+                        println!(
+                            "[commentaires] son seul {}–{} s : {how} ; prêt en {:.1} s",
+                            r.start.round(),
+                            (r.start + r.length).round(),
+                            t0.elapsed().as_secs_f64()
+                        );
+                        Ok(())
+                    })
+                });
+                f
             }),
             // Son complet lu d'une traite par ffmpeg (une connexion, depuis le
             // début du match) : seulement sans le téléchargement parallèle,
@@ -338,6 +364,19 @@ async fn join_translation(
             "traduction interrompue : {e}"
         ))),
     }
+}
+
+/// `COMMENTARY_TRANSLATE_AHEAD` (3 par défaut, 1 à 8) : tronçons traduits en
+/// même temps avec le recouvrement. Un traducteur en ligne (MiniMax-M3 :
+/// une à quatre minutes par tronçon) est bien plus lent que la transcription
+/// (une seconde sur GPU) : un seul tronçon à la fois laissait la
+/// transcription attendre. Chaque tronçon est publié dès qu'il est traduit.
+fn translate_ahead() -> usize {
+    std::env::var("COMMENTARY_TRANSLATE_AHEAD")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .map_or(3, |n| n.min(8))
 }
 
 /// `COMMENTARY_OVERLAP` (activé par défaut ; `0` le coupe) : le tronçon suivant
@@ -486,6 +525,8 @@ struct RunCtx {
     roster: RosterIndex,
     asr: Mutex<Option<Transcriber>>,
     mt: Mutex<Option<MtShared>>,
+    /// Échecs du son seul (DASH) dans ce travail : au deuxième, on ne le retente plus.
+    dash_failures: AtomicUsize,
 }
 
 fn locked<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -611,6 +652,37 @@ impl RunCtx {
                     Err(e) => {
                         last_err = format!("résolution du flux : {}", short(&e));
                         break;
+                    }
+                }
+            }
+            // Son seul (DASH) : 7 fois moins de données que la vidéo HLS.
+            let dash = locked(&self.stream)
+                .dash_url
+                .clone()
+                .filter(|_| self.dash_failures.load(Ordering::SeqCst) < 2);
+            if let (Some(ed), Some(mpd)) = (&self.deps.extract_dash, dash) {
+                self.check_aborted()?;
+                let req = ExtractRequest {
+                    source_url: mpd,
+                    start: plan.start,
+                    length: plan.length,
+                    out_file: out_s.clone(),
+                    options: ExtractOptions {
+                        headers: self.headers.clone(),
+                        signal: Some(self.signal.clone()),
+                        timeout: None,
+                    },
+                };
+                match ed(req).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        self.check_aborted()?;
+                        self.dash_failures.fetch_add(1, Ordering::SeqCst);
+                        eprintln!(
+                            "[commentaires] son seul (DASH) indisponible ({}) : flux vidéo HLS",
+                            short(&e)
+                        );
+                        last_err = short(&e);
                     }
                 }
             }
@@ -823,7 +895,9 @@ impl RunCtx {
                     self.leftover_ctx.clone(),
                 )
                 .await?;
-                let snapshot = {
+                let written = {
+                    // Écrit sous le verrou : deux lots (ou deux tronçons) qui
+                    // finissent ensemble ne s'écrasent pas avec un état plus ancien.
                     let mut cache = locked(&self.cache);
                     for r in res {
                         if let Some(c) = todo.iter().find(|x| x.seq == r.i) {
@@ -837,10 +911,9 @@ impl RunCtx {
                             );
                         }
                     }
-                    cache.to_json()
+                    write_json(&self.cache_file, &cache.to_json())
                 };
-                write_json(&self.cache_file, &snapshot)
-                    .map_err(|e| CommentaryError::Other(e.to_string()))?;
+                written.map_err(|e| CommentaryError::Other(e.to_string()))?;
             }
             Ok::<(), CommentaryError>(())
         };
@@ -1190,18 +1263,24 @@ impl Commentary {
             roster,
             asr: Mutex::new(None),
             mt: Mutex::new(None),
+            dash_failures: AtomicUsize::new(0),
         });
         // Extraction anticipée du tronçon suivant pendant que le GPU traite le courant.
         let mut prefetched: HashMap<usize, tokio::task::JoinHandle<Result<(), RunFail>>> =
             HashMap::new();
 
-        // Traduction du tronçon précédent, en cours pendant la transcription du suivant.
-        type Inflight = (usize, tokio::task::JoinHandle<Result<(), CommentaryError>>);
-        let mut inflight: Option<Inflight> = None;
-        // Tronçons faits, plus celui en cours de traduction (jamais choisi deux fois).
-        let taken = |inflight: &Option<Inflight>| {
+        // Traductions en cours (les plus anciennes devant), pendant que les
+        // tronçons suivants se transcrivent : jusqu'à `translate_ahead()` à la fois.
+        type Inflight = std::collections::VecDeque<(
+            usize,
+            tokio::task::JoinHandle<Result<(), CommentaryError>>,
+        )>;
+        let mut inflight: Inflight = Inflight::new();
+        let ahead = translate_ahead();
+        // Tronçons faits, plus ceux en cours de traduction (jamais choisis deux fois).
+        let taken = |inflight: &Inflight| {
             let mut d = locked(&done).clone();
-            if let Some((i, _)) = inflight {
+            for (i, _) in inflight {
                 d.insert(*i);
             }
             d
@@ -1246,13 +1325,18 @@ impl Commentary {
                         ..c
                     })
                     .collect();
-                // Traductions publiées dans l'ordre : la précédente se termine d'abord.
-                if let Some((_, h)) = inflight.take() {
-                    join_translation(h).await?;
+                // Traductions terminées : relevées (un échec arrête le travail) ;
+                // file pleine : la plus ancienne se termine d'abord.
+                while inflight.front().is_some_and(|(_, h)| h.is_finished())
+                    || inflight.len() >= ahead
+                {
+                    if let Some((_, h)) = inflight.pop_front() {
+                        join_translation(h).await?;
+                    }
                 }
                 if overlap_enabled() {
                     let c = ctx.clone();
-                    inflight = Some((
+                    inflight.push_back((
                         plan.index,
                         tokio::spawn(async move { c.translate_and_publish(&plan, cues).await }),
                     ));
@@ -1260,7 +1344,7 @@ impl Commentary {
                     ctx.translate_and_publish(&plan, cues).await?;
                 }
             }
-            if let Some((_, h)) = inflight.take() {
+            while let Some((_, h)) = inflight.pop_front() {
                 join_translation(h).await?;
             }
             // Piste complète : les lignes restées en anglais lors d'un travail
@@ -1291,8 +1375,8 @@ impl Commentary {
             Ok(paused)
         }
         .await;
-        // Arrêt sur erreur ou interruption : la traduction en cours ne survit pas au travail.
-        if let Some((_, h)) = inflight.take() {
+        // Arrêt sur erreur ou interruption : les traductions en cours ne survivent pas au travail.
+        for (_, h) in inflight.drain(..) {
             h.abort();
             let _ = h.await;
         }

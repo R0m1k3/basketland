@@ -193,6 +193,8 @@ pub struct StreamInfo {
     pub variants: Vec<Variant>,
     pub mp4: Vec<Mp4Source>,
     pub duration: Option<f64>,
+    /// Manifeste DASH (son seul), s'il existe.
+    pub dash_url: Option<String>,
 }
 
 impl From<&crate::video::OkStream> for StreamInfo {
@@ -201,6 +203,7 @@ impl From<&crate::video::OkStream> for StreamInfo {
             variants: s.variants.clone(),
             mp4: s.mp4.clone(),
             duration: s.duration,
+            dash_url: s.dash_url.clone(),
         }
     }
 }

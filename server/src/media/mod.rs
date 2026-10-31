@@ -34,6 +34,7 @@ pub mod audio_energy;
 pub mod commentary;
 pub mod commentary_ai;
 pub mod commentary_cues;
+pub mod dash_audio;
 pub mod dub;
 pub mod hls_fetch;
 pub mod local_ai;

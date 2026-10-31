@@ -159,15 +159,46 @@ fn request(url: &str, h: &SourceHeaders) -> reqwest::RequestBuilder {
     r
 }
 
-/// Un téléchargement complet, coupé s'il cale (`STALL`) ; `max` : taille maximale.
-async fn fetch_once(url: &str, h: &SourceHeaders, max: Option<usize>) -> Result<Vec<u8>, String> {
-    let resp = tokio::time::timeout(Duration::from_secs(20), request(url, h).send())
+/// Un téléchargement complet, coupé s'il cale (`STALL`) ; `max` : taille
+/// maximale ; `range` : octets `début..=fin` seulement (réponse 206 exigée).
+async fn fetch_once(
+    url: &str,
+    h: &SourceHeaders,
+    max: Option<usize>,
+    range: Option<(u64, u64)>,
+) -> Result<Vec<u8>, String> {
+    let mut req = request(url, h);
+    if let Some((a, b)) = range {
+        req = req.header(reqwest::header::RANGE, format!("bytes={a}-{b}"));
+    }
+    let resp = tokio::time::timeout(Duration::from_secs(20), req.send())
         .await
         .map_err(|_| "pas de réponse en 20 s".to_string())?
         .map_err(|e| e.without_url().to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
+    let max = match range {
+        Some((a, b)) => {
+            if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(format!(
+                    "plage d'octets refusée (HTTP {})",
+                    resp.status().as_u16()
+                ));
+            }
+            // Le serveur doit rendre exactement la plage demandée.
+            let cr = resp
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            if !cr.starts_with(&format!("bytes {a}-{b}/")) {
+                return Err(format!("plage rendue inattendue ({cr})"));
+            }
+            Some((b - a + 1) as usize)
+        }
+        None => max,
+    };
     let expected = resp.content_length();
     if let (Some(n), Some(m)) = (expected, max) {
         if n as usize > m {
@@ -196,7 +227,8 @@ async fn fetch_once(url: &str, h: &SourceHeaders, max: Option<usize>) -> Result<
             }
         }
     }
-    if let Some(n) = expected {
+    let want = expected.or(range.map(|(a, b)| b - a + 1));
+    if let Some(n) = want {
         if buf.len() as u64 != n {
             return Err(format!("réponse tronquée ({}/{n} octets)", buf.len()));
         }
@@ -205,10 +237,21 @@ async fn fetch_once(url: &str, h: &SourceHeaders, max: Option<usize>) -> Result<
 }
 
 /// [`fetch_once`] avec nouveaux essais (pause croissante entre deux).
-async fn fetch_retry(
+pub(crate) async fn fetch_retry(
     url: &str,
     h: &SourceHeaders,
     max: Option<usize>,
+    signal: Option<&AbortSignal>,
+) -> Result<Vec<u8>, String> {
+    fetch_retry_range(url, h, max, None, signal).await
+}
+
+/// [`fetch_retry`] d'une plage d'octets (`début..=fin`).
+pub(crate) async fn fetch_retry_range(
+    url: &str,
+    h: &SourceHeaders,
+    max: Option<usize>,
+    range: Option<(u64, u64)>,
     signal: Option<&AbortSignal>,
 ) -> Result<Vec<u8>, String> {
     let mut last = String::new();
@@ -219,7 +262,7 @@ async fn fetch_retry(
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
         }
-        match fetch_once(url, h, max).await {
+        match fetch_once(url, h, max, range).await {
             Ok(b) => return Ok(b),
             Err(e) => last = e,
         }

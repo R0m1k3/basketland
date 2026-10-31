@@ -326,6 +326,7 @@ pub fn fake(o: FakeOpts) -> (DubDeps, CallsRef, DubVoiceSession) {
                     return Err("ok.ru : 503\nService Unavailable".into());
                 }
                 Ok(StreamInfo {
+                    dash_url: None,
                     variants: (0..k)
                         .map(|i| Variant {
                             key: format!("v{i}"),
