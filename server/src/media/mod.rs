@@ -15,6 +15,7 @@
 //! | [`audio_energy`] | `audioEnergy.ts` |
 //! | [`local_ai`] | `localAi.ts` (Whisper et Ollama embarqués) |
 //! | [`commentary_ai`] | `commentaryAi.ts` (transcription, traduction) |
+//! | [`commentary`] | `commentary.ts` (file de traduction, étape 6b, non branchée) |
 //! | [`voice_minimax`] | `voiceMinimax.ts` |
 //! | [`voice_ai`] | `voiceAi.ts` (Qwen3-TTS embarqué) |
 //! | [`video_scan`] | `videoScan.ts` |
@@ -24,6 +25,7 @@
 pub mod abort;
 pub mod audio;
 pub mod audio_energy;
+pub mod commentary;
 pub mod commentary_ai;
 pub mod commentary_cues;
 pub mod local_ai;

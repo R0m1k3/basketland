@@ -135,12 +135,16 @@ impl Viewers {
     }
 
     /// `viewerPosition` : position du spectateur actif, sinon `None`.
-    pub fn position(&self, match_id: i64) -> Option<f64> {
-        if self.active(match_id) {
+    pub fn position_at(&self, match_id: i64, now: f64) -> Option<f64> {
+        if self.active_at(match_id, now) {
             Some(self.get(match_id).map_or(0.0, |v| v.t))
         } else {
             None
         }
+    }
+
+    pub fn position(&self, match_id: i64) -> Option<f64> {
+        self.position_at(match_id, now_ms())
     }
 
     /// `activeViewers` : matchs regardés, dans l'ordre d'arrivée.
@@ -160,8 +164,14 @@ impl Viewers {
     }
 
     /// `someoneWatching` : quelqu'un regarde-t-il un AUTRE match que `except` (ou n'importe lequel) ?
+    pub fn someone_watching_at(&self, except: Option<i64>, now: f64) -> bool {
+        self.active_ids_at(now)
+            .into_iter()
+            .any(|id| Some(id) != except)
+    }
+
     pub fn someone_watching(&self, except: Option<i64>) -> bool {
-        self.active_ids().into_iter().any(|id| Some(id) != except)
+        self.someone_watching_at(except, now_ms())
     }
 
     /// Tests : oublie tous les spectateurs.

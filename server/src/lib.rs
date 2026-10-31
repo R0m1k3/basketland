@@ -9,6 +9,7 @@ pub mod accounts;
 pub mod api;
 pub mod auth;
 pub mod bv;
+pub mod commentary_db;
 pub mod cron;
 pub mod db;
 pub mod espn;

@@ -48,7 +48,7 @@ navigateur ──► basketland-server (Rust, :3012)
 | 5a | Synchronisation ESPN (calendrier, saison, stats + play-by-play), VF déterministe (`vf.ts`, `sync.ts`, `regenerateSubtitles`), cron interne de ces jobs, `POST /api/ingest` (`sync-videos` relayé à Node), `/stats` récupérées à la volée en Rust | ✅ |
 | 5b | Recherche des replays basketball-video (`findReplay` et ses caches, `searchReplay`, `syncVideos`), `POST /api/matches/[id]/replay`, `sync-videos` en Rust (cron et `/api/ingest`) ; replays apparus signalés aux files de Node par `POST /api/internal/replays` | ✅ |
 | 6a | Fondations médias en bibliothèque Rust, **pas encore branchées** (Node fait toujours tourner les files) : sous-titres (`commentaryCues.ts`), noms des joueurs, fenêtre de nuit, spectateurs, priorité CPU, audio et extractions ffmpeg, Whisper et Ollama embarqués, clients de transcription et de traduction (Ollama, OpenAI, MiniMax), voix (MiniMax, Qwen3-TTS), réglages, planification du balayage vidéo ; `GET/POST /api/admin/settings` servi par Rust | ✅ |
-| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | à faire |
+| 6b | Files de traduction et de doublage, spectateurs et activité (`commentary.ts`, `dub.ts`, `viewers.ts`, `/api/activity`…) et leurs routes, basculées ensemble sur les fondations 6a | en cours : file de traduction portée (non branchée) |
 | 7 | Analyse vidéo et OCR du bandeau de score (`analysis.ts`, `ocr.ts`, `scoreboard.ts`) | à faire |
 | 8 | Interface en fichiers statiques (export React), migrations SQL en Rust, Node retiré de l'image | à faire |
 
@@ -144,3 +144,54 @@ extraction audio par le vrai ffmpeg (`tests/media.rs`). `/api/admin/settings`
 comparé en direct (Node sur 127.0.0.1:3013, Rust sur 3012, même base) : 31
 requêtes (lecture, écritures valides, chaque erreur de validation, accès,
 origine, Content-Type), mêmes statuts, corps et lignes écrites.
+
+### File de traduction (étape 6b, non branchée)
+
+`commentary.ts` est porté en bibliothèque (`server/src/media/commentary/`,
+requêtes des tables de la traduction dans `server/src/commentary_db.rs`) :
+découpage en tronçons, son complet partagé (`startFullAudio`,
+`waitFullAudio`, `sliceFullAudio`, `dropFullAudio`), dossiers de travail et
+leur ménage, enregistrements et backoff (avec `backoffMs`,
+`networkBackoffMs`, `MAX_AUTO_FAILURES`, `analysisSources`,
+`pickAudioSource` d'`analysis.ts`), file (`enqueueCommentary`, `pump`,
+préemption, fiche quittée avec `viewerGone` / `nudgeCommentaryQueue`,
+`prioritizeOnView`, `enqueueRecentCommentaries`, garde-fou de durée),
+`runCommentary` (tronçons, extraction anticipée, avance maximale pendant la
+lecture, rattrapage des lignes restées en anglais, publication), statuts,
+sous-titres servis et activité. Mêmes variables (`COMMENTARY_*`,
+`WHISPER_PROMPT`, `WHISPER_HOTWORDS`…), mêmes défauts et bornes, mêmes
+journaux. **Rien ne l'appelle encore** : Node fait toujours tourner sa file ;
+les routes médias, le cron et `AppState` seront basculés ensemble.
+
+Le service `Commentary` (un par processus, partagé par `Clone`, dans un
+runtime Tokio) se construit avec la base et le proxy vidéo
+(`Commentary::new(db, video)`) ; tests : `Commentary::with_options` (fausses
+dépendances `CommentaryDeps`, table de spectateurs et horloge à part) et
+`set_runner` (`__setCommentaryRunnerForTests`), `idle` (`__commentaryIdle`).
+
+Crochets que le portage du doublage doit poser (après construction, en
+tenant le doublage par `Weak` pour éviter un cycle d'`Arc`) :
+
+| Crochet | Équivalent Node | Contrat |
+|---------|-----------------|---------|
+| `set_gpu_gate(Some(Arc<dyn Fn() -> Option<BoxFut<()>>>))` | `globalThis.__commentaryGpuGate` (`releaseGpuForTranslation`) | Appelé de façon synchrone au démarrage de chaque traduction ; `None` : rien à libérer, la traduction part aussitôt ; sinon le doublage en cours a été interrompu et le futur se termine quand sa session de voix est fermée (au plus 20 s côté Node). |
+| `set_dub_wants_audio(Some(Arc<dyn Fn(i64) -> bool>))` | `globalThis.__dubWantsAudio` | Doublage en cours ou en file pour ce match : la fin de la traduction garde `full.ogg` dans le dossier de travail (le doublage l'efface avec `drop_full_audio`). Une panique vaut `false`. |
+
+En retour, le doublage appelle `slice_full_audio`, `drop_full_audio`,
+`audio_sources`, `activity`, `queue_position`, `ready`, `running_match_id`,
+`enqueue`, et doit partager la table des spectateurs et l'horloge du service
+(`viewers()`, `now()`, `viewer_active`, `viewer_position`,
+`someone_watching`). Les routes appelleront `status`, `served_cues`,
+`touch_viewer`, `nudge`, `enqueue`, `prioritize_on_view`, `activity`,
+`disabled_reason`, `running_match_id` ; le cron `enqueue_recent`.
+
+Vérifié contre Node (`server/tests/node-fixtures-commentary.mts` →
+`fixtures/commentary.expected.json`, `tests/commentary_node.rs`) : schéma
+réel de la base, découpages, ordre et couverture des tronçons, sources
+audio, backoff et `commentaryRetryAllowed` (216 cas), requêtes des tables,
+16 travaux complets avec les faux transcripteur et traducteur des tests de
+Node (lignes de la base, avancement, appels, résultat, statut, dossier de
+travail identiques) et 17 états de la file (statuts identiques à l'octet,
+ordre des clés compris). Cas de `tests/commentary-queue.test.ts` et
+`tests/commentary-ondemand.test.ts` portés (`tests/commentary.rs`), son
+complet découpé par le vrai ffmpeg.
