@@ -120,6 +120,8 @@ async fn pages_comme_node() {
                         let e = a.shift_remove("transcribe_engine");
                         a.shift_remove("transcribe_engine_override");
                         a.shift_remove("fetch_parallel");
+                        a.shift_remove("translate_repair_model");
+                        a.shift_remove("extra_names");
                         assert!(
                             matches!(
                                 e.as_ref().and_then(Value::as_str),

@@ -607,6 +607,65 @@ async fn lot_decale_nouvel_essai_puis_moities() {
 }
 
 #[tokio::test]
+async fn lignes_douteuses_reprises_par_le_modele_de_secours() {
+    let _g = clean_env().await;
+    let models: Arc<Mutex<Vec<(String, bool)>>> = Arc::default();
+    let m2 = models.clone();
+    let (base, _) = serve(Arc::new(move |_, b| {
+        let model = b["model"].as_str().unwrap_or_default().to_string();
+        let plain = is_plain(b);
+        m2.lock().unwrap().push((model.clone(), plain));
+        if plain {
+            let user = b["messages"][1]["content"].as_str().unwrap_or_default();
+            // Reprise : consigne stricte, ligne seule ; avant elle, les essais
+            // ordinaires en texte brut du modèle principal échouent encore.
+            if user.starts_with("Attention : la traduction précédente") {
+                return chat_res("Ne pas en faire trop.");
+            }
+            return chat_res("Toujours江区 faux.");
+        }
+        // Modèle principal : une ligne propre, une restée en anglais, une
+        // avec des caractères chinois (refusée, puis reprise).
+        let t: Vec<Value> = requested_lines(b)
+            .iter()
+            .map(|(i, _)| {
+                let fr = match i {
+                    1 => "Panier de Booker.",
+                    2 => "Et ne pas trying to overdo it.",
+                    _ => "Il a certainement江区 beaucoup de fautes.",
+                };
+                json!({ "i": i, "fr": fr })
+            })
+            .collect();
+        chat_res(&json!({ "t": t }).to_string())
+    }))
+    .await;
+    let mut cfg = remote_cfg(&base);
+    cfg.repair_model = Some("gros-modele".into());
+    let src = lines(&[
+        (1, "Booker scores."),
+        (2, "And not trying to overdo it."),
+        (3, "He certainly drew a lot of fouls."),
+    ]);
+    let out = ai::translate_batch(&src, &[], &cfg, &ctx()).await.unwrap();
+    assert_eq!(out[0], ok_line(1, "Panier de Booker."));
+    assert_eq!(out[1], ok_line(2, "Ne pas en faire trop."));
+    assert_eq!(out[2], ok_line(3, "Ne pas en faire trop."));
+    let m = models.lock().unwrap().clone();
+    // Les reprises (texte brut, consigne stricte) passent par le modèle de secours.
+    let repairs = m.iter().filter(|(model, _)| model == "gros-modele").count();
+    assert_eq!(repairs, 2, "{m:?}");
+    assert!(m
+        .iter()
+        .filter(|(model, _)| model == "gros-modele")
+        .all(|(_, plain)| *plain));
+    assert!(m
+        .iter()
+        .filter(|(_, plain)| !plain)
+        .all(|(model, _)| model == "mistral-nemo:12b"));
+}
+
+#[tokio::test]
 async fn lot_incomplet_jusqu_a_l_anglais_marque() {
     let _g = clean_env().await;
     let asked: Arc<Mutex<Vec<Vec<i64>>>> = Arc::default();
@@ -662,7 +721,9 @@ async fn lot_incomplet_jusqu_a_l_anglais_marque() {
             vec![3]
         ]
     );
-    assert_eq!(*plain.lock().unwrap(), vec![0.2, 0.0]);
+    // Deux essais en texte brut, puis la reprise stricte des lignes restées
+    // sans traduction (modèle de secours, à défaut le principal).
+    assert_eq!(*plain.lock().unwrap(), vec![0.2, 0.0, 0.0]);
 }
 
 #[tokio::test]

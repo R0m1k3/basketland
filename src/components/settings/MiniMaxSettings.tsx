@@ -21,13 +21,21 @@ type Msg = { ok: boolean; text: string } | null;
  * française de chaque rôle du doublage, et traduction des commentaires par
  * un modèle texte MiniMax (même clé).
  */
-export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsView }) {
+export default function MiniMaxSettings({
+  initial,
+  initialRepair = 'MiniMax-M3',
+}: {
+  initial: MinimaxSettingsView;
+  /** Modèle de secours des lignes mal traduites ; null : aucun. */
+  initialRepair?: string | null;
+}) {
   const [view, setView] = useState(initial);
   const [key, setKey] = useState('');
   const [model, setModel] = useState(initial.model);
   const [voices, setVoices] = useState<Record<MinimaxRole, string>>(initial.voices);
   const [translate, setTranslate] = useState(initial.translate);
   const [translateModel, setTranslateModel] = useState(initial.translateModel);
+  const [repair, setRepair] = useState<string>(initialRepair ?? 'aucun');
   const [msg, setMsg] = useState<Msg>(null);
   const [busy, setBusy] = useState(false);
   const active = view.keySet || view.envKey;
@@ -35,7 +43,7 @@ export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsV
   async function save(body: Record<string, unknown>, okText: string) {
     setBusy(true);
     setMsg(null);
-    const r = await postJson<{ minimax: MinimaxSettingsView }>('/api/admin/settings', body);
+    const r = await postJson<{ minimax: MinimaxSettingsView; translateRepairModel?: string | null }>('/api/admin/settings', body);
     setBusy(false);
     if (!r.ok) return setMsg({ ok: false, text: r.error });
     setView(r.data.minimax);
@@ -43,13 +51,14 @@ export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsV
     setVoices(r.data.minimax.voices);
     setTranslate(r.data.minimax.translate);
     setTranslateModel(r.data.minimax.translateModel);
+    if (r.data.translateRepairModel !== undefined) setRepair(r.data.translateRepairModel ?? 'aucun');
     setKey('');
     setMsg({ ok: true, text: okText });
   }
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const body: Record<string, unknown> = { minimaxModel: model, minimaxVoices: voices, minimaxTranslate: translate, minimaxTranslateModel: translateModel };
+    const body: Record<string, unknown> = { minimaxModel: model, minimaxVoices: voices, minimaxTranslate: translate, minimaxTranslateModel: translateModel, translateRepairModel: repair };
     if (key.trim()) body.minimaxApiKey = key;
     void save(body, 'Réglages MiniMax enregistrés : ils servent dès le prochain doublage.');
   }
@@ -196,6 +205,22 @@ export default function MiniMaxSettings({ initial }: { initial: MinimaxSettingsV
                   </option>
                 ))}
               </select>
+              <label htmlFor="minimax-repair-model" className="field-label mt-4">
+                Reprise des lignes douteuses
+              </label>
+              <select id="minimax-repair-model" className="field" value={repair} onChange={(e) => setRepair(e.target.value)}>
+                {MINIMAX_TEXT_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                    {m.id === 'MiniMax-M3' ? ' (conseillé)' : ''}
+                  </option>
+                ))}
+                <option value="aucun">Aucun : le modèle de traduction reprend ses lignes</option>
+              </select>
+              <p className="field-hint">
+                Les lignes restées en anglais, avec des caractères chinois ou des mots collés sont retraduites une à une par
+                ce modèle. Elles sont peu nombreuses : la traduction reste rapide.
+              </p>
             </div>
           )}
         </div>

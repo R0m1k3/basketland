@@ -18,6 +18,13 @@ use std::sync::OnceLock;
 
 pub const OK_REFERER: &str = "https://ok.ru/";
 
+/// Statut d'une vidéo supprimée ou introuvable sur ok.ru (page de remplacement).
+pub const NOT_FOUND: &str = "notFound";
+
+/// Début du message d'erreur d'une vidéo supprimée sur ok.ru (reconnu par la
+/// traduction et le doublage : pas un problème réseau).
+pub const DELETED_MSG: &str = "Vidéo supprimée ou introuvable sur ok.ru";
+
 /// En-têtes exigés par ok.ru (`OK_HEADERS`).
 pub fn ok_headers() -> Vec<(&'static str, String)> {
     vec![
@@ -199,6 +206,15 @@ pub fn parse_ok_embed(html: &str, ok_id: &str) -> OkEmbedInfo {
                     .unwrap_or_default();
             }
         }
+    }
+    // Page de remplacement d'ok.ru : vidéo supprimée ou introuvable
+    // (« Видео не найдено », `yandexError('notFound')`).
+    if info.hls_manifest_url.is_none()
+        && info.mp4.is_empty()
+        && (html.contains("yandexError('notFound')")
+            || (html.contains("vp_video_stub") && html.contains("Видео не найдено")))
+    {
+        info.status = NOT_FOUND.into();
     }
     if info.hls_manifest_url.as_deref().is_none_or(str::is_empty) {
         let decoded = decode_html_entities(html);
@@ -483,5 +499,17 @@ mod tests {
             hlsv.iter().map(|v| (&v.key, &v.url)).collect::<Vec<_>>(),
             vs.iter().map(|v| (&v.key, &v.url)).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn video_supprimee() {
+        // Extrait de la vraie page d'ok.ru pour une vidéo supprimée.
+        let html = r#"<div class="vp_video_stub_w __no-image"><div class="vp_video_stub __na"><div class="vp_video_stub_txt">Видео не найдено</div></div></div><script>OK.VideoPlayer && OK.VideoPlayer.yandexError('notFound');</script>"#;
+        let info = parse_ok_embed(html, "16693167065772");
+        assert_eq!(info.status, NOT_FOUND);
+        assert!(info.hls_manifest_url.is_none() && info.mp4.is_empty());
+        // Page normale : pas de faux positif.
+        let ok = r#"<script>{"hlsManifestUrl":"https:\/\/ok6-29.vkuser.net\/video.m3u8?sig=A"}</script>"#;
+        assert_ne!(parse_ok_embed(ok, "1").status, NOT_FOUND);
     }
 }

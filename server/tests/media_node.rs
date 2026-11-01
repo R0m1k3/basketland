@@ -169,6 +169,7 @@ fn cfg_of(v: &Value) -> CommentaryConfig {
         parallel: v["parallel"].as_u64().unwrap() as usize,
         chunk_sec: v["chunkSec"].as_u64().unwrap() as u32,
         disabled_reason: v["disabledReason"].as_str().map(String::from),
+        repair_model: None,
     }
 }
 
@@ -318,8 +319,24 @@ fn fonctions_pures_comme_node() {
                 roster::name_rendered(s(&input[0]), s(&input[1]), Some(&main_roster)),
                 roster::name_rendered(s(&input[0]), s(&input[1]), None)
             ]),
-            "TRANSLATE_SYSTEM_PROMPT" => Value::from(ai::TRANSLATE_SYSTEM_PROMPT),
-            "PLAIN_TRANSLATE_PROMPT" => Value::from(ai::plain_translate_prompt()),
+            // Consigne revue après le retrait de Node (exemples de vrais joueurs
+            // recopiés par le modèle, entraîneurs, vocabulaire, tout en
+            // français) : ses points clés sont vérifiés à la place du texte.
+            "TRANSLATE_SYSTEM_PROMPT" | "PLAIN_TRANSLATE_PROMPT" => {
+                let p = if c["fn"] == "TRANSLATE_SYSTEM_PROMPT" {
+                    ai::TRANSLATE_SYSTEM_PROMPT.to_string()
+                } else {
+                    ai::plain_translate_prompt().to_string()
+                };
+                for k in ["Edey", "Queta"] {
+                    assert!(!p.contains(k), "{k} dans la consigne");
+                }
+                for k in ["entraîneurs", "N'ajoute jamais un nom", "triple-double", "aucun mot anglais"] {
+                    assert!(p.contains(k), "{k} absent de la consigne");
+                }
+                n += 1;
+                continue;
+            }
             "buildUserMessage" | "buildPlainMessage" => {
                 let lines = lines_of(&input["lines"]);
                 let ctx = strings(&input["context"]);

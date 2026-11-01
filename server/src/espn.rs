@@ -99,6 +99,50 @@ fn js_truthy(v: &Value) -> bool {
     }
 }
 
+/// Effectif complet et entraîneur(s) d'une équipe (`/teams/{abbr}/roster`
+/// d'ESPN) : noms complets, joueurs d'abord.
+pub fn parse_team_people(json: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |n: String| {
+        let n = crate::js::trim(&n).to_string();
+        if !n.is_empty() && !out.contains(&n) {
+            out.push(n);
+        }
+    };
+    if let Some(Value::Array(a)) = json.get("athletes") {
+        for p in a {
+            push(str_of(p.get("fullName").or_else(|| p.get("displayName"))));
+        }
+    }
+    if let Some(Value::Array(c)) = json.get("coach") {
+        for p in c {
+            push(format!(
+                "{} {}",
+                str_of(p.get("firstName")),
+                str_of(p.get("lastName"))
+            ));
+        }
+    }
+    out
+}
+
+/// [`parse_team_people`] de l'équipe `abbr` (abréviation ESPN : PHX, GS…).
+pub async fn fetch_team_people(abbr: &str) -> Result<Vec<String>, String> {
+    let abbr: String = abbr
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_lowercase();
+    if abbr.is_empty() {
+        return Err("équipe inconnue".into());
+    }
+    let json = crate::http::fetch_json(&format!(
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{abbr}/roster"
+    ))
+    .await?;
+    Ok(parse_team_people(&json))
+}
+
 pub async fn fetch_standings(league: &str) -> Result<Value, String> {
     let json = crate::http::fetch_json(&format!("{ESPN_V2}/{league}/standings")).await?;
     Ok(parse_standings(&json))
@@ -107,6 +151,24 @@ pub async fn fetch_standings(league: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     // Réponse ESPN réelle et sortie de `parseStandings` (Node) sur cette réponse.
+    #[test]
+    fn effectif_et_entraineur() {
+        let j = serde_json::json!({
+            "athletes": [{"fullName": "Devin Booker"}, {"fullName": "Khaman Maluach"}, {"displayName": "Oso Ighodaro"}],
+            "coach": [{"firstName": "Jordan", "lastName": "Ott"}]
+        });
+        assert_eq!(
+            super::parse_team_people(&j),
+            vec![
+                "Devin Booker",
+                "Khaman Maluach",
+                "Oso Ighodaro",
+                "Jordan Ott"
+            ]
+        );
+        assert!(super::parse_team_people(&serde_json::json!({})).is_empty());
+    }
+
     #[test]
     fn classement_comme_node() {
         let raw = include_str!("../tests/fixtures/espn-standings.json");

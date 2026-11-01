@@ -56,6 +56,8 @@ pub struct ExtractRequest {
 }
 
 pub type ExtractFn = Arc<dyn Fn(ExtractRequest) -> BoxFut<Result<(), String>> + Send + Sync>;
+/// Effectif complet et entraîneurs d'une équipe (abréviation ESPN).
+pub type TeamPeopleFn = Arc<dyn Fn(String) -> BoxFut<Result<Vec<String>, String>> + Send + Sync>;
 /// Découpe locale du son complet (`cut(file, start, length, out, signal)`).
 pub type CutFn = Arc<
     dyn Fn(String, f64, f64, String, Option<AbortSignal>) -> BoxFut<Result<(), String>>
@@ -143,6 +145,9 @@ pub struct CommentaryDeps {
     /// essayé avant les sources HLS ; absent : HLS seulement.
     pub extract_dash: Option<ExtractFn>,
     pub extract_full: Option<ExtractFullFn>,
+    /// Effectifs et entraîneurs (ESPN) ajoutés à la feuille de stats ; absent :
+    /// feuille de stats et noms des Paramètres seulement.
+    pub team_people: Option<TeamPeopleFn>,
     pub cut: Option<CutFn>,
     pub transcribe: TranscribeFn,
     pub translate: TranslateFn,
@@ -260,6 +265,9 @@ impl CommentaryDeps {
                 });
                 f
             }),
+            team_people: Some(Arc::new(|abbr| {
+                Box::pin(async move { crate::espn::fetch_team_people(&abbr).await })
+            })),
             // Son complet lu d'une traite par ffmpeg (une connexion, depuis le
             // début du match) : seulement sans le téléchargement parallèle,
             // bien plus rapide et qui commence là où regarde le spectateur.
@@ -956,7 +964,59 @@ impl RunCtx {
     }
 }
 
+/// Durée de vie des effectifs ESPN gardés en cache (12 h).
+const TEAM_PEOPLE_MAX_AGE_MS: i64 = 12 * 3_600_000;
+
 impl Commentary {
+    /// Noms du match : feuille de stats, effectifs complets et entraîneurs des
+    /// deux équipes (ESPN, gardés 12 h ; une panne n'empêche rien), puis les
+    /// « noms à respecter » des Paramètres (commentateurs, surnoms…).
+    async fn match_people(
+        &self,
+        match_id: i64,
+        m: &super::MatchRow,
+        deps: &CommentaryDeps,
+    ) -> Vec<String> {
+        let mut out = self.roster_names(match_id);
+        let add = |names: Vec<String>, out: &mut Vec<String>| {
+            for n in names {
+                if !n.is_empty() && !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        };
+        if let Some(fetch) = &deps.team_people {
+            for abbr in [&m.home_abbr, &m.away_abbr] {
+                let key = format!("espn-roster:{}", abbr.to_uppercase());
+                let cached = self
+                    .db()
+                    .with(|c| crate::db::kv_get(c, &key, Some(TEAM_PEOPLE_MAX_AGE_MS)))
+                    .ok()
+                    .flatten()
+                    .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
+                let names = match cached {
+                    Some(n) => n,
+                    None => match fetch(abbr.clone()).await {
+                        Ok(n) => {
+                            let _ = self.db().with(|c| crate::db::kv_set(c, &key, &json!(n)));
+                            n
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[commentaires] effectif {abbr} indisponible (ESPN) : {}",
+                                short(&e)
+                            );
+                            Vec::new()
+                        }
+                    },
+                };
+                add(names, &mut out);
+            }
+        }
+        add(crate::settings::extra_names(&self.settings()), &mut out);
+        out
+    }
+
     /// Effectif du match (feuille de stats), sans doublon ni nom vide.
     fn roster_names(&self, match_id: i64) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -1085,8 +1145,9 @@ impl Commentary {
             return Err(CommentaryError::Other("pas de replay".into()));
         };
         let ok_id = ok_id_of(&m).unwrap_or_default().to_string();
-        // Effectif du match (feuille de stats) : corrige les noms écorchés par Whisper.
-        let roster_list = self.roster_names(job.match_id);
+        // Noms du match (feuille de stats, effectifs et entraîneurs, noms des
+        // Paramètres) : corrigent les noms écorchés par la transcription.
+        let roster_list = self.match_people(job.match_id, &m, deps).await;
         let roster = roster_index(&roster_list);
         let leftover_ctx = TranslateContext {
             match_label: Some(format!("{} @ {}", m.away_name, m.home_name)),
@@ -1165,6 +1226,16 @@ impl Commentary {
 
         let stream = match (deps.resolve_stream)(ok_id.clone(), false).await {
             Ok(s) => s,
+            // Vidéo supprimée : rien à retenter toutes les 15 min ; la synchro
+            // des vidéos en trouvera peut-être une autre.
+            Err(e) if e.starts_with(crate::okru::DELETED_MSG) => {
+                return Ok(CommentaryOutcome::failed(
+                    FailureKind::Contenu,
+                    format!(
+                        "{e} : traduction impossible tant qu'une autre vidéo n'est pas trouvée."
+                    ),
+                ));
+            }
             Err(e) => {
                 return Ok(self
                     .network_outcome(&format!("résolution du flux : {}", short(&e)), job.match_id))
