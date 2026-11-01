@@ -144,17 +144,6 @@ export type TranslateSettingsView = {
   /** Serveur externe imposé (TRANSLATE_URL), sinon null. */
   override: string | null;
 };
-/** Réglages Voxtral (Paramètres). */
-export type VoxtralSettingsView = {
-  /** Serveur externe ; vide : Voxtral embarqué. */
-  url: string;
-  /** Adresse imposée par VOXTRAL_URL. */
-  envUrl: boolean;
-  model: string;
-  voices: Record<'A' | 'B4' | 'B1' | 'F', string>;
-  /** Voix prédéfinies proposées. */
-  catalog: string[];
-};
 
 /** `GET /api/pages/parametres`. */
 export interface SettingsPage {
@@ -169,8 +158,7 @@ export interface SettingsPage {
     transcribe_engine_override: string | null;
     voice_quality: VoiceQuality;
     /** Moteur des voix effectivement utilisé. */
-    voice_engine: 'local' | 'minimax' | 'voxtral';
-    voxtral: VoxtralSettingsView;
+    voice_engine: 'local' | 'minimax' | 'fish';
     translate: TranslateSettingsView;
     /** Une clé MiniMax est-elle enregistrée ? */
     minimax_key_set: boolean;
