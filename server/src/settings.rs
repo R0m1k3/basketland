@@ -36,6 +36,10 @@ pub mod keys {
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
     pub const VOICE_QUALITY: &str = "voice_quality";
     pub const VOICE_ENGINE: &str = "voice_engine";
+    pub const VOXTRAL_URL: &str = "voxtral_url";
+    pub const TRANSLATE_ENGINE: &str = "translate_engine";
+    pub const TRANSLATE_LOCAL_MODEL: &str = "translate_local_model";
+    pub const VOXTRAL_VOICES: &str = "voxtral_voices";
     /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
     pub const FETCH_PARALLEL: &str = "fetch_parallel";
     /// Noms à respecter dans les sous-titres (commentateurs, surnoms…), un par ligne.
@@ -265,13 +269,63 @@ pub fn voice_engine_choice(s: &Settings) -> Option<&'static str> {
     match s.get(keys::VOICE_ENGINE) {
         Some("local") => Some("local"),
         Some("minimax") => Some("minimax"),
+        Some("voxtral") => Some("voxtral"),
         _ => None,
     }
 }
 
 /// Valeur acceptée pour `voiceEngine`.
 pub fn is_voice_engine(v: Option<&Value>) -> bool {
-    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax")
+    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax" || s == "voxtral")
+}
+
+/// « Moteur de traduction » : moteur réellement utilisé, modèle embarqué,
+/// modèles proposés, et pourquoi le choix ne s'applique pas (serveur externe).
+pub fn translate_settings_view(s: &Settings) -> Value {
+    use crate::media::commentary_ai::{commentary_config, ServiceMode, TranslateProvider};
+    let c = commentary_config(s);
+    let engine = match c.translate_provider {
+        TranslateProvider::Minimax => "minimax",
+        TranslateProvider::Openai => "openai",
+        TranslateProvider::Ollama => "local",
+    };
+    let local_model = translate_local_model(s)
+        .or_else(|| env_trim("TRANSLATE_MODEL"))
+        .unwrap_or_else(|| crate::media::commentary_ai::DEFAULT_TRANSLATE_MODEL.into());
+    let models: Vec<Value> = LOCAL_TRANSLATE_MODELS
+        .iter()
+        .map(|(id, label)| json!({ "id": id, "label": label }))
+        .collect();
+    let remote = c.translate_provider == TranslateProvider::Ollama
+        && c.translate_mode == ServiceMode::Remote;
+    json!({
+        "engine": engine,
+        "choice": translate_engine_choice(s),
+        "localModel": local_model,
+        "models": models,
+        "model": c.translate_model,
+        "override": remote.then(|| format!(
+            "La traduction passe par un serveur externe (TRANSLATE_URL = {}) : le modèle choisi ici doit y être installé.",
+            c.translate_url
+        )),
+    })
+}
+
+/// Réglages Voxtral affichés dans la page (adresse, voix de chaque rôle, voix proposées).
+pub fn voxtral_settings_view(s: &Settings) -> Value {
+    let c = crate::media::voice_voxtral::voxtral_config(s);
+    let voices: Map<String, Value> = c
+        .voices
+        .iter()
+        .map(|(r, v)| (r.clone(), Value::from(v.clone())))
+        .collect();
+    json!({
+        "url": c.url,
+        "envUrl": env_trim("VOXTRAL_URL").is_some(),
+        "model": c.model,
+        "voices": voices,
+        "catalog": crate::media::voice_voxtral::VOXTRAL_VOICES,
+    })
 }
 
 /// Qualité des voix embarquées : 'hd', sinon 'standard' (défaut).
@@ -450,8 +504,54 @@ pub fn saved_minimax_voices(s: &Settings) -> Vec<(&'static str, String)> {
         .collect()
 }
 
-/// `minimaxTranslateWanted` : réglage de la page, sinon `MINIMAX_TRANSLATE=1`.
+/// Moteur de traduction choisi dans les Paramètres (« Moteur de traduction ») :
+/// 'local' (Ollama embarqué), 'minimax' ou 'openai' ; `None` : pas de choix
+/// (MiniMax si sa traduction est cochée, sinon OpenAI si une clé existe,
+/// sinon l'embarqué).
+pub fn translate_engine_choice(s: &Settings) -> Option<&'static str> {
+    match s.get(keys::TRANSLATE_ENGINE) {
+        Some("local") => Some("local"),
+        Some("minimax") => Some("minimax"),
+        Some("openai") => Some("openai"),
+        _ => None,
+    }
+}
+
+/// Valeur acceptée pour `translateEngine`.
+pub fn is_translate_engine(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax" || s == "openai")
+}
+
+/// Modèles de traduction embarqués proposés (id Ollama, libellé).
+pub const LOCAL_TRANSLATE_MODELS: [(&str, &str); 4] = [
+    (
+        "translategemma:12b",
+        "TranslateGemma 12B (Google) — par défaut",
+    ),
+    ("gemma4:e4b", "Gemma 4 E4B (Google)"),
+    (
+        "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0",
+        "Hunyuan-MT 7B (Tencent) — spécialiste de la traduction",
+    ),
+    (
+        "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q4_K_M",
+        "Hunyuan-MT 7B (Tencent), version légère",
+    ),
+];
+
+/// Modèle de traduction embarqué choisi dans les Paramètres (prioritaire sur `TRANSLATE_MODEL`).
+pub fn translate_local_model(s: &Settings) -> Option<String> {
+    s.get(keys::TRANSLATE_LOCAL_MODEL)
+        .map(|m| js::trim(m).to_string())
+        .filter(|m| !m.is_empty())
+}
+
+/// `minimaxTranslateWanted` : moteur choisi (« Moteur de traduction »),
+/// sinon réglage de la page MiniMax, sinon `MINIMAX_TRANSLATE=1`.
 pub fn minimax_translate_wanted(s: &Settings) -> bool {
+    if let Some(e) = translate_engine_choice(s) {
+        return e == "minimax";
+    }
     match s.get(keys::MINIMAX_TRANSLATE) {
         None => env("MINIMAX_TRANSLATE").map(|v| js::trim(&v).to_string()) == Some("1".into()),
         Some(v) => v == "1",
@@ -543,6 +643,8 @@ pub fn settings_view(s: &Settings) -> Value {
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
         "voiceQuality": voice_quality(s),
         "voiceEngine": crate::media::voice_ai::voice_engine_name(s).as_str(),
+        "voxtral": voxtral_settings_view(s),
+        "translate": translate_settings_view(s),
         "voiceQualityOverride": crate::media::voice_ai::voice_quality_override(s),
         "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
         "translateRepairModel": translate_repair_model(s),

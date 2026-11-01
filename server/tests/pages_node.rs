@@ -126,6 +126,8 @@ async fn pages_comme_node() {
                         a.shift_remove("voice_quality_override");
                         a.shift_remove("voice_engine");
                         a.shift_remove("minimax_key_set");
+                        a.shift_remove("voxtral");
+                        a.shift_remove("translate");
                         assert!(
                             matches!(q.as_ref().and_then(Value::as_str), Some("standard" | "hd")),
                             "{q:?}"

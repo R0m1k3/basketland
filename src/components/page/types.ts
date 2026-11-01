@@ -130,6 +130,31 @@ export interface StandingsPage {
 export type TranscribeEngine = 'whisper' | 'whisper-large' | 'nvidia';
 /** Qualité des voix embarquées du doublage (Paramètres). */
 export type VoiceQuality = 'standard' | 'hd';
+/** « Moteur de traduction » (Paramètres). */
+export type TranslateSettingsView = {
+  /** Moteur réellement utilisé. */
+  engine: 'local' | 'minimax' | 'openai';
+  /** Choix enregistré ; null : automatique. */
+  choice: 'local' | 'minimax' | 'openai' | null;
+  /** Modèle embarqué (Ollama). */
+  localModel: string;
+  models: { id: string; label: string }[];
+  /** Modèle réellement utilisé. */
+  model: string;
+  /** Serveur externe imposé (TRANSLATE_URL), sinon null. */
+  override: string | null;
+};
+/** Réglages Voxtral (Paramètres). */
+export type VoxtralSettingsView = {
+  /** Serveur externe ; vide : Voxtral embarqué. */
+  url: string;
+  /** Adresse imposée par VOXTRAL_URL. */
+  envUrl: boolean;
+  model: string;
+  voices: Record<'A' | 'B4' | 'B1' | 'F', string>;
+  /** Voix prédéfinies proposées. */
+  catalog: string[];
+};
 
 /** `GET /api/pages/parametres`. */
 export interface SettingsPage {
@@ -144,7 +169,9 @@ export interface SettingsPage {
     transcribe_engine_override: string | null;
     voice_quality: VoiceQuality;
     /** Moteur des voix effectivement utilisé. */
-    voice_engine: 'local' | 'minimax';
+    voice_engine: 'local' | 'minimax' | 'voxtral';
+    voxtral: VoxtralSettingsView;
+    translate: TranslateSettingsView;
     /** Une clé MiniMax est-elle enregistrée ? */
     minimax_key_set: boolean;
     /** Pourquoi ce choix n'est pas appliqué (TTS_MODEL, voix MiniMax), sinon null. */

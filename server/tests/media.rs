@@ -348,6 +348,37 @@ async fn configuration_des_services() {
             "mm-key"
         )
     );
+    // « Moteur de traduction » : l'embarqué l'emporte sur MiniMax et OpenAI,
+    // avec le modèle choisi (prioritaire sur TRANSLATE_MODEL).
+    set("TRANSLATE_MODEL", "gemma4:e4b");
+    let s = Settings::from_pairs([
+        (keys::OPENAI_API_KEY, "sk"),
+        (keys::MINIMAX_TRANSLATE, "1"),
+        (keys::MINIMAX_API_KEY, "mm-key"),
+        ("translate_engine", "local"),
+        (
+            "translate_local_model",
+            "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0",
+        ),
+    ]);
+    let c = ai::commentary_config(&s);
+    assert_eq!(c.translate_provider, TranslateProvider::Ollama);
+    assert_eq!(
+        c.translate_model,
+        "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0"
+    );
+    assert_eq!(c.translate_engine, ai::TranslateEngine::Mt);
+    let s = Settings::from_pairs([
+        (keys::MINIMAX_API_KEY, "mm-key"),
+        ("translate_engine", "minimax"),
+    ]);
+    assert_eq!(
+        ai::commentary_config(&s).translate_provider,
+        TranslateProvider::Minimax
+    );
+    let s = Settings::from_pairs([("translate_engine", "local")]);
+    assert_eq!(ai::commentary_config(&s).translate_model, "gemma4:e4b");
+    std::env::remove_var("TRANSLATE_MODEL");
     // Base illisible : pas de MiniMax, même demandé par variable.
     set("MINIMAX_TRANSLATE", "1");
     set("MINIMAX_API_KEY", "mm-env");
