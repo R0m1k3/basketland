@@ -25,6 +25,7 @@ pub mod js;
 pub mod jsval;
 pub mod linescore;
 pub mod media;
+pub mod mp4_proxy;
 pub mod node;
 pub mod okru;
 pub mod pages;
