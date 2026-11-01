@@ -198,12 +198,18 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   restent) et la lecture ne la relance plus ; « Reprendre la traduction » la
   termine.
 - **Moteur de transcription** : dans Paramètres › « Transcription des
-  commentateurs », un administrateur choisit Whisper (par défaut : reçoit la
-  liste des joueurs, les noms propres sont les mieux reconnus) ou NVIDIA
-  Parakeet TDT 0.6B (bien plus rapide sur la carte graphique : la traduction
+  commentateurs », un administrateur choisit Whisper turbo (par défaut :
+  reçoit la liste des joueurs, les noms propres sont bien reconnus), Whisper
+  large-v3 complet (`Systran/faster-whisper-large-v3`, ~1,6 Go de carte en
+  int8 : plus précis quand le public couvre les commentateurs, 2 à 3 fois
+  plus lent) ou NVIDIA Parakeet TDT 0.6B (bien plus rapide sur la carte graphique : la traduction
   prend plus d'avance sur la lecture ; les noms sont corrigés après coup).
   Modèle téléchargé au premier usage dans `/data/models`. Vaut pour les
   prochaines traductions (« Relancer la traduction » refait une piste).
+- **Voix du doublage** : dans Paramètres › « Voix du doublage », les voix
+  embarquées sont Standard (Qwen3-TTS 0.6B, par défaut) ou HD (Qwen3-TTS
+  1.7B : mêmes voix clonées, intonation plus naturelle, ~4 Go de carte, 2
+  fois plus lent). Sans effet avec les voix MiniMax ou `TTS_MODEL`.
 - **Mot de passe perdu** : depuis le NAS,
 
   ```bash
@@ -698,7 +704,7 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 | `MINIMAX_TTS_SPEED` | `1` | Débit de parole MiniMax (0,5 à 2). |
 | `MINIMAX_API_URL` | `https://api.minimax.io` | Serveur de l'API (p. ex. `https://api-uw.minimax.io`). |
 | `TTS_EMBED_DEVICE` | `cpu` | Avec MiniMax : appareil de l'analyse des voix (`cpu`, ou `cuda`, le doublage attend alors de nouveau le GPU). |
-| `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` | Modèle Qwen3-TTS (dépôt Hugging Face ou dossier local), de type « Base » (clonage de voix). |
+| `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` (`…-1.7B-Base` avec les voix HD) | Modèle Qwen3-TTS (dépôt Hugging Face ou dossier local), de type « Base » (clonage de voix). L'emporte sur le choix « Voix du doublage » des Paramètres. |
 | `TTS_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `VOICES_DIR` | `/app/assets/voices` | Dossier des voix : un sous-dossier par voix avec `reference.wav`, `reference.txt` et `voice.json`. |
 | `TTS_PYTHON` | `/opt/tts/bin/python` | Python du moteur de voix. Hors Docker : `python3`, avec torch 2.8, `qwen-tts==0.1.1`, `speechbrain==1.1.2` et `soundfile` (liste complète : `scripts/voice-requirements.txt`). |

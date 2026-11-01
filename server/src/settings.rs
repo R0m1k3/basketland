@@ -34,6 +34,7 @@ pub mod keys {
     pub const MINIMAX_TRANSLATE_MODEL: &str = "minimax_translate_model";
     /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'nvidia' (Parakeet).
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
+    pub const VOICE_QUALITY: &str = "voice_quality";
     /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
     pub const FETCH_PARALLEL: &str = "fetch_parallel";
     /// Noms à respecter dans les sous-titres (commentateurs, surnoms…), un par ligne.
@@ -227,20 +228,41 @@ pub fn vf_mode(s: &Settings) -> &'static str {
     }
 }
 
-/// Moteurs de transcription embarqués proposés dans les Paramètres.
-pub const TRANSCRIBE_ENGINES: [&str; 2] = ["whisper", "nvidia"];
+/// Moteurs de transcription embarqués proposés dans les Paramètres :
+/// Whisper large-v3-turbo (défaut), Whisper large-v3 complet (plus précis),
+/// NVIDIA Parakeet.
+pub const TRANSCRIBE_ENGINES: [&str; 3] = ["whisper", "whisper-large", "nvidia"];
 
 /// Valeur acceptée pour `transcribeEngine`.
 pub fn is_transcribe_engine(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::String(s)) if TRANSCRIBE_ENGINES.contains(&s.as_str()))
 }
 
-/// Moteur de transcription embarqué : 'nvidia' (Parakeet), sinon 'whisper' (défaut).
+/// Moteur de transcription embarqué : 'nvidia' (Parakeet), 'whisper-large'
+/// (Whisper large-v3 complet), sinon 'whisper' (large-v3-turbo, défaut).
 pub fn transcribe_engine(s: &Settings) -> &'static str {
-    if s.get(keys::TRANSCRIBE_ENGINE) == Some("nvidia") {
-        "nvidia"
+    match s.get(keys::TRANSCRIBE_ENGINE) {
+        Some("nvidia") => "nvidia",
+        Some("whisper-large") => "whisper-large",
+        _ => "whisper",
+    }
+}
+
+/// Qualités des voix embarquées du doublage : 'standard' (Qwen3-TTS 0.6B,
+/// défaut) ou 'hd' (Qwen3-TTS 1.7B, intonation plus naturelle, plus lent).
+pub const VOICE_QUALITIES: [&str; 2] = ["standard", "hd"];
+
+/// Valeur acceptée pour `voiceQuality`.
+pub fn is_voice_quality(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::String(s)) if VOICE_QUALITIES.contains(&s.as_str()))
+}
+
+/// Qualité des voix embarquées : 'hd', sinon 'standard' (défaut).
+pub fn voice_quality(s: &Settings) -> &'static str {
+    if s.get(keys::VOICE_QUALITY) == Some("hd") {
+        "hd"
     } else {
-        "whisper"
+        "standard"
     }
 }
 
@@ -502,6 +524,8 @@ pub fn settings_view(s: &Settings) -> Value {
         "vfMode": vf_mode(s),
         "transcribeEngine": transcribe_engine(s),
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
+        "voiceQuality": voice_quality(s),
+        "voiceQualityOverride": crate::media::voice_ai::voice_quality_override(s),
         "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
         "translateRepairModel": translate_repair_model(s),
         "extraNames": s.get(keys::EXTRA_NAMES).unwrap_or_default(),

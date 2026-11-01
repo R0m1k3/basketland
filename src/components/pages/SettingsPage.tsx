@@ -9,6 +9,7 @@ import UsersAdmin from '@/components/settings/UsersAdmin';
 import TranscribeEngineSettings from '@/components/settings/TranscribeEngineSettings';
 import FetchParallelSettings from '@/components/settings/FetchParallelSettings';
 import ExtraNamesSettings from '@/components/settings/ExtraNamesSettings';
+import VoiceQualitySettings from '@/components/settings/VoiceQualitySettings';
 import VfModeSettings from '@/components/settings/VfModeSettings';
 import { PageData } from '@/components/page/pageData';
 import type { SettingsPage as SettingsData } from '@/components/page/types';
@@ -77,6 +78,7 @@ function Settings({ d }: { d: SettingsData }) {
           <AutoTranslateSettings initial={a.auto_translate} />
           <VfModeSettings initial={a.vf_mode} voiceDisabledReason={a.voice_disabled_reason} />
           <TranscribeEngineSettings initial={a.transcribe_engine} override={a.transcribe_engine_override} />
+          <VoiceQualitySettings initial={a.voice_quality ?? 'standard'} override={a.voice_quality_override ?? null} />
           <ExtraNamesSettings initial={a.extra_names} />
           <FetchParallelSettings initial={a.fetch_parallel} />
           <MiniMaxSettings initial={a.minimax} initialRepair={a.translate_repair_model} />

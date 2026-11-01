@@ -274,6 +274,16 @@ async fn configuration_des_services() {
     set("WHISPER_PYTHON", "/bin/sh");
     set("WHISPER_WORKER", helper("fake_whisper_worker.py"));
     set("OLLAMA_BIN", helper("fake_ollama.py"));
+    // Whisper large-v3 complet choisi dans les Paramètres.
+    let large = Settings::from_pairs(Some(("transcribe_engine", "whisper-large")));
+    assert_eq!(
+        ai::commentary_config(&large).transcribe_model,
+        ai::WHISPER_LARGE_MODEL
+    );
+    assert_eq!(
+        ai::commentary_config(&s).transcribe_model,
+        ai::DEFAULT_TRANSCRIBE_MODEL
+    );
     let c = ai::commentary_config(&s);
     assert_eq!(
         (
@@ -1383,6 +1393,14 @@ async fn liste_des_voix_et_configuration() {
         ),
         (voice_ai::DEFAULT_TTS_MODEL, "auto", None)
     );
+    // Voix HD choisies dans les Paramètres : Qwen3-TTS 1.7B ; TTS_MODEL l'emporte.
+    let hd = Settings::from_pairs(Some(("voice_quality", "hd")));
+    assert_eq!(voice_ai::voice_config(&hd).model, voice_ai::HD_TTS_MODEL);
+    assert_eq!(voice_ai::voice_quality_override(&hd), None);
+    set("TTS_MODEL", "mon/modele");
+    assert_eq!(voice_ai::voice_config(&hd).model, "mon/modele");
+    assert!(voice_ai::voice_quality_override(&hd).is_some());
+    std::env::remove_var("TTS_MODEL");
     set("DUB_DISABLED", "1");
     assert_eq!(
         voice_ai::voice_config(&s).disabled_reason.as_deref(),

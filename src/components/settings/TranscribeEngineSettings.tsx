@@ -9,8 +9,13 @@ type Msg = { ok: boolean; text: string } | null;
 const OPTIONS: { value: TranscribeEngine; title: string; text: string }[] = [
   {
     value: 'whisper',
-    title: 'Whisper',
-    text: 'OpenAI Whisper large-v3-turbo. Reçoit la liste des joueurs du match : les noms propres sont les mieux reconnus.',
+    title: 'Whisper turbo',
+    text: 'OpenAI Whisper large-v3-turbo. Reçoit la liste des joueurs du match : les noms propres sont bien reconnus.',
+  },
+  {
+    value: 'whisper-large',
+    title: 'Whisper large-v3',
+    text: 'Le modèle Whisper complet : transcription plus précise quand le public ou la musique couvrent les commentateurs, et meilleurs noms. Environ 2 à 3 fois plus lent que turbo.',
   },
   {
     value: 'nvidia',
@@ -58,7 +63,9 @@ export default function TranscribeEngineSettings({
       text:
         r.data.transcribeEngine === 'nvidia'
           ? 'NVIDIA Parakeet choisi pour les prochaines traductions. Le modèle est téléchargé au début de la première transcription (lignes « [parakeet] » dans les journaux du conteneur).'
-          : 'Whisper choisi pour les prochaines traductions.',
+          : r.data.transcribeEngine === 'whisper-large'
+            ? 'Whisper large-v3 choisi pour les prochaines traductions. Le modèle (~3 Go) est téléchargé au début de la première transcription.'
+            : 'Whisper turbo choisi pour les prochaines traductions.',
     });
   }
 
@@ -73,7 +80,7 @@ export default function TranscribeEngineSettings({
           <p className="mt-0.5 text-sm text-paper-mute">Le moteur qui écoute les commentaires anglais avant leur traduction.</p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {OPTIONS.map((o) => {
             const checked = engine === o.value;
             return (

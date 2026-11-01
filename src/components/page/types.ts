@@ -127,7 +127,9 @@ export interface StandingsPage {
 }
 
 /** Moteur de transcription embarqué (Paramètres). */
-export type TranscribeEngine = 'whisper' | 'nvidia';
+export type TranscribeEngine = 'whisper' | 'whisper-large' | 'nvidia';
+/** Qualité des voix embarquées du doublage (Paramètres). */
+export type VoiceQuality = 'standard' | 'hd';
 
 /** `GET /api/pages/parametres`. */
 export interface SettingsPage {
@@ -140,6 +142,9 @@ export interface SettingsPage {
     transcribe_engine: TranscribeEngine;
     /** Pourquoi ce choix n'est pas appliqué (TRANSCRIBE_URL, TRANSCRIBE_MODEL…), sinon null. */
     transcribe_engine_override: string | null;
+    voice_quality: VoiceQuality;
+    /** Pourquoi ce choix n'est pas appliqué (TTS_MODEL, voix MiniMax), sinon null. */
+    voice_quality_override: string | null;
     /** « Noms à respecter » (un par ligne). */
     extra_names: string;
     /** Modèle MiniMax de reprise des lignes mal traduites ; null : aucun. */

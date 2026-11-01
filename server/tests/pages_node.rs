@@ -122,10 +122,16 @@ async fn pages_comme_node() {
                         a.shift_remove("fetch_parallel");
                         a.shift_remove("translate_repair_model");
                         a.shift_remove("extra_names");
+                        let q = a.shift_remove("voice_quality");
+                        a.shift_remove("voice_quality_override");
+                        assert!(
+                            matches!(q.as_ref().and_then(Value::as_str), Some("standard" | "hd")),
+                            "{q:?}"
+                        );
                         assert!(
                             matches!(
                                 e.as_ref().and_then(Value::as_str),
-                                Some("whisper" | "nvidia")
+                                Some("whisper" | "whisper-large" | "nvidia")
                             ),
                             "{e:?}"
                         );
