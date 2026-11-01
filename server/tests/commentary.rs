@@ -421,6 +421,50 @@ async fn quota_epuise_la_file_attend_puis_reprend() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn un_doublage_demande_passe_avant_la_pre_traduction() {
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_NIGHT_WINDOW", "always");
+    set_env("COMMENTARY_REPUMP_MS", "20");
+    let gated = Gated::default();
+    t.svc.set_runner(Some(gated.runner(true, None)));
+    // Pré-traduction de fond de A en cours.
+    t.svc.enqueue(A, EnqueueOptions::default());
+    assert_eq!(gated.started(), vec![A]);
+    // « Doubler ce match » sur C : la pré-traduction de A cède la place…
+    let reserved: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![C]));
+    let r2 = reserved.clone();
+    t.svc
+        .set_dub_gpu_reservations(Some(Arc::new(move || r2.lock().unwrap().clone())));
+    t.svc.yield_to_dub(C);
+    for _ in 0..100 {
+        if t.svc.running_match_id().is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // … et la pré-traduction (A, B) attend tant que le doublage tient la carte.
+    t.svc.enqueue(B, EnqueueOptions::default());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(gated.started(), vec![A]);
+    assert!(t.svc.queue_position(A).is_some() && t.svc.queue_position(B).is_some());
+    // La traduction demandée pour le match doublé lui-même n'attend pas.
+    t.svc.enqueue(C, opts(true, false, true));
+    assert_eq!(gated.started(), vec![A, C]);
+    gated.resolve(C, ok("fait"));
+    // Doublage terminé : la pré-traduction reprend.
+    reserved.lock().unwrap().clear();
+    for _ in 0..100 {
+        if gated.started().len() >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(gated.started(), vec![A, C, A]);
+    unset_env("COMMENTARY_REPUMP_MS");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn job_periodique_matchs_recents_sans_piste_a_jour() {
     let _g = LOCK.lock().await;
     let t = setup(&[A, B, C]);

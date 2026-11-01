@@ -628,6 +628,8 @@ pub(crate) struct Inner {
     runner: Mutex<Option<Runner>>,
     repump: Mutex<Option<tokio::task::JoinHandle<()>>>,
     idle: Notify,
+    /// Un doublage demandé tient-il la carte graphique ? (les analyses de fond attendent)
+    gpu_reserved: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
 }
 
 /// Service d'analyse vidéo (file, statuts, analyses).
@@ -740,6 +742,7 @@ impl Analysis {
             runner: Mutex::new(None),
             repump: Mutex::new(None),
             idle: Notify::new(),
+            gpu_reserved: Mutex::new(None),
         }))
     }
 
@@ -825,6 +828,26 @@ impl Analysis {
 
     /// Remplace l'exécuteur (`__setAnalysisRunnerForTests`) et vide la file ;
     /// `None` : l'analyse réelle avec les dépendances du service.
+    /// Pose le crochet « un doublage demandé tient la carte graphique » :
+    /// pendant ce temps, les analyses de FOND attendent en file.
+    pub fn set_gpu_reserved(&self, f: Option<Arc<dyn Fn() -> bool + Send + Sync>>) {
+        *self
+            .0
+            .gpu_reserved
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = f;
+    }
+
+    fn gpu_reserved(&self) -> bool {
+        let f = self
+            .0
+            .gpu_reserved
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        f.is_some_and(|f| f())
+    }
+
     pub fn set_runner(&self, runner: Option<Runner>) {
         *self.0.runner.lock().unwrap_or_else(|e| e.into_inner()) = runner;
         {
@@ -970,6 +993,8 @@ impl Analysis {
         {
             t.abort();
         }
+        // Lu avant le verrou de la file (le doublage a le sien).
+        let reserved = self.gpu_reserved();
         let to_start = {
             let mut st = self.st();
             let mut to_start = Vec::new();
@@ -978,8 +1003,10 @@ impl Analysis {
                 if st.queue.iter().any(|j| j.background) && !self.in_night_window() {
                     st.queue.retain(|j| !j.background);
                 }
-                // Pendant une lecture, les analyses de fond attendent en file.
-                let watching = st.queue.iter().any(|j| j.background) && self.someone_watching();
+                // Pendant une lecture, ou pendant un doublage demandé, les
+                // analyses de fond attendent en file.
+                let watching =
+                    st.queue.iter().any(|j| j.background) && (reserved || self.someone_watching());
                 let Some(i) = st.queue.iter().position(|j| !(j.background && watching)) else {
                     if !st.queue.is_empty() {
                         self.schedule_repump();
