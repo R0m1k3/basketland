@@ -713,6 +713,7 @@ pub fn parametres(
             "voice_disabled_reason": media.dub_disabled_reason,
             "minimax": settings::minimax_settings_view(&s),
             "voxtral": settings::voxtral_settings_view(&s),
+            "translate": settings::translate_settings_view(&s),
             "openai": settings::openai_settings_view(&s),
             "openai_model_placeholder": settings::OPENAI_MODEL_PLACEHOLDER,
         })

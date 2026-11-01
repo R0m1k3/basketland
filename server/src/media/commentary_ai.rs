@@ -232,7 +232,7 @@ pub fn engine_for(model: &str, forced: Option<&str>) -> TranslateEngine {
     match forced.map(|f| js::trim(f).to_lowercase()).as_deref() {
         Some("mt") => TranslateEngine::Mt,
         Some("chat") => TranslateEngine::Chat,
-        _ if jsre!("milmmt", "i").is_match(model) => TranslateEngine::Mt,
+        _ if jsre!("milmmt", "i").is_match(model) || is_hunyuan_mt(model) => TranslateEngine::Mt,
         _ => TranslateEngine::Chat,
     }
 }
@@ -279,7 +279,12 @@ pub fn minimax_translate_config(s: &Settings) -> Option<OnlineTranslator> {
 /// `commentaryConfig`.
 pub fn commentary_config(s: &Settings) -> CommentaryConfig {
     let minimax = minimax_translate_config(s);
-    let openai = if minimax.is_some() {
+    // « Moteur de traduction » choisi : l'embarqué ou MiniMax écartent OpenAI.
+    let openai = if minimax.is_some()
+        || matches!(
+            settings::translate_engine_choice(s),
+            Some("local" | "minimax")
+        ) {
         None
     } else {
         openai_config(s)
@@ -293,7 +298,9 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
     });
     let translate_model = match &online {
         Some(o) => o.model.clone(),
-        None => env_trim("TRANSLATE_MODEL").unwrap_or_else(|| DEFAULT_TRANSLATE_MODEL.into()),
+        None => settings::translate_local_model(s)
+            .or_else(|| env_trim("TRANSLATE_MODEL"))
+            .unwrap_or_else(|| DEFAULT_TRANSLATE_MODEL.into()),
     };
     let remote_asr = trim_url(env("TRANSCRIBE_URL"));
     let remote_mt = match &online {
@@ -1778,6 +1785,20 @@ pub fn mt_prompt(en: &str) -> String {
     format!("Translate this from English to French:\nEnglish: {en}\nFrench:")
 }
 
+/// Hunyuan-MT (Tencent) : modèle de traduction pur, piloté comme MiLMMT
+/// (phrase par phrase, complétion brute).
+pub fn is_hunyuan_mt(model: &str) -> bool {
+    jsre!(r"hunyuan-mt|hy-mt", "i").is_match(model)
+}
+
+/// Gabarit officiel de Hunyuan-MT (paires sans chinois), avec ses jetons de
+/// conversation (`<|startoftext|>` … `<|extra_0|>`), en complétion brute.
+pub fn hunyuan_mt_prompt(en: &str) -> String {
+    format!(
+        "<|startoftext|>Translate the following segment into French, without additional explanation.\n\n{en}<|extra_0|>"
+    )
+}
+
 /// Racine Ollama (`…/v1` retiré).
 pub fn ollama_base(url: &str) -> String {
     url.strip_suffix("/v1").unwrap_or(url).to_string()
@@ -1786,13 +1807,24 @@ pub fn ollama_base(url: &str) -> String {
 /// Corps exact (JSON) de la requête de [`mt_complete`].
 pub fn mt_body(en: &str, cfg: &CommentaryConfig) -> String {
     let predict = (40 + js::utf16_len(en) * 2).min(512);
+    let hunyuan = is_hunyuan_mt(&cfg.translate_model);
+    let prompt = if hunyuan {
+        hunyuan_mt_prompt(en)
+    } else {
+        mt_prompt(en)
+    };
+    let stop = if hunyuan {
+        json!(["\n", "<|eos|>"])
+    } else {
+        json!(["\n"])
+    };
     json!({
         "model": cfg.translate_model,
-        "prompt": mt_prompt(en),
+        "prompt": prompt,
         "raw": true,
         "stream": false,
         "keep_alive": "10m",
-        "options": { "temperature": 0, "top_k": 1, "num_predict": predict, "stop": ["\n"] },
+        "options": { "temperature": 0, "top_k": 1, "num_predict": predict, "stop": stop },
     })
     .to_string()
 }
@@ -2016,6 +2048,25 @@ pub async fn translate_batch_mt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hunyuan_mt_pilote_comme_un_modele_de_traduction() {
+        let m = "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0";
+        assert!(is_hunyuan_mt(m));
+        assert_eq!(engine_for(m, None), TranslateEngine::Mt);
+        assert_eq!(engine_for("gemma4:e4b", None), TranslateEngine::Chat);
+        let cfg = CommentaryConfig {
+            translate_model: m.into(),
+            ..commentary_config(&Settings::default())
+        };
+        let b: Value = serde_json::from_str(&mt_body("And he scores!", &cfg)).unwrap();
+        assert_eq!(
+            b["prompt"],
+            "<|startoftext|>Translate the following segment into French, without additional explanation.\n\nAnd he scores!<|extra_0|>"
+        );
+        assert_eq!(b["raw"], true);
+        assert_eq!(b["options"]["stop"], json!(["\n", "<|eos|>"]));
+    }
 
     #[test]
     fn quota_epuise_reconnu() {

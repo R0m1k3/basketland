@@ -212,6 +212,15 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   carte, 2 fois plus lent) ou MiniMax, même si une clé MiniMax est
   enregistrée (sans choix : MiniMax dès qu'une clé existe). `TTS_ENGINE` et
   `TTS_MODEL` l'emportent.
+- **Moteur de traduction** : dans Paramètres › « Moteur de traduction »,
+  Embarqué (Ollama), MiniMax ou OpenAI, et le modèle embarqué :
+  TranslateGemma 12B (défaut), Gemma 4 E4B, Hunyuan-MT 7B de Tencent
+  (`hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0`, ou `:Q4_K_M` plus léger),
+  ou tout autre modèle Ollama. Téléchargé au premier usage. Hunyuan-MT est
+  un modèle de traduction pur : traduit phrase par phrase (gabarit officiel),
+  sans les consignes basket du prompt. Le choix l'emporte sur
+  `TRANSLATE_MODEL` ; un serveur externe (`TRANSLATE_URL`) doit avoir le
+  modèle installé.
 - **Voxtral (Mistral)** : 4ᵉ choix de « Voix du doublage ». Voxtral TTS 4B
   (`mistralai/Voxtral-4B-TTS-2603`, licence CC BY-NC 4.0 : usage non
   commercial) tourne dans le conteneur via vLLM-Omni (`/opt/voxtral`),

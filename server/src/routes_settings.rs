@@ -113,6 +113,34 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
         }
         updates.push((keys::TRANSLATE_REPAIR_MODEL, model));
     }
+    if body.contains_key("translateEngine") && !s::is_translate_engine(body.get("translateEngine"))
+    {
+        return Err("translateEngine invalide (attendu : 'local', 'minimax' ou 'openai')".into());
+    }
+    if let Some(e) = body.get("translateEngine").and_then(Value::as_str) {
+        updates.push((keys::TRANSLATE_ENGINE, Some(e.to_string())));
+        // La case « traduction par MiniMax » du panneau MiniMax suit ce choix.
+        if !body.contains_key("minimaxTranslate") {
+            updates.push((
+                keys::MINIMAX_TRANSLATE,
+                Some(if e == "minimax" { "1" } else { "0" }.into()),
+            ));
+        }
+    }
+    if let Some(v) = body.get("translateLocalModel") {
+        let model = match v {
+            Value::Null => None,
+            Value::String(m) => {
+                let m = crate::js::trim(m).to_string();
+                if !m.is_empty() && s::model_error(&m).is_some() {
+                    return Err("translateLocalModel invalide (nom de modèle Ollama)".into());
+                }
+                Some(m).filter(|m| !m.is_empty())
+            }
+            _ => return Err("translateLocalModel invalide (nom de modèle Ollama)".into()),
+        };
+        updates.push((keys::TRANSLATE_LOCAL_MODEL, model));
+    }
     if let Some(v) = body.get("voxtralUrl") {
         let url = match v {
             Value::Null => None,
@@ -153,6 +181,10 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
             keys::MINIMAX_TRANSLATE,
             Some(if b { "1" } else { "0" }.into()),
         ));
+        // Et le « Moteur de traduction » suit la case : MiniMax, ou plus de choix imposé.
+        if !body.contains_key("translateEngine") {
+            updates.push((keys::TRANSLATE_ENGINE, b.then(|| "minimax".into())));
+        }
     }
     if let Some(v) = body.get("minimaxVoices") {
         updates.push((keys::MINIMAX_VOICES, s::parse_minimax_voices(v)?));
@@ -268,6 +300,7 @@ mod tests {
             Ok(vec![
                 ("openai_api_key", None),
                 ("minimax_translate", Some("1".into())),
+                ("translate_engine", Some("minimax".into())),
                 ("auto_translate", Some("0".into())),
                 ("vf_mode", Some("doublage".into())),
             ])
@@ -314,6 +347,21 @@ mod tests {
             ])
         );
         assert!(plan(json!({"voxtralUrl": "nas"})).is_err());
+        assert_eq!(
+            plan(
+                json!({"translateEngine": "local", "translateLocalModel": "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0"})
+            ),
+            Ok(vec![
+                ("translate_engine", Some("local".into())),
+                ("minimax_translate", Some("0".into())),
+                (
+                    "translate_local_model",
+                    Some("hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0".into())
+                ),
+            ])
+        );
+        assert!(plan(json!({"translateEngine": "deepl"})).is_err());
+        assert!(plan(json!({"translateLocalModel": "a b"})).is_err());
         assert!(plan(json!({"voxtralVoices": {"A": "robot"}})).is_err());
         assert!(plan(json!({"voxtralVoices": {"Z": "fr_male"}})).is_err());
     }

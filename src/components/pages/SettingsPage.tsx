@@ -11,6 +11,7 @@ import FetchParallelSettings from '@/components/settings/FetchParallelSettings';
 import ExtraNamesSettings from '@/components/settings/ExtraNamesSettings';
 import VoiceQualitySettings from '@/components/settings/VoiceQualitySettings';
 import VoxtralSettings from '@/components/settings/VoxtralSettings';
+import TranslationEngineSettings from '@/components/settings/TranslationEngineSettings';
 import VfModeSettings from '@/components/settings/VfModeSettings';
 import { PageData } from '@/components/page/pageData';
 import type { SettingsPage as SettingsData } from '@/components/page/types';
@@ -78,6 +79,7 @@ function Settings({ d }: { d: SettingsData }) {
           </SectionTitle>
           <AutoTranslateSettings initial={a.auto_translate} />
           <VfModeSettings initial={a.vf_mode} voiceDisabledReason={a.voice_disabled_reason} />
+          {a.translate && <TranslationEngineSettings initial={a.translate} />}
           <TranscribeEngineSettings initial={a.transcribe_engine} override={a.transcribe_engine_override} />
           <VoiceQualitySettings
             initial={a.voice_engine === 'minimax' || a.voice_engine === 'voxtral' ? a.voice_engine : (a.voice_quality ?? 'standard')}
