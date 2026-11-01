@@ -212,6 +212,16 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   carte, 2 fois plus lent) ou MiniMax, même si une clé MiniMax est
   enregistrée (sans choix : MiniMax dès qu'une clé existe). `TTS_ENGINE` et
   `TTS_MODEL` l'emportent.
+- **Voxtral (Mistral)** : 4ᵉ choix de « Voix du doublage ». Voxtral TTS 4B
+  (`mistralai/Voxtral-4B-TTS-2603`, licence CC BY-NC 4.0 : usage non
+  commercial) tourne dans le conteneur via vLLM-Omni (`/opt/voxtral`),
+  démarré par le doublage sur la carte graphique (16 Go conseillés) puis
+  arrêté ; poids (~8 Go) téléchargés au premier usage. Pas de clonage :
+  chaque rôle prend une des 20 voix toutes faites (Paramètres › Voxtral ;
+  seules `fr_male` et `fr_female` sont françaises). Un serveur externe est
+  possible (`VOXTRAL_URL`). Variables : `VOXTRAL_GPU_UTIL` (0.75),
+  `VOXTRAL_MAX_MODEL_LEN` (8192), `VOXTRAL_PORT` (8091),
+  `VOXTRAL_LOAD_TIMEOUT_MS` (45 min), `VOXTRAL_EXTRA_ARGS`.
 - **Doublage demandé prioritaire** : pendant un doublage lancé par « Doubler
   ce match » (voix embarquées), la pré-traduction de fond et les analyses
   vidéo de fond des AUTRES matchs attendent ; une pré-traduction déjà lancée

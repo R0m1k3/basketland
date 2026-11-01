@@ -82,6 +82,19 @@ RUN python3 -m venv /opt/parakeet \
  && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
  && /opt/parakeet/bin/python -c "import ctypes, os, onnxruntime as rt, onnx_asr; rt.preload_dlls(directory=''); ctypes.CDLL(os.path.join(os.path.dirname(rt.__file__), 'capi', 'libonnxruntime_providers_cuda.so')); p = rt.get_available_providers(); print('onnxruntime', rt.__version__, p); assert 'CUDAExecutionProvider' in p"
 
+# ---------------------------------------------------------------- Voxtral (Mistral)
+# Voix au choix dans les Paramètres (« Voix du doublage » › Voxtral) : Voxtral
+# TTS 4B de Mistral, servi par vLLM-Omni (`vllm serve … --omni`), démarré par
+# le doublage sur la carte graphique puis arrêté. Environnement séparé : vLLM
+# impose ses propres torch et bibliothèques CUDA. Versions figées (0.22 :
+# corrige un plantage de 0.18 sous requêtes de synthèse simultanées). Poids
+# (~8 Go, licence CC BY-NC 4.0) téléchargés au premier usage dans /data/models/hf.
+FROM whisper AS voxtral
+RUN python3 -m venv /opt/voxtral \
+ && /opt/voxtral/bin/pip install --no-cache-dir vllm==0.22.0 vllm-omni==0.22.0 \
+ && test -x /opt/voxtral/bin/vllm \
+ && /opt/voxtral/bin/python -c "import importlib.metadata as m; print('vllm', m.version('vllm'), 'vllm-omni', m.version('vllm-omni'), 'torch', m.version('torch'))"
+
 # ---------------------------------------------------------------- Voix
 # Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices),
 # SpeechBrain ECAPA (empreintes vocales des commentateurs) et le classifieur
@@ -157,6 +170,7 @@ COPY --from=ollama /ollama/lib /usr/lib/ollama
 COPY --from=whisper /opt/whisper /opt/whisper
 COPY --from=tts /opt/tts /opt/tts
 COPY --from=parakeet /opt/parakeet /opt/parakeet
+COPY --from=voxtral /opt/voxtral /opt/voxtral
 COPY --from=rust /basketland-server /usr/local/bin/basketland-server
 
 # Interface : export statique de Next, servi par le serveur Rust.

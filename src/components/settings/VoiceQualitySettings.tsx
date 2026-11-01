@@ -6,7 +6,7 @@ import type { VoiceQuality } from '@/components/page/types';
 
 type Msg = { ok: boolean; text: string } | null;
 /** Choix affiché : voix embarquées (standard ou HD) ou MiniMax. */
-type VoiceChoice = VoiceQuality | 'minimax';
+type VoiceChoice = VoiceQuality | 'minimax' | 'voxtral';
 
 const OPTIONS: { value: VoiceChoice; title: string; text: string }[] = [
   {
@@ -20,13 +20,18 @@ const OPTIONS: { value: VoiceChoice; title: string; text: string }[] = [
     text: 'Qwen3-TTS 1.7B : gratuit, mêmes voix, intonation et timbre plus naturels. Environ 2 fois plus lent, ~4 Go de carte graphique.',
   },
   {
+    value: 'voxtral',
+    title: 'Voxtral',
+    text: 'Voxtral TTS de Mistral, dans le conteneur : gratuit, très bon en français. Voix toutes faites (réglées plus bas), ~8 Go téléchargés au premier doublage, carte de 16 Go.',
+  },
+  {
     value: 'minimax',
     title: 'MiniMax',
     text: 'Voix en ligne MiniMax (voix réglées plus bas) : très naturelles, mais consomment le crédit ou le forfait MiniMax.',
   },
 ];
 
-type Reply = { voiceQuality: VoiceQuality; voiceEngine: 'local' | 'minimax'; voiceQualityOverride?: string | null };
+type Reply = { voiceQuality: VoiceQuality; voiceEngine: 'local' | 'minimax' | 'voxtral'; voiceQualityOverride?: string | null };
 
 /**
  * « Voix du doublage » (administrateurs) : qui dit les commentaires — voix
@@ -55,19 +60,21 @@ export default function VoiceQualitySettings({
     setBusy(true);
     setMsg(null);
     setChoice(next);
-    const body = next === 'minimax' ? { voiceEngine: 'minimax' } : { voiceEngine: 'local', voiceQuality: next };
+    const body = next === 'minimax' || next === 'voxtral' ? { voiceEngine: next } : { voiceEngine: 'local', voiceQuality: next };
     const r = await postJson<Reply>('/api/admin/settings', body);
     setBusy(false);
     if (!r.ok) {
       setChoice(prev);
       return setMsg({ ok: false, text: r.error });
     }
-    setChoice(r.data.voiceEngine === 'minimax' ? 'minimax' : r.data.voiceQuality);
+    setChoice(r.data.voiceEngine === 'local' ? r.data.voiceQuality : r.data.voiceEngine);
     setOverrideMsg(r.data.voiceQualityOverride ?? null);
     setMsg({
       ok: true,
       text:
-        next === 'minimax'
+        next === 'voxtral'
+          ? 'Voxtral choisi pour les prochains doublages. Le modèle (~8 Go) est téléchargé au début du premier doublage.'
+          : next === 'minimax'
           ? minimaxKeySet
             ? 'Voix MiniMax choisies pour les prochains doublages.'
             : 'Voix MiniMax choisies : enregistrez une clé MiniMax plus bas pour qu’elles fonctionnent.'
@@ -88,7 +95,7 @@ export default function VoiceQualitySettings({
           <p className="mt-0.5 text-sm text-paper-mute">Qui dit les commentaires en français quand un match est doublé.</p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {OPTIONS.map((o) => {
             const checked = choice === o.value;
             return (

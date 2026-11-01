@@ -71,6 +71,16 @@ pub fn voice_quality_override(s: &Settings) -> Option<String> {
 pub enum VoiceEngineName {
     Local,
     Minimax,
+    /// Voxtral TTS servi à part (vLLM-Omni) : synthèse hors de ce conteneur.
+    Voxtral,
+}
+
+impl VoiceEngineName {
+    /// Synthèse hors de ce conteneur (MiniMax, serveur Voxtral) : seule
+    /// l'analyse des voix tourne ici, sur le processeur par défaut.
+    pub fn remote(self) -> bool {
+        self != VoiceEngineName::Local
+    }
 }
 
 impl VoiceEngineName {
@@ -78,6 +88,7 @@ impl VoiceEngineName {
         match self {
             VoiceEngineName::Local => "local",
             VoiceEngineName::Minimax => "minimax",
+            VoiceEngineName::Voxtral => "voxtral",
         }
     }
 }
@@ -151,8 +162,10 @@ pub fn voice_engine_name(s: &Settings) -> VoiceEngineName {
     {
         Some("minimax") => VoiceEngineName::Minimax,
         Some("local") => VoiceEngineName::Local,
+        Some("voxtral") => VoiceEngineName::Voxtral,
         _ => match crate::settings::voice_engine_choice(s) {
             Some("minimax") => VoiceEngineName::Minimax,
+            Some("voxtral") => VoiceEngineName::Voxtral,
             Some(_) => VoiceEngineName::Local,
             None if !minimax_config(s).key.is_empty() => VoiceEngineName::Minimax,
             None => VoiceEngineName::Local,
@@ -164,7 +177,7 @@ pub fn voice_engine_name(s: &Settings) -> VoiceEngineName {
 pub fn voice_config(s: &Settings) -> VoiceConfig {
     let voices_dir = voices_dir_env();
     let engine = voice_engine_name(s);
-    let device = if engine == VoiceEngineName::Minimax {
+    let device = if engine.remote() {
         env_or("TTS_EMBED_DEVICE", || "cpu".into())
     } else {
         env_or("TTS_DEVICE", || "auto".into())
@@ -183,6 +196,16 @@ pub fn voice_config(s: &Settings) -> VoiceConfig {
         Some("clé MiniMax absente (MINIMAX_API_KEY)".into())
     } else if engine == VoiceEngineName::Minimax && minimax().voices.is_empty() {
         Some("aucune voix MiniMax configurée (MINIMAX_VOICE_A…)".into())
+    } else if engine == VoiceEngineName::Voxtral
+        && crate::media::voice_voxtral::voxtral_config(s)
+            .url
+            .is_empty()
+        && !crate::media::voice_voxtral::embedded_voxtral_available()
+    {
+        Some(format!(
+            "Voxtral absent de cette image ({} introuvable) : mettez l'image à jour",
+            crate::media::voice_voxtral::embedded_voxtral_bin()
+        ))
     } else if !Path::new(&worker_path()).exists() {
         Some(format!("moteur de voix introuvable ({})", worker_path()))
     } else if engine == VoiceEngineName::Local && list_voices(Some(&voices_dir)).is_empty() {
@@ -203,7 +226,13 @@ pub fn voice_config(s: &Settings) -> VoiceConfig {
 
 /// Le doublage occupe-t-il la carte graphique ?
 pub fn voice_uses_gpu(s: &Settings) -> bool {
-    voice_config(s).device != "cpu"
+    let c = voice_config(s);
+    // Voxtral embarqué : la synthèse occupe la carte graphique.
+    c.device != "cpu"
+        || (c.engine == VoiceEngineName::Voxtral
+            && crate::media::voice_voxtral::voxtral_config(s)
+                .url
+                .is_empty())
 }
 
 /// `localeCompare` d'identifiants simples : casse ignorée d'abord, minuscules
@@ -317,7 +346,7 @@ pub async fn prepare_voice_models(s: &Settings) -> Result<(), String> {
         let mut st = lock_models();
         let ready = match cfg.engine {
             VoiceEngineName::Local => st.ready_local.as_deref() == Some(cfg.model.as_str()),
-            VoiceEngineName::Minimax => st.ready_minimax,
+            VoiceEngineName::Minimax | VoiceEngineName::Voxtral => st.ready_minimax,
         };
         if ready {
             return Ok(());
@@ -387,7 +416,7 @@ async fn download_models(cfg: VoiceConfig) -> Result<(), String> {
         cfg.model.clone(),
         "--download-only".into(),
     ];
-    if cfg.engine == VoiceEngineName::Minimax {
+    if cfg.engine.remote() {
         args.push("--embed-only".into());
     }
     args.extend(["--download-root".into(), hf.to_string_lossy().into_owned()]);
@@ -862,6 +891,7 @@ impl VoiceSession {
 pub enum VoiceEngine {
     Local(VoiceSession),
     Minimax(MinimaxVoiceSession),
+    Voxtral(crate::media::voice_voxtral::VoxtralVoiceSession),
 }
 
 impl VoiceEngine {
@@ -869,6 +899,7 @@ impl VoiceEngine {
         match self {
             VoiceEngine::Local(s) => s.voices(),
             VoiceEngine::Minimax(s) => s.voices(),
+            VoiceEngine::Voxtral(s) => s.voices(),
         }
     }
 
@@ -884,6 +915,7 @@ impl VoiceEngine {
         match self {
             VoiceEngine::Local(s) => s.synth(text, voice, out_file, signal).await,
             VoiceEngine::Minimax(s) => s.synth(text, voice, out_file, signal, emphasis).await,
+            VoiceEngine::Voxtral(s) => s.synth(text, voice, out_file, signal).await,
         }
     }
 
@@ -896,6 +928,7 @@ impl VoiceEngine {
         match self {
             VoiceEngine::Local(s) => s.embed(file, segments, signal).await,
             VoiceEngine::Minimax(s) => s.embed(file, segments, signal).await,
+            VoiceEngine::Voxtral(s) => s.embed(file, segments, signal).await,
         }
     }
 
@@ -903,6 +936,7 @@ impl VoiceEngine {
         match self {
             VoiceEngine::Local(s) => s.close().await,
             VoiceEngine::Minimax(s) => s.close().await,
+            VoiceEngine::Voxtral(s) => s.close().await,
         }
     }
 }
@@ -913,7 +947,8 @@ pub async fn open_voice_session(
     settings: &Settings,
     signal: Option<&AbortSignal>,
 ) -> Result<VoiceEngine, String> {
-    if voice_engine_name(settings) != VoiceEngineName::Minimax {
+    let engine = voice_engine_name(settings);
+    if engine == VoiceEngineName::Local {
         return VoiceSession::open(settings, signal, false)
             .await
             .map(VoiceEngine::Local);
@@ -923,6 +958,15 @@ pub async fn open_voice_session(
         return Err(r);
     }
     let st = settings.clone();
+    if engine == VoiceEngineName::Voxtral {
+        return crate::media::voice_voxtral::VoxtralVoiceSession::open(
+            settings,
+            signal,
+            move |sig| async move { VoiceSession::open(&st, sig.as_ref(), true).await },
+        )
+        .await
+        .map(VoiceEngine::Voxtral);
+    }
     MinimaxVoiceSession::open(settings, signal, move |sig| async move {
         VoiceSession::open(&st, sig.as_ref(), true).await
     })

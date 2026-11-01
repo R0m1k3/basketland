@@ -113,6 +113,38 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
         }
         updates.push((keys::TRANSLATE_REPAIR_MODEL, model));
     }
+    if let Some(v) = body.get("voxtralUrl") {
+        let url = match v {
+            Value::Null => None,
+            Value::String(u) => {
+                if let Some(e) = crate::media::voice_voxtral::voxtral_url_error(u) {
+                    return Err(e.into());
+                }
+                Some(crate::js::trim(u).trim_end_matches('/').to_string()).filter(|u| !u.is_empty())
+            }
+            _ => return Err("voxtralUrl invalide (attendu : une adresse http(s) ou null)".into()),
+        };
+        updates.push((keys::VOXTRAL_URL, url));
+    }
+    if let Some(v) = body.get("voxtralVoices") {
+        let ok_role = |r: &str| s::MINIMAX_ROLES.contains(&r);
+        let ok_voice = |x: &Value| {
+            x.as_str()
+                .is_some_and(|x| crate::media::voice_voxtral::VOXTRAL_VOICES.contains(&x))
+        };
+        match v {
+            Value::Null => updates.push((keys::VOXTRAL_VOICES, None)),
+            Value::Object(m) if m.iter().all(|(r, x)| ok_role(r) && ok_voice(x)) => {
+                updates.push((keys::VOXTRAL_VOICES, Some(v.to_string())));
+            }
+            _ => {
+                return Err(
+                    "voxtralVoices invalide (attendu : { A, B4, B1, F } vers une voix Voxtral)"
+                        .into(),
+                )
+            }
+        }
+    }
     if let Some(v) = body.get("minimaxTranslate") {
         let Some(b) = v.as_bool() else {
             return Err("minimaxTranslate invalide (attendu : true ou false)".into());
@@ -268,6 +300,22 @@ mod tests {
             ])
         );
         assert!(plan(json!({"voiceEngine": "google"})).is_err());
+        assert_eq!(
+            plan(
+                json!({"voiceEngine": "voxtral", "voxtralUrl": " http://nas:8000/v1/ ", "voxtralVoices": {"A": "fr_male", "F": "fr_female"}})
+            ),
+            Ok(vec![
+                ("voxtral_url", Some("http://nas:8000/v1".into())),
+                (
+                    "voxtral_voices",
+                    Some(r#"{"A":"fr_male","F":"fr_female"}"#.into())
+                ),
+                ("voice_engine", Some("voxtral".into())),
+            ])
+        );
+        assert!(plan(json!({"voxtralUrl": "nas"})).is_err());
+        assert!(plan(json!({"voxtralVoices": {"A": "robot"}})).is_err());
+        assert!(plan(json!({"voxtralVoices": {"Z": "fr_male"}})).is_err());
     }
 
     #[test]
