@@ -120,6 +120,9 @@ pub struct CommentaryConfig {
     pub chunk_sec: u32,
     /// Raison de l'inactivité de la fonctionnalité, ou `None` si elle est active.
     pub disabled_reason: Option<String>,
+    /// Modèle de secours (même fournisseur en ligne) pour reprendre les lignes
+    /// que le modèle principal a laissées en anglais ou mal écrites.
+    pub repair_model: Option<String>,
 }
 
 impl CommentaryConfig {
@@ -364,6 +367,15 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         },
         chunk_sec: int_env("COMMENTARY_CHUNK_SEC", 120.0, 30.0, 3600.0) as u32,
         disabled_reason: disabled_reason.map(String::from),
+        // Secours : réglable pour MiniMax (Paramètres) ; pour OpenAI, par
+        // `TRANSLATE_REPAIR_MODEL` seulement (jamais un nom de modèle MiniMax).
+        repair_model: if minimax.is_some() {
+            settings::translate_repair_model(s)
+        } else if openai.is_some() {
+            env_trim("TRANSLATE_REPAIR_MODEL")
+        } else {
+            None
+        },
     }
 }
 
@@ -915,11 +927,238 @@ fn fold(s: &str) -> String {
     squash(&spaced)
 }
 
+/// Défaut rédhibitoire d'une traduction (petits modèles : MiniMax Flash…),
+/// absent de la ligne anglaise : écriture non latine (« il a certainement江区 »),
+/// mots collés par `=`, `/`, `_`, `\`, un point ou une majuscule
+/// (« en=float », « l/elbow », « vraimentTransitif », « les.extend »),
+/// entité HTML (« &lt; ») ou barre verticale. `None` : rien à redire.
+pub fn translation_defect(en: &str, fr: &str) -> Option<&'static str> {
+    let foreign = jsre!(
+        r"[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\p{Cyrillic}\p{Arabic}\p{Hebrew}\p{Thai}\p{Devanagari}\u{3000}-\u{303F}\u{FF00}-\u{FFEF}]"
+    );
+    if foreign.is_match(fr) && !foreign.is_match(en) {
+        return Some("écriture non latine");
+    }
+    if jsre!(r"&(lt|gt|amp|quot|apos|nbsp|#\d+);").is_match(fr) {
+        return Some("entité HTML");
+    }
+    if fr.contains('|') && !en.contains('|') {
+        return Some("barre verticale");
+    }
+    // Mot collé : présent tel quel dans l'anglais (DeRozan, Suns.com…), il passe.
+    for m in jsre!(r"[\p{L}\d'’.=/_\\-]+").find_iter(fr) {
+        let tok = m
+            .as_str()
+            .trim_matches(|c: char| c == '.' || c == '-' || c == '\'');
+        let glued = jsre!(r"\p{L}[=/_\\]\p{L}").is_match(tok)
+            || jsre!(r"\p{Ll}\.\p{L}").is_match(tok)
+            || jsre!(r"\p{Ll}{2}\p{Lu}").is_match(tok);
+        if glued && !en.contains(tok) {
+            return Some("mots collés");
+        }
+    }
+    None
+}
+
+/// Mots outils anglais qui n'existent pas en français : leur présence en
+/// minuscules trahit une phrase restée (en partie) en anglais.
+const ENGLISH_ONLY: &[&str] = &[
+    "the",
+    "and",
+    "with",
+    "that",
+    "this",
+    "these",
+    "those",
+    "they",
+    "them",
+    "their",
+    "there",
+    "then",
+    "than",
+    "have",
+    "has",
+    "had",
+    "was",
+    "were",
+    "would",
+    "could",
+    "should",
+    "will",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "whose",
+    "why",
+    "how",
+    "just",
+    "really",
+    "very",
+    "going",
+    "gonna",
+    "wanna",
+    "trying",
+    "about",
+    "because",
+    "from",
+    "into",
+    "been",
+    "being",
+    "does",
+    "did",
+    "doesn't",
+    "don't",
+    "didn't",
+    "can't",
+    "won't",
+    "isn't",
+    "wasn't",
+    "aren't",
+    "it's",
+    "that's",
+    "he's",
+    "she's",
+    "they're",
+    "we're",
+    "you're",
+    "i'm",
+    "you",
+    "your",
+    "our",
+    "his",
+    "him",
+    "her",
+    "she",
+    "he",
+    "it",
+    "its",
+    "my",
+    "of",
+    "to",
+    "for",
+    "is",
+    "are",
+    "be",
+    "at",
+    "by",
+    "we",
+    "get",
+    "got",
+    "gets",
+    "makes",
+    "made",
+    "takes",
+    "took",
+    "think",
+    "know",
+    "knows",
+    "something",
+    "nothing",
+    "anything",
+    "little",
+    "guys",
+    "some",
+    "any",
+    "every",
+    "other",
+    "another",
+    "more",
+    "most",
+    "much",
+    "many",
+    "well",
+    "good",
+    "great",
+    "nice",
+    "not",
+    "appreciate",
+    "superb",
+    "career",
+    "unfortunate",
+    "overdo",
+];
+
+/// Anglicismes en -ing et -ly d'usage courant en français : pas de l'anglais.
+const FRENCH_LOANS: &[&str] = &[
+    "timing",
+    "pressing",
+    "shooting",
+    "coaching",
+    "scouting",
+    "spacing",
+    "dribbling",
+    "marketing",
+    "parking",
+    "meeting",
+    "briefing",
+    "planning",
+    "casting",
+    "standing",
+    "ranking",
+    "trading",
+    "jogging",
+    "camping",
+    "building",
+    "feeling",
+    "bowling",
+    "footing",
+    "trash-talking",
+    "trashtalking",
+    "rugby",
+    "rally",
+    "jelly",
+    "lobbying",
+    "zapping",
+    "brushing",
+    "lifting",
+    "sparring",
+    "dancing",
+    "smoking",
+    "booking",
+    "streaming",
+    "running",
+    "training",
+    "warning",
+];
+
+/// Mots anglais restés dans une traduction (mots outils, adverbes en -ly,
+/// formes en -ing), hors noms propres (majuscule) et passages entre
+/// guillemets (citation, slogan). Vide : la ligne est bien en français.
+pub fn english_leftovers(fr: &str) -> Vec<String> {
+    let unquoted = jsre!(r#"«[^»]*»|"[^"]*"|“[^”]*”"#).replace_all(fr, " ");
+    let mut out = Vec::new();
+    for m in jsre!(r"[\p{L}'’-]+").find_iter(&unquoted) {
+        let w = m.as_str().replace('’', "'");
+        let w = w.trim_matches(|c: char| c == '\'' || c == '-');
+        if w.is_empty() || !w.chars().next().is_some_and(char::is_lowercase) {
+            continue;
+        }
+        let lower = w.to_lowercase();
+        let ascii = lower
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '\'' || c == '-');
+        let english = ENGLISH_ONLY.contains(&lower.as_str())
+            || (ascii
+                && !FRENCH_LOANS.contains(&lower.as_str())
+                && ((lower.len() >= 5 && lower.ends_with("ly"))
+                    || (lower.len() >= 6 && lower.ends_with("ing"))));
+        if english && !out.contains(&lower) {
+            out.push(lower);
+        }
+    }
+    out
+}
+
 /// `validTranslation` : une traduction est-elle acceptable pour cette ligne ?
 pub fn valid_translation(en: &str, fr: Option<&str>) -> bool {
     let Some(fr) = fr.filter(|f| !f.is_empty()) else {
         return false;
     };
+    if translation_defect(en, fr).is_some() {
+        return false;
+    }
     if !jsre!(r"[\p{L}\p{N}]").is_match(fr) {
         return false;
     }
@@ -1314,13 +1553,28 @@ async fn plain_attempt(
     o: &TranslateContext,
     temperature: f64,
 ) -> Result<Option<String>, ServiceError> {
-    let user = build_plain_message(
+    plain_attempt_note(line, context, cfg, o, temperature, None).await
+}
+
+/// [`plain_attempt`] avec une consigne en plus (`note`), placée avant la ligne.
+async fn plain_attempt_note(
+    line: &TranslateLine,
+    context: &[String],
+    cfg: &CommentaryConfig,
+    o: &TranslateContext,
+    temperature: f64,
+    note: Option<&str>,
+) -> Result<Option<String>, ServiceError> {
+    let mut user = build_plain_message(
         &line.en,
         context,
         &cfg.translate_model,
         o.roster.as_ref(),
         o.match_label.as_deref(),
     );
+    if let Some(n) = note {
+        user = format!("{n}\n\n{user}");
+    }
     let fr = parse_plain_translation(
         &chat_completion(plain_translate_prompt(), &user, cfg, o, temperature, false).await?,
     );
@@ -1348,7 +1602,70 @@ pub async fn translate_batch(
         return translate_batch_mt(lines, cfg, o).await;
     }
     let system = translate_system_prompt();
-    translate_chat(&system, lines, context, cfg, o).await
+    let mut out = translate_chat(&system, lines, context, cfg, o).await?;
+    repair_lines(lines, &mut out, context, cfg, o).await;
+    Ok(out)
+}
+
+/// Consigne ajoutée pour reprendre une ligne mal traduite.
+const REPAIR_NOTE: &str = "Attention : la traduction précédente de cette ligne était fautive (mots restés en anglais, caractères étrangers ou mots collés). Écris-la entièrement en français, sans aucun mot anglais (seuls les noms propres et les termes de basket d'usage en France restent : dunk, lay-up, step-back…), sans caractère chinois ni symbole parasite.";
+
+/// Une ligne à reprendre : non traduite, ou traduite avec de l'anglais resté.
+fn needs_repair(l: &TranslatedLine) -> bool {
+    l.untranslated || !english_leftovers(&l.fr).is_empty()
+}
+
+/// Reprend une à une, avec une consigne stricte, les lignes non traduites ou
+/// restées en partie en anglais : par le modèle de secours s'il est réglé
+/// (`repair_model`), sinon par le modèle principal. Une reprise n'est gardée
+/// que si elle est meilleure ; une erreur de service laisse la ligne telle quelle.
+async fn repair_lines(
+    lines: &[TranslateLine],
+    out: &mut [TranslatedLine],
+    context: &[String],
+    cfg: &CommentaryConfig,
+    o: &TranslateContext,
+) {
+    let todo: Vec<usize> = (0..out.len()).filter(|k| needs_repair(&out[*k])).collect();
+    if todo.is_empty() {
+        return;
+    }
+    let mut rcfg = cfg.clone();
+    if let Some(m) = cfg.repair_model.as_deref().filter(|m| !m.is_empty()) {
+        rcfg.translate_model = m.to_string();
+    }
+    let rcfg = &rcfg;
+    let tries = todo.iter().map(|&k| {
+        let line = lines.iter().find(|l| l.i == out[k].i).cloned();
+        async move {
+            let line = line?;
+            plain_attempt_note(&line, context, rcfg, o, 0.0, Some(REPAIR_NOTE))
+                .await
+                .ok()
+                .flatten()
+        }
+    });
+    let fixed = futures_util::future::join_all(tries).await;
+    let mut n = 0;
+    for (&k, fr) in todo.iter().zip(fixed) {
+        let Some(fr) = fr else { continue };
+        let before = &out[k];
+        let better = before.untranslated
+            || english_leftovers(&fr).len() < english_leftovers(&before.fr).len();
+        if better {
+            out[k] = TranslatedLine {
+                i: before.i,
+                fr,
+                untranslated: false,
+            };
+            n += 1;
+        }
+    }
+    println!(
+        "[commentaires] {n}/{} ligne(s) douteuse(s) reprise(s) par {}",
+        todo.len(),
+        rcfg.translate_model
+    );
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -1661,6 +1978,103 @@ mod tests {
     use super::*;
 
     #[test]
+    fn defauts_de_traduction_reels() {
+        // Lignes réelles produites par MiniMax-M3.1-Flash (Nuggets @ Suns).
+        let bad = [
+            (
+                "But he certainly drew a lot of fouls.",
+                "Mais il a certainement江区 beaucoup de fautes.",
+            ),
+            (
+                "and Jamaree Bouyea misses",
+                "et Jamaree Bouyea、成功 Rates son premier tir",
+            ),
+            (
+                "to go for the tough shot in the float.",
+                "en=float. Et si ça passe, il la dégage.",
+            ),
+            (
+                "gets it at the elbow",
+                "Braun récupère le ballon au niveau de l/elbow.",
+            ),
+            (
+                "the challenge becomes really transitive",
+                "devient vraimentTransitif et je sais",
+            ),
+            (
+                "Suns have to make the right passes",
+                "Les Suns devront|||||||||||||faire les bonnes passes.",
+            ),
+            ("That's amazing there.", "C’est&lt;Customer amazing là."),
+            (
+                "not over extend the defense",
+                "Ne pas trop.extend la défense sur Jones",
+            ),
+            (
+                "Christian Braun with a nice stat line",
+                "Christian Braun rentre avec une belleStatistique.",
+            ),
+        ];
+        for (en, fr) in bad {
+            assert!(translation_defect(en, fr).is_some(), "{fr}");
+            assert!(!valid_translation(en, Some(fr)), "{fr}");
+        }
+        let good = [
+            ("DeMar DeRozan.", "Voici le vétéran DeMar DeRozan."),
+            (
+                "Tickets on Suns.com/kicks",
+                "Billets sur Suns.com/kicks aujourd’hui.",
+            ),
+            (
+                "Marvin Bagley III",
+                "c'est la troisième de Marvin Bagley III.",
+            ),
+            ("LeBron and McCollum", "LeBron et McCollum, 2,10 m, 100 kg."),
+            (
+                "pick-and-roll",
+                "Un pick-and-roll, puis un lay-up en step-back.",
+            ),
+        ];
+        for (en, fr) in good {
+            assert_eq!(translation_defect(en, fr), None, "{fr}");
+        }
+    }
+
+    #[test]
+    fn anglais_reste() {
+        assert_eq!(
+            english_leftovers("Et on appreciate clairement sa capacité à aider."),
+            vec!["appreciate"]
+        );
+        assert_eq!(
+            english_leftovers("Et ne pas trying to overdo it."),
+            vec!["trying", "to", "overdo", "it"]
+        );
+        assert_eq!(
+            english_leftovers("il joue beautifully du basket"),
+            vec!["beautifully"]
+        );
+        assert_eq!(
+            english_leftovers("Et c’est un joueur qui knows a little something about"),
+            vec!["knows", "little", "something", "about"]
+        );
+        // Français, anglicismes d'usage, noms propres, citations : rien.
+        for fr in [
+            "Le timing est très bon, il shoote en step-back.",
+            "À The Valley, Golden State mène, money time.",
+            "notre premier « green light special » de la soirée.",
+            "Il est en feu ce soir, c’est son pressing qui fait mal.",
+            "Tu as vu ce dunk ? Il a fait un and-one.",
+        ] {
+            assert!(
+                english_leftovers(fr).is_empty(),
+                "{fr} : {:?}",
+                english_leftovers(fr)
+            );
+        }
+    }
+
+    #[test]
     fn libelle_des_moteurs() {
         let mut c = CommentaryConfig {
             transcribe_mode: ServiceMode::Embedded,
@@ -1676,6 +2090,7 @@ mod tests {
             parallel: 1,
             chunk_sec: 120,
             disabled_reason: None,
+            repair_model: None,
         };
         assert_eq!(
             c.engines_label(),

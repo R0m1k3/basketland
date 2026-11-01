@@ -1523,6 +1523,11 @@ impl Inner {
                 Err(e) if embed.mp4.is_empty() => return Err(e),
                 Err(_) => hls_error = true,
             }
+        } else if embed.mp4.is_empty() && embed.status == okru::NOT_FOUND {
+            return Err(VErr::plain(format!(
+                "{} (ok.ru/{ok_id})",
+                okru::DELETED_MSG
+            )));
         } else if embed.mp4.is_empty() {
             return Err(VErr::plain(format!(
                 "Pas de flux pour ok.ru/{ok_id}, ni HLS ni MP4 (statut: {})",

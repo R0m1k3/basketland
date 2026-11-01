@@ -36,6 +36,10 @@ pub mod keys {
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
     /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
     pub const FETCH_PARALLEL: &str = "fetch_parallel";
+    /// Noms à respecter dans les sous-titres (commentateurs, surnoms…), un par ligne.
+    pub const EXTRA_NAMES: &str = "extra_names";
+    /// Modèle de secours (même fournisseur) pour les lignes mal traduites.
+    pub const TRANSLATE_REPAIR_MODEL: &str = "translate_repair_model";
 }
 
 /// Modèle OpenAI proposé quand aucun n'est saisi (placeholder du formulaire).
@@ -238,6 +242,41 @@ pub fn transcribe_engine(s: &Settings) -> &'static str {
     } else {
         "whisper"
     }
+}
+
+/// « Noms à respecter » (Paramètres) : un nom par ligne (ou séparés par des
+/// virgules), donnés à la transcription et à la traduction.
+pub fn extra_names(s: &Settings) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in s
+        .get(keys::EXTRA_NAMES)
+        .unwrap_or_default()
+        .split(['\n', ',', ';'])
+    {
+        let n = crate::js::trim(n).to_string();
+        if !n.is_empty() && !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// Modèle de secours MiniMax par défaut : plus soigné que Flash.
+pub const DEFAULT_REPAIR_MODEL: &str = "MiniMax-M3";
+/// Valeur du réglage qui coupe le modèle de secours.
+pub const NO_REPAIR_MODEL: &str = "aucun";
+
+/// Modèle de secours MiniMax des lignes mal traduites (`translateRepairModel`) :
+/// réglage, sinon `TRANSLATE_REPAIR_MODEL`, sinon MiniMax-M3 ; `None` (« aucun ») :
+/// le modèle principal reprend lui-même ses lignes.
+pub fn translate_repair_model(s: &Settings) -> Option<String> {
+    let v = s
+        .get(keys::TRANSLATE_REPAIR_MODEL)
+        .map(|v| crate::js::trim(v).to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| env_trim("TRANSLATE_REPAIR_MODEL"))
+        .unwrap_or_else(|| DEFAULT_REPAIR_MODEL.into());
+    (v != NO_REPAIR_MODEL).then_some(v)
 }
 
 /// Bornes du nombre de connexions simultanées (`fetchParallel`).
@@ -464,6 +503,8 @@ pub fn settings_view(s: &Settings) -> Value {
         "transcribeEngine": transcribe_engine(s),
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
         "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
+        "translateRepairModel": translate_repair_model(s),
+        "extraNames": s.get(keys::EXTRA_NAMES).unwrap_or_default(),
     })
 }
 

@@ -753,6 +753,88 @@ async fn flux_inaccessible_echec_reseau() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn noms_du_match_effectifs_entraineurs_et_parametres() {
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    t.db.with(|c| {
+        basketland_server::settings::setting_set(
+            c,
+            "extra_names",
+            Some("Kevin Ray\nEddie Johnson, Joker"),
+        )
+    })
+    .unwrap();
+    let (mut deps, _) = queue_fake(false, false);
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let a = asked.clone();
+    deps.team_people = Some(Arc::new(move |abbr: String| {
+        a.lock().unwrap().push(abbr.clone());
+        Box::pin(async move {
+            Ok(match abbr.as_str() {
+                "LAL" => vec!["Khaman Maluach".to_string(), "Jordan Ott".to_string()],
+                _ => vec!["David Adelman".to_string()],
+            })
+        })
+    }));
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (inner, s2) = (deps.translate.clone(), seen.clone());
+    deps.translate = Arc::new(move |lines, ctx, cfg, o| {
+        if let Some(r) = &o.roster {
+            *s2.lock().unwrap() = r.full.clone();
+        }
+        inner(lines, ctx, cfg, o)
+    });
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    let names = seen.lock().unwrap().clone();
+    for n in [
+        "Khaman Maluach",
+        "Jordan Ott",
+        "David Adelman",
+        "Kevin Ray",
+        "Eddie Johnson",
+        "Joker",
+    ] {
+        assert!(names.iter().any(|x| x == n), "{n} absent de {names:?}");
+    }
+    let first = asked.lock().unwrap().len();
+    assert_eq!(first, 2);
+
+    // Effectifs gardés en cache : pas de nouvel appel à ESPN pour une relance.
+    let (r, _) = run(&t.svc, A, true, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.is_ok());
+    assert_eq!(asked.lock().unwrap().len(), first);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn video_supprimee_echec_contenu() {
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    let (mut deps, calls) = queue_fake(false, false);
+    deps.resolve_stream = Arc::new(|id, _| {
+        Box::pin(async move {
+            Err(format!(
+                "{} (ok.ru/{id})",
+                basketland_server::okru::DELETED_MSG
+            ))
+        })
+    });
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    let o = r.unwrap();
+    // Pas un problème réseau : pas de nouvel essai toutes les 15 min.
+    assert_eq!((o.ok, o.kind), (false, Some(FailureKind::Contenu)));
+    assert!(
+        o.reason
+            .starts_with("Vidéo supprimée ou introuvable sur ok.ru"),
+        "{}",
+        o.reason
+    );
+    assert!(calls.lock().unwrap().extract.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn aucune_parole_echec_contenu() {
     let _g = LOCK.lock().await;
     let t = setup(&[A, B, C]);

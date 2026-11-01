@@ -364,6 +364,7 @@ pub fn fake_deps(o: Fake) -> (CommentaryDeps, CallsRef) {
         }),
         extract_dash: None,
         extract_full: None,
+        team_people: None,
         cut: None,
         transcribe,
         translate: Arc::new(move |lines, _ctx, _cfg, _o| {
