@@ -386,6 +386,28 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
     }
 }
 
+/// Quota ou crédit d'un service en ligne épuisé (MiniMax, OpenAI) : rien ne
+/// sert de réessayer tout de suite, ni d'enchaîner d'autres matchs.
+pub fn is_quota_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    [
+        "quota",
+        "crédit épuisé",
+        "usage limit",
+        "insufficient balance",
+        "(code 1008)",
+        "(code 2056)",
+    ]
+    .iter()
+    .any(|k| m.contains(k))
+}
+
+/// Pause d'une file (traduction ou doublage) après un quota épuisé
+/// (`QUOTA_PAUSE_MIN`, 60 min par défaut), en ms.
+pub fn quota_pause_ms() -> f64 {
+    int_env("QUOTA_PAUSE_MIN", 60.0, 1.0, 1440.0) * 60_000.0
+}
+
 /// Service local ou en ligne injoignable ou en erreur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
@@ -1445,6 +1467,8 @@ pub async fn chat_completion(
                         "API MiniMax : clé refusée (vérifier la clé dans les paramètres)".into()
                     } else if n == Some(1008.0) {
                         "API MiniMax : crédit épuisé".into()
+                    } else if n == Some(2056.0) {
+                        "API MiniMax : quota du forfait atteint (code 2056)".into()
                     } else {
                         format!("API MiniMax : {msg} (code {})", js_string(&code))
                     };
@@ -1992,6 +2016,25 @@ pub async fn translate_batch_mt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_epuise_reconnu() {
+        for m in [
+            "API MiniMax : quota ou crédit épuisé (HTTP 429)",
+            "API MiniMax : quota du forfait atteint (code 2056)",
+            "MiniMax : Token Plan usage limit reached: Upgrade your Token Plan (code 2056)",
+            "API MiniMax : crédit épuisé",
+            "API OpenAI : quota ou crédit épuisé (HTTP 429)",
+        ] {
+            assert!(is_quota_error(m), "{m}");
+        }
+        for m in [
+            "serveur de traduction injoignable (http://x) : ECONNREFUSED",
+            "MiniMax : HTTP 500 erreur",
+        ] {
+            assert!(!is_quota_error(m), "{m}");
+        }
+    }
 
     #[test]
     fn defauts_de_traduction_reels() {

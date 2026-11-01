@@ -124,6 +124,8 @@ async fn pages_comme_node() {
                         a.shift_remove("extra_names");
                         let q = a.shift_remove("voice_quality");
                         a.shift_remove("voice_quality_override");
+                        a.shift_remove("voice_engine");
+                        a.shift_remove("minimax_key_set");
                         assert!(
                             matches!(q.as_ref().and_then(Value::as_str), Some("standard" | "hd")),
                             "{q:?}"

@@ -703,6 +703,8 @@ pub fn parametres(
             "transcribe_engine": settings::transcribe_engine(&s),
             "transcribe_engine_override": crate::media::commentary_ai::transcribe_engine_override(&s),
             "voice_quality": settings::voice_quality(&s),
+            "voice_engine": crate::media::voice_ai::voice_engine_name(&s).as_str(),
+            "minimax_key_set": !crate::media::voice_minimax::minimax_config(&s).key.is_empty(),
             "voice_quality_override": crate::media::voice_ai::voice_quality_override(&s),
             "translate_repair_model": settings::translate_repair_model(&s),
             "extra_names": s.get(settings::keys::EXTRA_NAMES).unwrap_or_default(),

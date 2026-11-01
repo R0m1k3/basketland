@@ -143,6 +143,10 @@ export interface SettingsPage {
     /** Pourquoi ce choix n'est pas appliqué (TRANSCRIBE_URL, TRANSCRIBE_MODEL…), sinon null. */
     transcribe_engine_override: string | null;
     voice_quality: VoiceQuality;
+    /** Moteur des voix effectivement utilisé. */
+    voice_engine: 'local' | 'minimax';
+    /** Une clé MiniMax est-elle enregistrée ? */
+    minimax_key_set: boolean;
     /** Pourquoi ce choix n'est pas appliqué (TTS_MODEL, voix MiniMax), sinon null. */
     voice_quality_override: string | null;
     /** « Noms à respecter » (un par ligne). */
