@@ -212,6 +212,11 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   carte, 2 fois plus lent) ou MiniMax, même si une clé MiniMax est
   enregistrée (sans choix : MiniMax dès qu'une clé existe). `TTS_ENGINE` et
   `TTS_MODEL` l'emportent.
+- **Doublage demandé prioritaire** : pendant un doublage lancé par « Doubler
+  ce match » (voix embarquées), la pré-traduction de fond et les analyses
+  vidéo de fond des AUTRES matchs attendent ; une pré-traduction déjà lancée
+  est mise en pause et reprend après. La traduction du match doublé, et
+  celle d'un match regardé, passent toujours.
 - **Quota épuisé** (MiniMax, OpenAI) : la file de traduction (ou de
   doublage) se met en pause `QUOTA_PAUSE_MIN` minutes (60) au lieu
   d'enchaîner les matchs ; la fiche l'indique, et un changement de clé, de

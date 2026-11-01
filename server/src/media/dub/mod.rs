@@ -937,6 +937,37 @@ impl Dub {
             .set_dub_wants_audio(Some(Arc::new(move |id| {
                 w.upgrade().is_some_and(|inner| Dub(inner).wants_audio(id))
             })));
+        let w = self.weak();
+        self.0
+            .commentary
+            .set_dub_gpu_reservations(Some(Arc::new(move || {
+                w.upgrade()
+                    .map(|inner| Dub(inner).gpu_reservations())
+                    .unwrap_or_default()
+            })));
+    }
+
+    /// Matchs dont le doublage DEMANDÉ (« Doubler ce match ») tourne ou attend
+    /// en file et a besoin de la carte graphique : la pré-traduction et les
+    /// analyses de fond des autres matchs passent après. Vide avec les voix
+    /// en ligne (MiniMax) ou pendant une pause pour quota.
+    pub fn gpu_reservations(&self) -> Vec<i64> {
+        let ids: Vec<i64> = {
+            let st = self.st();
+            if st.quota.is_some() {
+                return Vec::new();
+            }
+            st.running
+                .iter()
+                .filter(|r| !r.stopped && r.job.explicit())
+                .map(|r| r.job.match_id)
+                .chain(st.queue.iter().filter(|j| j.explicit()).map(|j| j.match_id))
+                .collect()
+        };
+        if ids.is_empty() || !self.uses_gpu() {
+            return Vec::new();
+        }
+        ids
     }
 
     fn weak(&self) -> Weak<Inner> {
@@ -1894,6 +1925,11 @@ impl Dub {
                 explicit: true,
             },
         );
+        // Une pré-traduction de fond d'un autre match qui tient la carte
+        // graphique lui laisse la place (elle reprendra ensuite).
+        if (r.queued || r.started) && self.uses_gpu() {
+            self.0.commentary.yield_to_dub(match_id);
+        }
         let message = if r.queued && !r.started && translation.is_some() {
             "Doublage demandé : la traduction des commentaires passe d’abord".to_string()
         } else {

@@ -532,6 +532,9 @@ pub type Runner = Arc<
 pub type GpuGate = Arc<dyn Fn() -> Option<BoxFut<()>> + Send + Sync>;
 /// Crochet `__dubWantsAudio` (voir la documentation du module).
 pub type DubWantsAudio = Arc<dyn Fn(i64) -> bool + Send + Sync>;
+/// Matchs dont le doublage DEMANDÉ (« Doubler ce match ») tient ou attend la
+/// carte graphique : la traduction de fond des autres matchs attend.
+pub type DubGpuReservations = Arc<dyn Fn() -> Vec<i64> + Send + Sync>;
 
 /// Options d'une mise en file (`enqueueCommentary`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -661,6 +664,7 @@ pub(crate) struct QuotaPause {
 struct Hooks {
     gpu_gate: Option<GpuGate>,
     dub_wants_audio: Option<DubWantsAudio>,
+    dub_gpu: Option<DubGpuReservations>,
 }
 
 pub(crate) struct Inner {
@@ -763,6 +767,51 @@ impl Commentary {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .dub_wants_audio = f;
+    }
+
+    /// Pose le crochet des doublages demandés qui tiennent la carte graphique.
+    pub fn set_dub_gpu_reservations(&self, f: Option<DubGpuReservations>) {
+        self.0
+            .hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .dub_gpu = f;
+    }
+
+    /// Matchs dont un doublage demandé tient ou attend la carte graphique
+    /// (lu AVANT de prendre le verrou de la file : le doublage a le sien).
+    fn dub_gpu_reservations(&self) -> Vec<i64> {
+        let f = self
+            .0
+            .hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .dub_gpu
+            .clone();
+        f.map(|f| f()).unwrap_or_default()
+    }
+
+    /// Travail de fond (pré-traduction) d'un autre match qu'un doublage demandé :
+    /// il attend que le doublage rende la carte graphique.
+    fn waits_for_dub(job: &Job, reserved: &[i64]) -> bool {
+        !job.viewer && !job.explicit() && reserved.iter().any(|m| *m != job.match_id)
+    }
+
+    /// Un doublage vient d'être demandé pour `dub_match` : une pré-traduction
+    /// de fond d'un autre match qui tourne est interrompue et remise en file
+    /// (sans compter d'échec) ; elle reprendra après le doublage.
+    pub fn yield_to_dub(&self, dub_match: i64) {
+        let mut st = self.st();
+        let Some(r) = st.running.as_mut() else { return };
+        if r.preempted || r.job.viewer || r.job.explicit() || r.job.match_id == dub_match {
+            return;
+        }
+        r.preempted = true;
+        println!(
+            "[commentaires] match {} mis en pause : le doublage demandé du match {dub_match} passe en premier",
+            r.job.match_id
+        );
+        r.signal.abort();
     }
 
     /// `dubWantsAudio` : faux sans crochet, ou si le crochet panique.
@@ -1256,6 +1305,7 @@ impl Commentary {
         {
             t.abort();
         }
+        let reserved = self.dub_gpu_reservations();
         let start = {
             let mut st = self.st();
             let mut start = None;
@@ -1276,7 +1326,12 @@ impl Commentary {
                     .filter(|j| !self.outside_window(j))
                     .collect();
                 // Ceux des spectateurs partent toujours ; ceux de fond quand personne ne regarde.
-                let Some(i) = st.queue.iter().position(|j| !self.must_wait(j)) else {
+                // Pendant un doublage demandé, la pré-traduction des autres matchs attend.
+                let Some(i) = st
+                    .queue
+                    .iter()
+                    .position(|j| !self.must_wait(j) && !Self::waits_for_dub(j, &reserved))
+                else {
                     if !st.queue.is_empty() {
                         self.schedule_repump();
                     }

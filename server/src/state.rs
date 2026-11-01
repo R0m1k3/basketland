@@ -52,6 +52,12 @@ impl Media {
                 queued: act.queued,
             }
         })));
+        // Par référence faible : le doublage tient déjà l'analyse (pas de cycle d'Arc).
+        let d = Arc::downgrade(&dub.0);
+        analysis.set_gpu_reserved(Some(Arc::new(move || {
+            d.upgrade()
+                .is_some_and(|i| !dub::Dub(i).gpu_reservations().is_empty())
+        })));
         Media {
             commentary,
             dub,
