@@ -5,7 +5,8 @@
 //! `OKRU_TEST_ID=16301368281746 cargo test --test okru_audio_reel -- --ignored --nocapture`
 
 use basketland_server::media::audio::{
-    extract_dash_audio_chunk, extract_hls_chunk_parallel, ExtractOptions, SourceHeaders,
+    extract_dash_audio_chunk, extract_hls_chunk_parallel, extract_mp4_audio_chunk, ExtractOptions,
+    SourceHeaders,
 };
 use basketland_server::media::commentary::StreamInfo;
 use std::path::Path;
@@ -72,7 +73,20 @@ async fn son_seul_dash_comme_le_flux_hls() {
     let how_b = extract_hls_chunk_parallel(&hls, from, len, &b.to_string_lossy(), &o)
         .await
         .unwrap();
-    eprintln!("son seul : {how_a}\nvidéo HLS : {how_b}");
+    // MP4 progressif le plus léger : trames AAC seules.
+    let mp4 = stream
+        .mp4
+        .iter()
+        .find(|m| m.name == "mobile")
+        .or(stream.mp4.first())
+        .expect("MP4 annoncé")
+        .url
+        .clone();
+    let c = dir.path().join("mp4.ogg");
+    let how_c = extract_mp4_audio_chunk(&mp4, from, len, &c.to_string_lossy(), &o)
+        .await
+        .unwrap();
+    eprintln!("son seul : {how_a}\nvidéo HLS : {how_b}\nMP4 : {how_c}");
     // Référence exacte : tout le flux HLS décodé depuis le début, SANS `-ss`
     // (un `-ss` avant `-i`, même à 0, décale le son d'ok.ru de ~0,77 s), puis
     // les échantillons de [from, from + len[ : l'axe du temps du lecteur.
@@ -94,14 +108,14 @@ async fn son_seul_dash_comme_le_flux_hls() {
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
     let pr = whole[(from * 8000.0) as usize..((from + len) * 8000.0) as usize].to_vec();
-    let (pa, pb) = (pcm(&a), pcm(&b));
+    let (pa, pb, pc) = (pcm(&a), pcm(&b), pcm(&c));
     eprintln!(
         "durées : réf {} / son seul {} / HLS parallèle {} échantillons à 8 kHz",
         pr.len(),
         pa.len(),
         pb.len()
     );
-    for (name, p) in [("son seul", &pa), ("HLS parallèle", &pb)] {
+    for (name, p) in [("son seul", &pa), ("HLS parallèle", &pb), ("MP4", &pc)] {
         assert!((pr.len() as i64 - p.len() as i64).abs() < 800, "{name}");
         let (lag, c) = best_lag(&pr, p, 1600);
         eprintln!(

@@ -231,10 +231,46 @@ impl CommentaryDeps {
                                 if crate::media::abort::is_aborted(r.options.signal.as_ref()) {
                                     return Err(e);
                                 }
-                                eprintln!(
-                                    "[commentaires] téléchargement parallèle impossible ({}) : lecture par ffmpeg",
-                                    short(&e)
-                                );
+                                // MP4 progressif (vidéo récente, sans HLS ni DASH) :
+                                // trames audio seules, d'après l'index du fichier.
+                                if e.starts_with("pas une playlist") {
+                                    let t1 = std::time::Instant::now();
+                                    match crate::media::audio::extract_mp4_audio_chunk(
+                                        &r.source_url,
+                                        r.start,
+                                        r.length,
+                                        &r.out_file,
+                                        &r.options,
+                                    )
+                                    .await
+                                    {
+                                        Ok(how) => {
+                                            println!(
+                                                "[commentaires] son du MP4 {}–{} s : {how} ; prêt en {:.1} s",
+                                                r.start.round(),
+                                                (r.start + r.length).round(),
+                                                t1.elapsed().as_secs_f64()
+                                            );
+                                            return Ok(());
+                                        }
+                                        Err(e2) => {
+                                            if crate::media::abort::is_aborted(
+                                                r.options.signal.as_ref(),
+                                            ) {
+                                                return Err(e2);
+                                            }
+                                            eprintln!(
+                                                "[commentaires] son du MP4 impossible ({}) : lecture par ffmpeg",
+                                                short(&e2)
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    eprintln!(
+                                        "[commentaires] téléchargement parallèle impossible ({}) : lecture par ffmpeg",
+                                        short(&e)
+                                    );
+                                }
                             }
                         }
                     }

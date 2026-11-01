@@ -477,6 +477,39 @@ pub async fn extract_dash_audio_chunk(
     .await
 }
 
+/// Tronçon du son d'un MP4 progressif ([`super::mp4_audio`]) : trames AAC
+/// seules, téléchargées en parallèle, réécrites en ADTS puis découpées.
+pub async fn extract_mp4_audio_chunk(
+    url: &str,
+    start: f64,
+    length: f64,
+    out_file: &str,
+    o: &ExtractOptions,
+) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
+    let src = std::path::PathBuf::from(format!("{out_file}.src.aac"));
+    let stats = super::mp4_audio::fetch_audio_range(
+        url,
+        start,
+        length,
+        &o.headers,
+        o.signal.as_ref(),
+        &src,
+    )
+    .await?;
+    cut_fetched(
+        &src,
+        stats,
+        t0,
+        start,
+        length,
+        out_file,
+        o,
+        "bloc(s) audio du MP4",
+    )
+    .await
+}
+
 /// Découpe exacte du fichier téléchargé `src` (supprimé ensuite) et résumé.
 #[allow(clippy::too_many_arguments)]
 async fn cut_fetched(
