@@ -79,7 +79,7 @@ export default function Hero({ game, kicker }: { game: GameView; kicker: string 
             </span>
             <span className="text-sm font-medium text-paper-dim">{kicker}</span>
           </div>
-          <GameBadges game={{ ...game, hasReplay: false }} />
+          <GameBadges game={{ ...game, hasReplay: false }} cup />
         </div>
 
         <h2 id="hero-title" className="sr-only">

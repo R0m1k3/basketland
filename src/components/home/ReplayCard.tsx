@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { IconCup, TvMini } from '@/components/ui/TvBadge';
 import type { CSSProperties } from 'react';
 import type { GameView } from '@/lib/queries';
 import { teamInfo, type TeamInfo } from '@/lib/teams';
@@ -32,10 +33,15 @@ export default function ReplayCard({ game, when, className = '' }: { game: GameV
   return (
     <article
       data-scope={game.id}
-      className={`group relative isolate overflow-hidden rounded-2xl border border-ink-700/70 bg-ink-900 transition duration-200 hover:-translate-y-0.5 hover:border-ink-500 hover:shadow-card ${className}`}
+      className={`group relative isolate overflow-hidden rounded-2xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-card ${
+        game.cup ? 'cup-card' : 'border-ink-700/70 bg-ink-900 hover:border-ink-500'
+      } ${className}`}
       style={
         {
-          backgroundImage: `linear-gradient(140deg, ${away.primary}40 0%, transparent 42%), linear-gradient(320deg, ${home.primary}40 0%, transparent 42%)`,
+          // NBA Cup : le fond doré (`cup-card`) remplace les couleurs des équipes.
+          backgroundImage: game.cup
+            ? undefined
+            : `linear-gradient(140deg, ${away.primary}40 0%, transparent 42%), linear-gradient(320deg, ${home.primary}40 0%, transparent 42%)`,
           '--team-a': away.accent,
           '--team-b': home.accent,
         } as CSSProperties
@@ -49,7 +55,15 @@ export default function ReplayCard({ game, when, className = '' }: { game: GameV
       />
       <div className="pointer-events-none flex h-full flex-col gap-3 p-4">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-paper-mute">{when}</span>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-paper-mute">{when}</span>
+            {game.cup && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-bold uppercase tracking-wide text-cup-hot">
+                <IconCup size={11} />
+                {game.cup.round === 'group' ? 'NBA Cup' : game.cup.label}
+              </span>
+            )}
+          </span>
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-flame text-ink-950 shadow-glow transition-transform group-hover:scale-110">
             <IconPlay size={12} />
           </span>
@@ -62,6 +76,7 @@ export default function ReplayCard({ game, when, className = '' }: { game: GameV
           <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider">
             <VfBadge vf={game.vf} size="sm" />
             {game.hasStats && <span className="rounded bg-ink-700 px-1.5 py-0.5 text-paper-dim">Stats</span>}
+            <TvMini tv={game.tv_fr?.filter((t, i, all) => all.findIndex((x) => x.kind === t.kind) === i).map((t) => (t.kind === 'bein' ? { ...t, name: 'beIN SPORTS' } : t))} />
           </span>
           <span className="pointer-events-auto">
             <RevealButton id={game.id} label="Masqué" />

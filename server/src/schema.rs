@@ -267,6 +267,16 @@ pub fn migrate(c: &Connection) -> rusqlite::Result<()> {
     if !cols.iter().any(|n| n == "video_kind") {
         c.execute_batch("ALTER TABLE matches ADD COLUMN video_kind TEXT")?;
     }
+    // Notes ESPN de la rencontre (« NBA Cup - Group Play », « NBA Cup
+    // Championship »…) : repère les matchs de la NBA Cup.
+    if !cols.iter().any(|n| n == "competition") {
+        c.execute_batch("ALTER TABLE matches ADD COLUMN competition TEXT DEFAULT ''")?;
+    }
+    // Diffusion télé en France (beIN SPORTS, lue dans le guide des
+    // programmes) : liste JSON `[{"name": "beIN SPORTS 1", "live": true}]`.
+    if !cols.iter().any(|n| n == "tv_fr") {
+        c.execute_batch("ALTER TABLE matches ADD COLUMN tv_fr TEXT DEFAULT ''")?;
+    }
     let track = columns(c, "commentary_tracks")?;
     // Piste complète (1) ou publication partielle (0) ; les pistes
     // antérieures, écrites d'un bloc, sont complètes.

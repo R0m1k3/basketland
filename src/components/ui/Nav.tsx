@@ -3,13 +3,15 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-type IconName = 'home' | 'calendar' | 'teams' | 'table';
+type IconName = 'home' | 'calendar' | 'teams' | 'table' | 'cup';
 
-const LINKS: { href: string; label: string; icon: IconName; match: (p: string) => boolean }[] = [
-  { href: '/', label: 'Accueil', icon: 'home', match: (p) => p === '/' },
-  { href: '/matchs', label: 'Calendrier', icon: 'calendar', match: (p) => p.startsWith('/matchs') },
-  { href: '/equipes', label: 'Équipes', icon: 'teams', match: (p) => p.startsWith('/equipes') },
-  { href: '/classement', label: 'Classement', icon: 'table', match: (p) => p.startsWith('/classement') },
+/** `short` : libellé de la barre mobile (cinq onglets sur un écran étroit). */
+const LINKS: { href: string; label: string; short: string; icon: IconName; match: (p: string) => boolean }[] = [
+  { href: '/', label: 'Accueil', short: 'Accueil', icon: 'home', match: (p) => p === '/' },
+  { href: '/matchs', label: 'Calendrier', short: 'Matchs', icon: 'calendar', match: (p) => p.startsWith('/matchs') },
+  { href: '/nba-cup', label: 'NBA Cup', short: 'NBA Cup', icon: 'cup', match: (p) => p.startsWith('/nba-cup') },
+  { href: '/equipes', label: 'Équipes', short: 'Équipes', icon: 'teams', match: (p) => p.startsWith('/equipes') },
+  { href: '/classement', label: 'Classement', short: 'Classement', icon: 'table', match: (p) => p.startsWith('/classement') },
 ];
 
 function Icon({ name }: { name: IconName }) {
@@ -44,6 +46,14 @@ function Icon({ name }: { name: IconName }) {
       return (
         <svg {...common}>
           <path d="M12 3 4.5 6v5.5c0 4.5 3.2 8 7.5 9.5 4.3-1.5 7.5-5 7.5-9.5V6L12 3Z" />
+        </svg>
+      );
+    case 'cup':
+      return (
+        <svg {...common}>
+          <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z" />
+          <path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4" />
+          <path d="M12 13v4M8.5 20h7M10 17h4" />
         </svg>
       );
     case 'table':
@@ -81,7 +91,7 @@ export default function Nav() {
 }
 
 /**
- * Navigation mobile : barre d'onglets fixe en bas d'écran (les quatre
+ * Navigation mobile : barre d'onglets fixe en bas d'écran (les cinq
  * entrées tiennent toujours, sans défilement horizontal).
  *
  * Elle doit être rendue HORS de l'en-tête : le `backdrop-filter` de
@@ -95,7 +105,7 @@ export function BottomNav() {
       className="fixed inset-x-0 bottom-0 z-50 border-t border-ink-700/80 bg-ink-950/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
       aria-label="Navigation principale"
     >
-      <div className="mx-auto grid max-w-md grid-cols-4">
+      <div className="mx-auto grid max-w-md grid-cols-5">
         {LINKS.map((l) => {
           const active = l.match(pathname);
           return (
@@ -103,13 +113,13 @@ export function BottomNav() {
               key={l.href}
               href={l.href}
               aria-current={active ? 'page' : undefined}
-              className={`relative flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition ${
+              className={`relative flex min-w-0 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold uppercase tracking-wide transition ${
                 active ? 'text-flame' : 'text-paper-mute hover:text-paper'
               }`}
             >
-              {active && <span className="absolute inset-x-6 top-0 h-[2px] rounded-full bg-flame" />}
+              {active && <span className="absolute inset-x-4 top-0 h-[2px] rounded-full bg-flame" />}
               <Icon name={l.icon} />
-              <span className="font-display text-[12px]">{l.label}</span>
+              <span className="max-w-full truncate px-0.5 font-display text-[11.5px]">{l.short}</span>
             </Link>
           );
         })}

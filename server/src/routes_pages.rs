@@ -185,6 +185,14 @@ pub async fn equipe(
     .await
 }
 
+/// Onglet NBA Cup (voir [`crate::cup`]).
+pub async fn nba_cup(State(st): State<AppState>, uri: OriginalUri, headers: HeaderMap) -> Response {
+    page(&st, &uri, &headers, true, |c, ctx| {
+        Ok(Ok(crate::cup::page(c, ctx)?))
+    })
+    .await
+}
+
 /// `loadStandings` de la page Classement : cache de 30 min, sinon ESPN
 /// (`fetch`), cache périmé si ESPN échoue, `[]` faute de mieux.
 pub async fn load_standings<F, Fut>(

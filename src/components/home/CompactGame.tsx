@@ -3,6 +3,7 @@ import type { GameView } from '@/lib/queries';
 import { teamInfo, teamLogoUrl } from '@/lib/teams';
 import StatusPill from '@/components/ui/StatusPill';
 import { gameLabel, outcome } from '@/components/schedule/GameRow';
+import { IconCup, TvMini } from '@/components/ui/TvBadge';
 
 function Mini({ abbr, dim }: { abbr: string; dim?: boolean }) {
   const t = teamInfo(abbr);
@@ -22,6 +23,7 @@ function Mini({ abbr, dim }: { abbr: string; dim?: boolean }) {
 export default function CompactGame({ game, highlight, note, dense }: { game: GameView; highlight?: boolean; note?: string; dense?: boolean }) {
   const { awayWin, homeWin } = outcome(game);
   const started = game.status !== 'scheduled';
+  const cup = !!game.cup;
   if (dense) {
     // Une seule ligne : heure (ou score) · visiteur @ recevant.
     return (
@@ -29,8 +31,8 @@ export default function CompactGame({ game, highlight, note, dense }: { game: Ga
         href={`/matchs/${game.id}`}
         aria-label={gameLabel(game)}
         data-scope={game.id}
-        className={`grid grid-cols-[4rem_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-lg px-3 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame ${
-          highlight ? 'bg-flame/10 ring-1 ring-flame/40' : 'hover:bg-ink-800'
+        className={`grid grid-cols-[4rem_minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg px-3 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame ${
+          highlight ? 'bg-flame/10 ring-1 ring-flame/40' : cup ? 'cup-card border' : 'hover:bg-ink-800'
         }`}
       >
         {game.status === 'live' ? (
@@ -53,6 +55,10 @@ export default function CompactGame({ game, highlight, note, dense }: { game: Ga
           )}
         </span>
         <Mini abbr={game.home.abbr} dim={awayWin} />
+        <span className="flex items-center justify-end gap-1">
+          {cup && <IconCup size={13} className="text-cup-hot" />}
+          <TvMini tv={game.tv_fr} />
+        </span>
       </Link>
     );
   }
@@ -62,7 +68,7 @@ export default function CompactGame({ game, highlight, note, dense }: { game: Ga
       aria-label={gameLabel(game)}
       data-scope={game.id}
       className={`group grid grid-cols-[4rem_minmax(0,1fr)] items-center gap-3 rounded-xl px-3 py-2.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame ${
-        highlight ? 'bg-flame/10 ring-1 ring-flame/40' : 'hover:bg-ink-800'
+        highlight ? 'bg-flame/10 ring-1 ring-flame/40' : cup ? 'cup-card border' : 'hover:bg-ink-800'
       }`}
     >
       <span className="flex flex-col items-start leading-none">
@@ -72,6 +78,17 @@ export default function CompactGame({ game, highlight, note, dense }: { game: Ga
           <span className={`num text-xl font-bold ${highlight ? 'text-flame-hot' : 'text-paper'}`}>{game.time_paris}</span>
         )}
         {note && <span className="mt-1 text-[10px] font-medium text-paper-mute">{note}</span>}
+        {cup && (
+          <span className="mt-1 inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-cup-hot">
+            <IconCup size={10} />
+            Cup
+          </span>
+        )}
+        {!!game.tv_fr?.length && (
+          <span className="mt-1">
+            <TvMini tv={game.tv_fr} />
+          </span>
+        )}
       </span>
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex items-center justify-between gap-2">

@@ -8,6 +8,7 @@ import type { Linescore } from '@/lib/linescore';
 import type { MatchDto } from '@/lib/present';
 import { teamInfo } from '@/lib/teams';
 import { parisDateLabel, seasonLabel } from '@/lib/time';
+import { CupBadge, TvBadges } from '@/components/ui/TvBadge';
 
 const SEASON_TYPE: Record<string, string> = {
   preseason: 'Pré-saison',
@@ -39,7 +40,7 @@ export default function MatchHeader({
 
   return (
     <section
-      className="match-hero panel relative overflow-hidden"
+      className={`match-hero panel relative overflow-hidden ${match.cup ? 'cup-card' : ''}`}
       style={
         {
           '--team-a': away.accent,
@@ -64,9 +65,12 @@ export default function MatchHeader({
 
       <div className="relative px-4 pb-5 pt-4 sm:px-8 sm:pb-7 sm:pt-6">
         <div className="flex items-center justify-between gap-3">
-          <span className="kicker truncate">
-            NBA · <span className="hidden sm:inline">{SEASON_TYPE[match.season_type] ?? 'Saison'} </span>
-            {seasonLabel(match.season)}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="kicker truncate">
+              NBA · <span className="hidden sm:inline">{SEASON_TYPE[match.season_type] ?? 'Saison'} </span>
+              {seasonLabel(match.season)}
+            </span>
+            <CupBadge cup={match.cup} size="sm" />
           </span>
           {!upcoming && <SpoilerToggle initial={spoilers} className="shrink-0 !px-2.5 !py-1 !text-xs sm:!px-3 sm:!py-1.5 sm:!text-sm" />}
         </div>
@@ -122,6 +126,12 @@ export default function MatchHeader({
             </Meta>
           )}
         </dl>
+        {!!match.tv_fr?.length && (
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-[13px] text-paper-mute">
+            <span>{upcoming ? 'À suivre en France sur' : 'Diffusé en France sur'}</span>
+            <TvBadges tv={match.tv_fr} size="sm" />
+          </div>
+        )}
       </div>
     </section>
   );

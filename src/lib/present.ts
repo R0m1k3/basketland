@@ -3,6 +3,22 @@ import { teamLogo } from './espn';
 import { labelForDateKey, PARIS_TZ, parisDateKey, parisIso, parisTime } from './time';
 import type { MatchRow } from './types';
 
+/** Match de la NBA Cup : phase du tournoi. */
+export interface CupInfo {
+  round: 'group' | 'quarter' | 'semi' | 'final';
+  /** « Phase de groupes », « Quart de finale », « Demi-finale », « Finale ». */
+  label: string;
+}
+
+/** Diffusion en France : beIN SPORTS (guide des programmes) ou Prime Video. */
+export interface TvFr {
+  /** « beIN SPORTS 1 », « beIN SPORTS MAX 4 », « Prime Video ». */
+  name: string;
+  kind: 'bein' | 'prime';
+  /** Direct (sinon différé). */
+  live: boolean;
+}
+
 export interface MatchDto {
   id: number;
   espn_id: string;
@@ -35,6 +51,10 @@ export interface MatchDto {
     master: string | null;
     checked_at: string | null;
   };
+  /** Présent seulement pour un match de la NBA Cup (serveur Rust). */
+  cup?: CupInfo;
+  /** Présent seulement si le match est diffusé en France (serveur Rust). */
+  tv_fr?: TvFr[];
 }
 
 export function toDto(m: MatchRow & { video_kind?: string | null }): MatchDto {

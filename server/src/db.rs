@@ -263,6 +263,10 @@ pub struct MatchRow {
     pub video_available: bool,
     pub video_checked_at: Option<String>,
     pub video_kind: Option<String>,
+    /// Notes ESPN (NBA Cup…), vides si absentes.
+    pub competition: Option<String>,
+    /// Diffusion en France (JSON, voir `tv_fr`).
+    pub tv_fr: Option<String>,
 }
 
 pub fn match_row(r: &Row) -> rusqlite::Result<MatchRow> {
@@ -290,6 +294,8 @@ pub fn match_row(r: &Row) -> rusqlite::Result<MatchRow> {
         video_available: col_int(r, "video_available").unwrap_or(0) != 0,
         video_checked_at: col_text(r, "video_checked_at"),
         video_kind: col_text(r, "video_kind"),
+        competition: col_text(r, "competition"),
+        tv_fr: col_text(r, "tv_fr"),
     })
 }
 

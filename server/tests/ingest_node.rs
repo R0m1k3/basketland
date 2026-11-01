@@ -473,7 +473,7 @@ mod route {
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(
             v,
-            json!({ "error": "jobs inconnus: x, , 3 (attendus: sync-schedule, sync-season, sync-stats, sync-videos, sync-subtitles)" })
+            json!({ "error": "jobs inconnus: x, , 3 (attendus: sync-schedule, sync-season, sync-stats, sync-videos, sync-subtitles, sync-cup, sync-tv-fr)" })
         );
     }
 

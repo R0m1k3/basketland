@@ -50,7 +50,7 @@ pub fn to_dto(m: &MatchRow) -> Value {
         Value::Null => Value::from(0),
         v => v,
     };
-    json!({
+    let mut dto = json!({
         "id": m.id,
         "espn_id": m.espn_id,
         "league": m.league,
@@ -79,7 +79,18 @@ pub fn to_dto(m: &MatchRow) -> Value {
             "master": if kind == Some("hls") { src.clone() } else { None },
             "checked_at": m.video_checked_at,
         },
-    })
+    });
+    // Champs ajoutés seulement quand ils ont une valeur : NBA Cup, diffusion
+    // en France (beIN SPORTS, Prime Video).
+    if let Value::Object(o) = &mut dto {
+        if let Some(cup) = crate::cup::cup_json(m.competition.as_deref().unwrap_or("")) {
+            o.insert("cup".into(), cup);
+        }
+        if let Some(tv) = crate::tv_fr::tv_fr_json(m) {
+            o.insert("tv_fr".into(), tv);
+        }
+    }
+    dto
 }
 
 pub struct DayGroup {

@@ -117,7 +117,12 @@ function Match({ d }: { d: MatchData }) {
               <p className="mx-auto mt-6 max-w-lg text-sm text-paper-mute">
                 <span className="first-letter:uppercase">{parisDateLabel(match.date_utc)}</span> à{' '}
                 <strong className="font-semibold text-paper">{match.time_paris}</strong> (heure de Paris)
-                {match.broadcast ? ` · ${match.broadcast}` : ''}.
+                {match.tv_fr?.length
+                  ? ` · en France sur ${match.tv_fr.map((t) => `${t.name}${t.live ? '' : ' (différé)'}`).join(' et ')}`
+                  : match.broadcast
+                    ? ` · ${match.broadcast}`
+                    : ''}
+                .
                 <br />
                 Le replay et les commentaires en français seront disponibles après le match.
               </p>

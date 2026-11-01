@@ -6,6 +6,7 @@ import TeamLogo from '@/components/ui/TeamLogo';
 import StatusPill from '@/components/ui/StatusPill';
 import { RevealButton } from '@/components/ui/Score';
 import GameBadges from './GameBadges';
+import { TvBadges } from '@/components/ui/TvBadge';
 import { dayNumber, monthShort, weekdayShort } from './dates';
 
 /**
@@ -24,7 +25,9 @@ export default function TeamGameRow({ game, team }: { game: GameView; team: stri
   return (
     <article
       data-scope={game.id}
-      className="group relative isolate flex items-center gap-3 rounded-xl border border-ink-700/60 bg-ink-900/60 px-3 py-2.5 transition hover:border-ink-500 hover:bg-ink-850 sm:gap-4 sm:px-4"
+      className={`group relative isolate flex items-center gap-3 rounded-xl border px-3 py-2.5 transition sm:gap-4 sm:px-4 ${
+        game.cup ? 'cup-card' : 'border-ink-700/60 bg-ink-900/60 hover:border-ink-500 hover:bg-ink-850'
+      }`}
       style={{ '--team': opp.accent } as CSSProperties}
     >
       <Link
@@ -43,6 +46,11 @@ export default function TeamGameRow({ game, team }: { game: GameView; team: stri
         <div className="hidden truncate text-[11px] uppercase tracking-wider text-paper-mute sm:block">{opp.city}</div>
         <div className="flex items-center gap-2">
           <span className="truncate font-display text-base font-bold uppercase leading-tight tracking-wide sm:text-lg">{opp.nick}</span>
+          {game.cup && (
+            <span className="shrink-0 rounded bg-cup/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-cup-hot">
+              {game.cup.round === 'group' ? 'NBA Cup' : game.cup.label}
+            </span>
+          )}
           {game.season_type !== 'regular' && (
             <span className="shrink-0 rounded bg-ink-700 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-paper-mute">
               {game.season_type === 'preseason' ? 'Présaison' : 'Playoffs'}
@@ -79,6 +87,11 @@ export default function TeamGameRow({ game, team }: { game: GameView; team: stri
         )}
         {game.hasReplay && (
           <span className="text-[10px] font-bold uppercase tracking-wider text-flame-hot lg:hidden">▶ Replay</span>
+        )}
+        {!!game.tv_fr?.length && (
+          <span className="flex flex-wrap justify-end gap-1 lg:hidden">
+            <TvBadges tv={game.tv_fr} size="sm" short={game.status === 'final'} />
+          </span>
         )}
       </div>
     </article>

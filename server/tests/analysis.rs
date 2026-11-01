@@ -232,6 +232,7 @@ fn insert(db: &Db, id: i64, ok_id: Option<&str>, hours_ago: i64, duration: Optio
         clock_display: "0.0".into(),
         venue: String::new(),
         broadcast: "NBC".into(),
+        note: String::new(),
     };
     let s = id.to_string();
     let default_ok = format!("1665649{}", &s[s.len().saturating_sub(7)..]);
