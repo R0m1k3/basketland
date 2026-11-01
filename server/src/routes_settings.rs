@@ -69,7 +69,9 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     if body.contains_key("transcribeEngine")
         && !s::is_transcribe_engine(body.get("transcribeEngine"))
     {
-        return Err("transcribeEngine invalide (attendu : 'whisper' ou 'nvidia')".into());
+        return Err(
+            "transcribeEngine invalide (attendu : 'whisper', 'whisper-large' ou 'nvidia')".into(),
+        );
     }
     if body.contains_key("fetchParallel") && !s::is_fetch_parallel(body.get("fetchParallel")) {
         return Err("fetchParallel invalide (attendu : un entier de 1 à 32, ou null)".into());
@@ -135,6 +137,12 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     }
     if let Some(engine) = body.get("transcribeEngine").and_then(Value::as_str) {
         updates.push((keys::TRANSCRIBE_ENGINE, Some(engine.to_string())));
+    }
+    if body.contains_key("voiceQuality") && !s::is_voice_quality(body.get("voiceQuality")) {
+        return Err("voiceQuality invalide (attendu : 'standard' ou 'hd')".into());
+    }
+    if let Some(q) = body.get("voiceQuality").and_then(Value::as_str) {
+        updates.push((keys::VOICE_QUALITY, Some(q.to_string())));
     }
     Ok(updates)
 }
@@ -229,6 +237,26 @@ mod tests {
     }
 
     #[test]
+    fn qualite_des_voix() {
+        assert_eq!(
+            plan(json!({"voiceQuality": "hd"})),
+            Ok(vec![("voice_quality", Some("hd".into()))])
+        );
+        for bad in [
+            json!({"voiceQuality": "max"}),
+            json!({"voiceQuality": null}),
+        ] {
+            assert!(plan(bad).is_err());
+        }
+        let s = |v: Option<&str>| {
+            crate::settings::Settings::from_pairs(v.map(|v| ("voice_quality", v)))
+        };
+        assert_eq!(crate::settings::voice_quality(&s(None)), "standard");
+        assert_eq!(crate::settings::voice_quality(&s(Some("hd"))), "hd");
+        assert_eq!(crate::settings::voice_quality(&s(Some("x"))), "standard");
+    }
+
+    #[test]
     fn moteur_de_transcription() {
         for bad in [
             json!({"transcribeEngine": "parakeet"}),
@@ -236,7 +264,10 @@ mod tests {
         ] {
             assert_eq!(
                 plan(bad),
-                Err("transcribeEngine invalide (attendu : 'whisper' ou 'nvidia')".into())
+                Err(
+                    "transcribeEngine invalide (attendu : 'whisper', 'whisper-large' ou 'nvidia')"
+                        .into()
+                )
             );
         }
         assert_eq!(
@@ -252,6 +283,14 @@ mod tests {
             "nvidia"
         );
         assert_eq!(crate::settings::transcribe_engine(&s(Some("x"))), "whisper");
+        assert_eq!(
+            plan(json!({"transcribeEngine": "whisper-large"})),
+            Ok(vec![("transcribe_engine", Some("whisper-large".into()))])
+        );
+        assert_eq!(
+            crate::settings::transcribe_engine(&s(Some("whisper-large"))),
+            "whisper-large"
+        );
         assert_eq!(
             crate::settings::settings_view(&s(Some("nvidia")))["transcribeEngine"],
             "nvidia"

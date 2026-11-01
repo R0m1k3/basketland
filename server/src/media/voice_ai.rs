@@ -22,7 +22,7 @@ use super::proc::{
 use super::voice_minimax::{minimax_config, MinimaxVoiceSession};
 use crate::js;
 use crate::jsval::js_string;
-use crate::settings::{env, Settings};
+use crate::settings::{env, env_trim, Settings};
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use serde_json::{Map, Value};
 use std::path::{Component, Path, PathBuf};
@@ -34,6 +34,37 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 pub const DEFAULT_TTS_MODEL: &str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base";
+/// Voix « HD » (Paramètres) : Qwen3-TTS 1.7B, même clonage des voix figées,
+/// intonation et timbre plus naturels ; ~4 Go de carte graphique (le
+/// doublage ne la partage jamais avec la traduction), environ 2 fois plus lent.
+pub const HD_TTS_MODEL: &str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base";
+
+/// Modèle des voix embarquées : `TTS_MODEL`, sinon la qualité choisie dans les Paramètres.
+pub fn tts_model(s: &Settings) -> String {
+    env_trim("TTS_MODEL").unwrap_or_else(|| {
+        if crate::settings::voice_quality(s) == "hd" {
+            HD_TTS_MODEL.into()
+        } else {
+            DEFAULT_TTS_MODEL.into()
+        }
+    })
+}
+
+/// Pourquoi la qualité des voix choisie dans les Paramètres ne sert pas, ou
+/// `None` si elle est appliquée.
+pub fn voice_quality_override(s: &Settings) -> Option<String> {
+    if let Some(m) = env_trim("TTS_MODEL") {
+        return Some(format!(
+            "La variable TTS_MODEL = {m} est définie dans le conteneur : elle l'emporte sur ce choix. Retirez-la pour utiliser la qualité choisie ici."
+        ));
+    }
+    if voice_engine_name(s) == VoiceEngineName::Minimax {
+        return Some(
+            "Les voix passent par MiniMax (clé MiniMax enregistrée) : ce choix ne concerne que les voix embarquées.".into(),
+        );
+    }
+    None
+}
 
 /// Moteur de synthèse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +188,7 @@ pub fn voice_config(s: &Settings) -> VoiceConfig {
     VoiceConfig {
         disabled_reason,
         engine,
-        model: env_or("TTS_MODEL", || DEFAULT_TTS_MODEL.into()),
+        model: tts_model(s),
         device,
         voices_dir,
         python,
@@ -254,7 +285,8 @@ pub fn list_voices(dir: Option<&Path>) -> Vec<VoiceInfo> {
 
 #[derive(Default)]
 struct ModelsState {
-    ready_local: bool,
+    /// Modèle des voix embarquées déjà en cache (un autre choix est téléchargé).
+    ready_local: Option<String>,
     ready_minimax: bool,
     inflight: Option<Shared<BoxFuture<'static, Result<(), String>>>>,
     progress: Option<(f64, f64)>,
@@ -279,7 +311,7 @@ pub async fn prepare_voice_models(s: &Settings) -> Result<(), String> {
     let fut = {
         let mut st = lock_models();
         let ready = match cfg.engine {
-            VoiceEngineName::Local => st.ready_local,
+            VoiceEngineName::Local => st.ready_local.as_deref() == Some(cfg.model.as_str()),
             VoiceEngineName::Minimax => st.ready_minimax,
         };
         if ready {
@@ -332,7 +364,7 @@ async fn download_models(cfg: VoiceConfig) -> Result<(), String> {
         match why {
             None => {
                 if cfg.engine == VoiceEngineName::Local {
-                    st.ready_local = true;
+                    st.ready_local = Some(cfg.model.clone());
                 }
                 st.ready_minimax = true;
                 Ok(())

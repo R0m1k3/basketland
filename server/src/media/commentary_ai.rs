@@ -40,6 +40,10 @@ use unicode_normalization::UnicodeNormalization;
 
 /// Whisper large-v3-turbo (CTranslate2), ~1,6 Go en fp16.
 pub const DEFAULT_TRANSCRIBE_MODEL: &str = "deepdml/faster-whisper-large-v3-turbo-ct2";
+/// Whisper large-v3 complet (CTranslate2, 32 couches de décodeur contre 4
+/// pour turbo) : plus précis sur l'audio bruité (public, musique) et les
+/// noms, environ 2 à 3 fois plus lent ; ~1,6 Go de carte graphique en int8.
+pub const WHISPER_LARGE_MODEL: &str = "Systran/faster-whisper-large-v3";
 /// TranslateGemma 12B (Ollama `translategemma:12b`).
 pub const DEFAULT_TRANSLATE_MODEL: &str = "translategemma:12b";
 /// Lignes précédentes données au modèle pour le sens (non traduites).
@@ -299,9 +303,10 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
     // Moteur embarqué choisi dans les Paramètres : Whisper (défaut) ou NVIDIA
     // Parakeet ; `TRANSCRIBE_MODEL` l'emporte, et un serveur externe
     // (`TRANSCRIBE_URL`) garde son propre modèle.
-    let nvidia = remote_asr.is_empty()
-        && env_trim("TRANSCRIBE_MODEL").is_none()
-        && crate::settings::transcribe_engine(s) == "nvidia";
+    let chosen = (remote_asr.is_empty() && env_trim("TRANSCRIBE_MODEL").is_none())
+        .then(|| crate::settings::transcribe_engine(s));
+    let nvidia = chosen == Some("nvidia");
+    let whisper_large = chosen == Some("whisper-large");
     let asr_ok = !remote_asr.is_empty()
         || if nvidia {
             embedded_parakeet_available()
@@ -333,6 +338,8 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         transcribe_url: remote_asr.clone(),
         transcribe_model: if nvidia {
             PARAKEET_MODEL.into()
+        } else if whisper_large {
+            WHISPER_LARGE_MODEL.into()
         } else {
             env_trim("TRANSCRIBE_MODEL").unwrap_or_else(|| DEFAULT_TRANSCRIBE_MODEL.into())
         },
