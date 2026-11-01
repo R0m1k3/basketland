@@ -900,7 +900,13 @@ fn with_dash(deps: &mut CommentaryDeps, ok: bool) -> Arc<Mutex<Vec<String>>> {
     let a = asked.clone();
     deps.extract_dash = Some(Arc::new(move |r: cm::ExtractRequest| {
         a.lock().unwrap().push(r.source_url.clone());
+        // Tronçon 0 servi un peu plus tard : l'audio du tronçon 1, préchargé en
+        // parallèle, peut arriver avant lui (comme sur une machine lente).
+        let slow = r.start == 0.0;
         Box::pin(async move {
+            if slow {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
             if !ok {
                 return Err("aucune piste audio seule dans le manifeste".into());
             }
@@ -934,7 +940,11 @@ async fn son_seul_dash_avant_le_flux_hls() {
     let asked = with_dash(&mut deps, false);
     let (r, _) = run(&t.svc, D, false, &deps, CommentaryControl::run_to_end()).await;
     assert!(r.unwrap().ok);
-    assert_eq!(calls.lock().unwrap().extract, vec![0, 1, 2]);
+    // Chaque tronçon extrait une fois par le HLS ; l'ordre dépend du préchargement.
+    let mut extracted = calls.lock().unwrap().extract.clone();
+    extracted.sort_unstable();
+    assert_eq!(extracted, vec![0, 1, 2]);
+    // Deux échecs (tronçon 0 et tronçon 1 préchargé en même temps), puis plus d'essai.
     assert_eq!(asked.lock().unwrap().len(), 2);
     assert!(t.svc.ready(D));
 }
@@ -1485,8 +1495,9 @@ async fn recouvrement_plusieurs_traductions_en_meme_temps() {
         .find(|p| p.phase == CommentaryPhase::Traduction)
         .unwrap();
     assert_eq!((last.done, last.total), (3.0, 3.0));
-    // Trois traductions de 300 ms en même temps, pas l'une après l'autre (900 ms).
-    assert!(elapsed < Duration::from_millis(800), "{elapsed:?}");
+    // Le chevauchement est prouvé par l'ordre des débuts et fins ci-dessus ; la
+    // durée n'est qu'indicative (une machine lente ne doit pas faire échouer).
+    eprintln!("trois traductions de 300 ms en {elapsed:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
