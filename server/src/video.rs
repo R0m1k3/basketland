@@ -547,6 +547,8 @@ struct Inner {
     ids: AtomicU64,
     st: Mutex<State>,
     logs: Mutex<Logs>,
+    /// Blocs des MP4 progressifs (cache et lecture anticipée).
+    mp4_blocks: crate::mp4_proxy::Mp4Cache,
 }
 
 /// Proxy vidéo (état partagé par toutes les requêtes).
@@ -778,6 +780,18 @@ impl Video {
             b.build().expect("client HTTP")
         };
         let env = test.as_ref().map(|t| Mutex::new(t.env.clone()));
+        let env_get = |name: &str| -> Option<u64> {
+            match &test {
+                Some(t) => t.env.get(name).cloned(),
+                None => std::env::var(name).ok(),
+            }
+            .and_then(|v| v.trim().parse::<u64>().ok())
+        };
+        let mp4_blocks = crate::mp4_proxy::Mp4Cache::new(
+            env_get("MP4_CACHE_MB").unwrap_or(384).clamp(32, 8192) << 20,
+            env_get("MP4_PARALLEL").unwrap_or(6).clamp(1, 32) as usize,
+            env_get("MP4_READAHEAD_BLOCKS").unwrap_or(12).min(128),
+        );
         let inner = Inner {
             follow: client(true),
             manual: client(false),
@@ -795,6 +809,7 @@ impl Video {
                 prefetch: Prefetch::default(),
                 mp4_pins: HashMap::new(),
             }),
+            mp4_blocks,
             logs: Mutex::new(Logs {
                 captured: test.is_some().then(Vec::new),
                 ..Default::default()
@@ -1113,6 +1128,126 @@ impl Video {
         Ok(r)
     }
 
+    /// Octets `a..=b` du MP4 (qualité épinglée) et taille du fichier, pour le
+    /// cache des blocs : redirections contrôlées comme pour le relais direct,
+    /// connexion neuve si le flux cale, lien expiré (403/410) re-résolu.
+    async fn fetch_mp4_range(&self, ok_id: &str, a: u64, b: u64) -> Result<(Bytes, u64), String> {
+        let i = &self.0;
+        let stall =
+            Duration::from_millis(
+                i.env_number("SEGMENT_STALL_MS", 5_000.0, 500.0, 120_000.0) as u64
+            );
+        let (mut force, mut last) = (false, String::from("MP4 indisponible"));
+        for attempt in 0..4u64 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(300 * attempt)).await;
+            }
+            let stream = match i.resolve_ok_stream(ok_id, force).await {
+                Ok(s) => s,
+                Err(e) => {
+                    last = e.msg;
+                    continue;
+                }
+            };
+            let Some(src) = i.choose_mp4(ok_id, &stream) else {
+                return Err("pas de MP4 pour ce replay".into());
+            };
+            if !okru::is_allowed_media_host(&src.url) {
+                return Err("hôte non autorisé".into());
+            }
+            let mut headers = okru::ok_headers();
+            headers.push(("Range", format!("bytes={a}-{b}")));
+            let resp = match i
+                .follow_manual(
+                    &src.url,
+                    headers,
+                    Opts {
+                        timeout_ms: 20_000,
+                        retries: 1,
+                        streaming: true,
+                    },
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    last = e.msg;
+                    continue;
+                }
+            };
+            let status = resp.status();
+            if status == 403 || status == 410 {
+                force = true;
+                last = format!("HTTP {status}");
+                continue;
+            }
+            if status == 416 {
+                return Err(format!(
+                    "HTTP 416 {}",
+                    resp.header("content-range").unwrap_or_default()
+                ));
+            }
+            if status != 206 && status != 200 {
+                last = format!("HTTP {status}");
+                continue;
+            }
+            let total = resp
+                .header("content-range")
+                .and_then(|c| {
+                    c.rsplit('/')
+                        .next()
+                        .and_then(|t| t.trim().parse::<u64>().ok())
+                })
+                .or_else(|| {
+                    (status == 200)
+                        .then(|| resp.header("content-length"))
+                        .flatten()
+                        .and_then(|l| l.trim().parse().ok())
+                });
+            let Some(total) = total else {
+                last = "taille du MP4 inconnue".into();
+                continue;
+            };
+            // Plage ignorée par l'amont (200) : on lit jusqu'à la fin du bloc seulement.
+            let skip = if status == 200 { a as usize } else { 0 };
+            let want = (b.min(total.saturating_sub(1)) + 1).saturating_sub(a) as usize;
+            let mut buf: Vec<u8> = Vec::with_capacity(want);
+            let mut seen = 0usize;
+            let mut body = resp.resp.bytes_stream();
+            let ok = loop {
+                if buf.len() >= want {
+                    break true;
+                }
+                match tokio::time::timeout(stall, body.next()).await {
+                    Err(_) => {
+                        last = format!("aucun octet depuis {} ms", stall.as_millis());
+                        break false;
+                    }
+                    Ok(None) => {
+                        if buf.len() < want {
+                            last = format!("bloc tronqué ({}/{want} octets)", buf.len());
+                        }
+                        break buf.len() >= want;
+                    }
+                    Ok(Some(Err(e))) => {
+                        last = e.without_url().to_string();
+                        break false;
+                    }
+                    Ok(Some(Ok(c))) => {
+                        let from = skip.saturating_sub(seen).min(c.len());
+                        seen += c.len();
+                        buf.extend_from_slice(&c[from..]);
+                    }
+                }
+            };
+            if ok {
+                buf.truncate(want);
+                return Ok((Bytes::from(buf), total));
+            }
+        }
+        Err(last)
+    }
+
     /// MP4 progressif : meilleure qualité (épinglée pendant la lecture), Range
     /// relayé dans les deux sens. Le téléchargement amont s'arrête quand le
     /// client s'en va (le corps relayé est abandonné avec la réponse).
@@ -1120,6 +1255,25 @@ impl Video {
         self.assert_known(db, ok_id).await?;
         let i = &self.0;
         let range = sanitize_range(range_in);
+        // Par blocs, avec cache et lecture anticipée sur plusieurs connexions
+        // (`MP4_PROXY_CACHE=0` : ancien relais direct sur une connexion).
+        if i.env_var("MP4_PROXY_CACHE").as_deref() != Some("0") {
+            let stream = i.resolve_ok_stream(ok_id, false).await?;
+            let Some(src) = i.choose_mp4(ok_id, &stream) else {
+                return Err(VErr::proxy(404, "pas de MP4 pour ce replay"));
+            };
+            let file = format!("{ok_id}:{}", src.name);
+            let (v, id) = (self.clone(), ok_id.to_string());
+            let fetch: crate::mp4_proxy::RangeFetch = Arc::new(move |a, b| {
+                let (v, id) = (v.clone(), id.clone());
+                Box::pin(async move { v.fetch_mp4_range(&id, a, b).await })
+            });
+            return i
+                .mp4_blocks
+                .serve(&file, fetch, range)
+                .await
+                .map_err(|e| VErr::proxy(502, format!("MP4 indisponible : {e}")));
+        }
         for attempt in 0..2 {
             let stream = i.resolve_ok_stream(ok_id, attempt > 0).await?;
             let Some(src) = i.choose_mp4(ok_id, &stream) else {

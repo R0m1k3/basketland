@@ -1202,8 +1202,14 @@ async fn ressource_annexe_relayee_depuis_le_dossier_de_la_variante() {
 
 // ------------------------------------------------------------------ MP4 progressif
 
+/// Relais direct du MP4 (une connexion, `MP4_PROXY_CACHE=0`) ; le relais par
+/// blocs est testé par `mp4_blocs_*`.
 async fn mp4_harness() -> H {
-    let h = harness(&[]).await;
+    mp4_harness_env(&[("MP4_PROXY_CACHE", "0")]).await
+}
+
+async fn mp4_harness_env(env: &[(&str, &str)]) -> H {
+    let h = harness(env).await;
     let exp = h.f.exp();
     h.f.set_embed(embed_html(
         None,
@@ -1288,6 +1294,88 @@ async fn mp4_403_re_resolution_puis_succes() {
     let r = h.mp4(Some("bytes=0-9")).await.unwrap();
     assert_eq!(r.status(), 206);
     assert_eq!(h.f.embed_calls(), before + 1);
+}
+
+// ------------------------------------------------------------------ MP4 par blocs (défaut)
+
+fn mp4_calls(h: &H) -> Vec<Call> {
+    h.f.calls()
+        .into_iter()
+        .filter(|c| c.url.contains("?expires="))
+        .collect()
+}
+
+#[tokio::test]
+async fn mp4_blocs_plage_servie_depuis_un_bloc_aligne_puis_le_cache() {
+    let h = mp4_harness_env(&[]).await;
+    let r = h.mp4(Some("bytes=100-199")).await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(
+        hdr(&r, "content-range").as_deref(),
+        Some("bytes 100-199/5000")
+    );
+    assert_eq!(hdr(&r, "content-length").as_deref(), Some("100"));
+    assert_eq!(hdr(&r, "accept-ranges").as_deref(), Some("bytes"));
+    assert_eq!(hdr(&r, "content-type").as_deref(), Some("video/mp4"));
+    assert_eq!(hdr(&r, "cache-control").as_deref(), Some("no-store"));
+    assert_eq!(body(r).await.unwrap().len(), 100);
+    // Un bloc entier demandé à ok.ru, dans la meilleure qualité permise.
+    let calls = mp4_calls(&h);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].url, signed_mp4("sd", h.f.exp(), "vd123.okcdn.ru"));
+    assert_eq!(calls[0].range.as_deref(), Some("bytes=0-2097151"));
+
+    // Autre plage du même bloc, puis le fichier entier : depuis le cache.
+    let r = h.mp4(Some("bytes=0-9")).await.unwrap();
+    assert_eq!(body(r).await.unwrap().len(), 10);
+    let r = h.mp4(None).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(hdr(&r, "content-length").as_deref(), Some("5000"));
+    assert_eq!(body(r).await.unwrap().len(), MP4_SIZE);
+    assert_eq!(mp4_calls(&h).len(), 1, "aucune nouvelle requête amont");
+
+    // Au-delà de la fin : 416.
+    let r = h.mp4(Some("bytes=5000-")).await.unwrap();
+    assert_eq!(r.status(), 416);
+    assert_eq!(hdr(&r, "content-range").as_deref(), Some("bytes */5000"));
+}
+
+#[tokio::test]
+async fn mp4_blocs_lien_expire_re_resolu() {
+    let h = mp4_harness_env(&[]).await;
+    let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n2 = n.clone();
+    *h.f.mp4_responder.lock().unwrap() = Some(Box::new(move |_, range| {
+        if n2.fetch_add(1, Ordering::SeqCst) == 0 {
+            R::Full(403, vec![], b"expired".to_vec())
+        } else {
+            mp4_response(range)
+        }
+    }));
+    let before = h.f.embed_calls();
+    let r = h.mp4(Some("bytes=0-9")).await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(body(r).await.unwrap().len(), 10);
+    assert!(h.f.embed_calls() > before, "flux re-résolu");
+}
+
+#[tokio::test]
+async fn mp4_blocs_redirection_vers_un_hote_non_autorise_refusee() {
+    let h = mp4_harness_env(&[]).await;
+    *h.f.mp4_responder.lock().unwrap() = Some(Box::new(|url, _| {
+        if url.contains("evil") {
+            mp4_response(None)
+        } else {
+            R::Full(
+                302,
+                vec![("location", "https://evil.example/x.mp4".into())],
+                vec![],
+            )
+        }
+    }));
+    let e = h.mp4(Some("bytes=0-9")).await.unwrap_err();
+    assert_eq!(e.http_status(), 502);
+    assert!(!h.f.calls().iter().any(|c| c.url.contains("evil.example")));
 }
 
 #[tokio::test]
@@ -1683,10 +1771,10 @@ async fn routes_video_protegees_par_session() {
         .oneshot(get(format!("/api/video/{OK_ID}/file.mp4"), true))
         .await
         .unwrap();
-    // Le faux ok.ru ne sert pas ce MP4 : 404 amont, rendu en 502.
+    // Le faux ok.ru ne sert pas ce MP4 : 404 amont, rendu en 502 (relais par blocs).
     assert_eq!(r.status(), 502);
     assert_eq!(
         body(r).await.unwrap(),
-        br#"{"error":"amont HTTP 404"}"#.to_vec()
+        br#"{"error":"MP4 indisponible : HTTP 404"}"#.to_vec()
     );
 }

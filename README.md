@@ -281,6 +281,10 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `PREFETCH_CONCURRENCY` | `3` | Segments préchargés en parallèle depuis ok.ru (1 à 8), en plus de ceux que le lecteur demande. |
 | `SEGMENT_STALL_MS` | `5000` | Un téléchargement ok.ru qui ne reçoit plus un octet pendant ce délai (ou dont les en-têtes tardent 1,6 fois plus) est coupé et repris là où il s'était arrêté, sur une connexion neuve, sans que le lecteur voie la coupure. Avant, une connexion bloquée gelait la lecture jusqu'à 60 s. |
 | `SEGMENT_RETRIES` | `4` | Reprises au plus par segment (blocage, coupure, erreur réseau ou 5xx ; une signature expirée déclenche en plus une nouvelle résolution du flux). |
+| `MP4_PROXY_CACHE` | `1` | Replays encore en MP4 seul (pas de HLS) : fichier servi par blocs de 2 Mo, avec cache et lecture anticipée sur plusieurs connexions (un seul flux bridé par ok.ru hachait la lecture). `0` : ancien relais direct. |
+| `MP4_CACHE_MB` | `384` | Cache mémoire des blocs MP4 (32 à 8192). |
+| `MP4_PARALLEL` | `6` | Blocs MP4 téléchargés en même temps pour la lecture anticipée (1 à 32) ; le bloc attendu par le lecteur passe toujours devant. |
+| `MP4_READAHEAD_BLOCKS` | `12` | Blocs de 2 Mo lus d'avance (12 ≈ 50 s pour un match de 4 Go). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
 
