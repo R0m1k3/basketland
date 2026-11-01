@@ -4,13 +4,14 @@
 //! voix est ouvert au premier besoin et fermé à la fin, sur erreur ou quand
 //! le travail cède la place.
 
+use super::names::{self, name_words, parse_spellings, Pronunciations, AUTO_KEY};
 use super::speakers::{
     assign_roles, assign_speakers, parse_speakers, roles_used, serialize_speakers, voice_for,
     AssignOptions, SpeakerState, VoiceRole,
 };
 use super::text::{
     cues_signature, emphasize, fit_cue, group_cues, js_json, next_dub_chunk, num, place_clips,
-    speech_ranges, to_fixed, SLOT_TAIL_SEC,
+    speech_ranges, to_fixed, unify_sentence_speakers, SLOT_TAIL_SEC,
 };
 use super::{
     clock, dub_dir, short, AssembleClip, Dub, DubControl, DubDeps, DubFailureKind, DubJob,
@@ -88,6 +89,8 @@ struct Work<'a> {
     dir: PathBuf,
     tmp: PathBuf,
     state: SpeakerState,
+    /// Prononciation des noms dans le texte dit.
+    say: Pronunciations,
     session: Option<DubVoiceSession>,
     stream: Option<StreamInfo>,
     dubbed: usize,
@@ -319,6 +322,8 @@ impl Work<'_> {
                     ));
                 }
             }
+            // Une phrase garde la même voix du début à la fin.
+            let speakers = unify_sentence_speakers(cues, &speakers);
             // 4-5. Synthèse et calage : les morceaux d'une même phrase d'une seule traite (intonation).
             let groups = group_cues(cues, &speakers, None, None);
             let to_say = groups.len();
@@ -335,7 +340,7 @@ impl Work<'_> {
                 let out = self.tmp.join(format!("cue-{}.wav", first.seq));
                 files.push(out.clone());
                 let r = (voice.synth)(
-                    emphasize(&g.text, Some(g.emphasis)),
+                    self.say.apply(&emphasize(&g.text, Some(g.emphasis))),
                     voice_for(role, &voice.voices),
                     s(&out),
                     self.signal.clone(),
@@ -565,6 +570,114 @@ impl Work<'_> {
 }
 
 impl Dub {
+    /// Prononciation des noms pour ce match (voir `names`) : mémoire des
+    /// prononciations ; les joueurs et entraîneurs des deux équipes (effectifs
+    /// ESPN gardés par la traduction, feuille de stats) pas encore connus sont
+    /// demandés au modèle de traduction et ajoutés à la mémoire. Un échec
+    /// n'empêche jamais le doublage (les noms restent tels quels).
+    async fn pronunciations(
+        &self,
+        match_id: i64,
+        deps: &DubDeps,
+        signal: &AbortSignal,
+    ) -> Pronunciations {
+        let mut memory = match self
+            .db()
+            .with(|c| crate::db::kv_get(c, AUTO_KEY, None))
+            .ok()
+            .flatten()
+        {
+            Some(Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        if let Some(spell) = &deps.spell_names {
+            let people = self.match_people(match_id);
+            let known: Vec<String> = memory.keys().map(|k| k.to_lowercase()).collect();
+            let todo: Vec<String> = name_words(&people)
+                .into_iter()
+                .filter(|w| !known.contains(&w.to_lowercase()))
+                .collect();
+            for batch in todo.chunks(names::SPELL_BATCH) {
+                if signal.is_aborted() {
+                    break;
+                }
+                match spell(batch.to_vec(), signal.clone()).await {
+                    Ok(content) => {
+                        let got = parse_spellings(&content, batch);
+                        for w in batch {
+                            // Nom absent de la réponse : gardé tel quel (pas redemandé).
+                            let say = got
+                                .iter()
+                                .find(|(n, _)| n == w)
+                                .map_or_else(|| w.clone(), |(_, s)| s.clone());
+                            memory.insert(w.clone(), Value::from(say));
+                        }
+                        let v = Value::Object(memory.clone());
+                        if let Err(e) = self.db().with(|c| crate::db::kv_set(c, AUTO_KEY, &v)) {
+                            self.log_error(&format!(
+                                "[doublage] mémoire des prononciations non enregistrée : {e}"
+                            ));
+                        }
+                        self.log(&format!(
+                            "[doublage] match {match_id} : {} nom(s) ajouté(s) à la mémoire des prononciations{}",
+                            batch.len(),
+                            {
+                                let changed: Vec<String> = got
+                                    .iter()
+                                    .filter(|(n, s)| n != s)
+                                    .map(|(n, s)| format!("{n} → {s}"))
+                                    .collect();
+                                if changed.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" ({})", changed.join(", "))
+                                }
+                            }
+                        ));
+                    }
+                    Err(e) => {
+                        self.log(&format!(
+                            "[doublage] match {match_id} : prononciation des noms pas encore apprise ({})",
+                            short(&e)
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        Pronunciations::new(&names::cache_entries(Some(&Value::Object(memory))))
+    }
+
+    /// Joueurs et entraîneurs du match : feuille de stats, puis effectifs
+    /// complets des deux équipes (ESPN, gardés en base par la traduction).
+    fn match_people(&self, match_id: i64) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .db()
+            .with(|c| crate::db::player_stats(c, match_id))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| p.player_name.as_str().map(str::to_string))
+            .collect();
+        if let Some(m) = self.get_match(match_id) {
+            for abbr in [&m.home_abbr, &m.away_abbr] {
+                let key = format!("espn-roster:{}", abbr.to_uppercase());
+                let roster = self
+                    .db()
+                    .with(|c| crate::db::kv_get(c, &key, None))
+                    .ok()
+                    .flatten()
+                    .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                    .unwrap_or_default();
+                for n in roster {
+                    if !out.contains(&n) {
+                        out.push(n);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// `planDub` : tronçons traduits publiés, leurs sous-titres, et s'ils
     /// sont déjà doublés (à jour) ; et tous les sous-titres du match.
     fn plan(&self, match_id: i64) -> (Vec<PlannedChunk>, Vec<CommentaryCueRow>) {
@@ -657,6 +770,7 @@ impl Dub {
         }
         let tmp = dir.join("tmp");
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        let say = self.pronunciations(job.match_id, deps, &signal).await;
         let mut w = Work {
             dub: self,
             job,
@@ -668,6 +782,7 @@ impl Dub {
             dir,
             tmp: tmp.clone(),
             state: parse_speakers(Some(&opened.speakers)),
+            say,
             session: None,
             stream: None,
             dubbed: 0,

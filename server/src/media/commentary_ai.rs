@@ -685,6 +685,9 @@ pub fn needs_no_think(model: &str) -> bool {
 pub struct TranslateLine {
     pub i: i64,
     pub en: String,
+    /// Moment fort (commentateur qui crie, `emphasis` 2) : traduit avec l'élan
+    /// d'un commentateur (`"fort": true` dans la requête).
+    pub strong: bool,
 }
 
 /// Contexte d'une traduction.
@@ -721,7 +724,13 @@ pub fn build_user_message(
         Value::Array(
             lines
                 .iter()
-                .map(|l| json!({ "i": l.i, "en": l.en }))
+                .map(|l| {
+                    if l.strong {
+                        json!({ "i": l.i, "en": l.en, "fort": true })
+                    } else {
+                        json!({ "i": l.i, "en": l.en })
+                    }
+                })
                 .collect(),
         ),
     );

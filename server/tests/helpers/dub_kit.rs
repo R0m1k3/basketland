@@ -395,6 +395,7 @@ pub fn fake(o: FakeOpts) -> (DubDeps, CallsRef, DubVoiceSession) {
                 },
             ) as basketland_server::media::dub::LocalAudioFn
         }),
+        spell_names: None,
     };
     (deps, calls, session)
 }
