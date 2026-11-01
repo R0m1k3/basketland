@@ -38,6 +38,7 @@ pub mod dash_audio;
 pub mod dub;
 pub mod hls_fetch;
 pub mod local_ai;
+pub mod mp4_audio;
 pub mod night_window;
 pub mod ocr;
 pub mod proc;

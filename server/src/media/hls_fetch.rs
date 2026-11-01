@@ -264,10 +264,26 @@ pub(crate) async fn fetch_retry_range(
         }
         match fetch_once(url, h, max, range).await {
             Ok(b) => return Ok(b),
+            // Réponse qui ne changera pas (fichier trop gros, 404…) : inutile d'insister.
+            Err(e) if is_final(&e) => return Err(e),
             Err(e) => last = e,
         }
     }
     Err(format!("{last} après {ATTEMPTS} essais"))
+}
+
+/// Erreur définitive : un nouvel essai donnerait la même réponse (taille,
+/// plage refusée, HTTP 4xx sauf 408 et 429).
+fn is_final(e: &str) -> bool {
+    if e.starts_with("réponse trop grande")
+        || e.starts_with("plage d'octets refusée")
+        || e.starts_with("plage rendue inattendue")
+    {
+        return true;
+    }
+    e.strip_prefix("HTTP ")
+        .and_then(|c| c.trim().parse::<u16>().ok())
+        .is_some_and(|c| (400..500).contains(&c) && c != 408 && c != 429)
 }
 
 /// Ce qu'a coûté un téléchargement (journal).
@@ -290,7 +306,15 @@ pub async fn fetch_range(
     out: &Path,
 ) -> Result<FetchStats, String> {
     let work = async {
-        let text = fetch_retry(playlist_url, headers, Some(MAX_PLAYLIST), signal).await?;
+        let text = fetch_retry(playlist_url, headers, Some(MAX_PLAYLIST), signal)
+            .await
+            .map_err(|e| {
+                if e.starts_with("réponse trop grande") {
+                    format!("pas une playlist HLS ({e})")
+                } else {
+                    e
+                }
+            })?;
         let text = String::from_utf8_lossy(&text);
         let segs = parse_media_playlist(&text, playlist_url)?;
         let sel = covering(&segs, start, length);
@@ -356,6 +380,27 @@ mod tests {
         assert_eq!(urls(covering(&s, 3.9, 0.2)), vec![0.0, 4.0]);
         assert_eq!(urls(covering(&s, 5.0, 100.0)), vec![4.0, 8.0]);
         assert!(covering(&s, 20.0, 5.0).is_empty());
+    }
+
+    #[test]
+    fn erreurs_definitives() {
+        for e in [
+            "réponse trop grande (3811583182 octets)",
+            "HTTP 404",
+            "HTTP 403",
+            "plage d'octets refusée (HTTP 200)",
+        ] {
+            assert!(is_final(e), "{e}");
+        }
+        for e in [
+            "HTTP 500",
+            "HTTP 429",
+            "HTTP 408",
+            "aucun octet depuis 6.0 s (0 octets reçus)",
+            "pas de réponse en 20 s",
+        ] {
+            assert!(!is_final(e), "{e}");
+        }
     }
 
     #[test]
