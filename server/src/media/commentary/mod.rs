@@ -72,7 +72,9 @@ pub use workdir::{
 use crate::commentary_db::{self as cdb, CommentaryCueRow, CommentaryTrackRow};
 use crate::db::{self, Db, MatchRow};
 use crate::media::abort::AbortSignal;
-use crate::media::commentary_ai::{commentary_config, CommentaryConfig, Service, ServiceError};
+use crate::media::commentary_ai::{
+    commentary_config, is_quota_error, quota_pause_ms, CommentaryConfig, Service, ServiceError,
+};
 use crate::media::viewers::{viewers, Viewers};
 use crate::settings::Settings;
 use serde_json::{json, Map, Value};
@@ -642,6 +644,17 @@ struct QueueState {
     queue: Vec<Job>,
     running: Option<Running>,
     next_id: u64,
+    /// Quota du service de traduction en ligne épuisé : aucun travail ne part
+    /// avant cette heure (ms), sauf si la configuration de la traduction change.
+    quota: Option<QuotaPause>,
+}
+
+/// File en pause après un quota épuisé.
+#[derive(Debug, Clone)]
+pub(crate) struct QuotaPause {
+    pub until: f64,
+    /// Configuration du service au moment de la pause (une autre la lève).
+    pub config: String,
 }
 
 #[derive(Default)]
@@ -1214,6 +1227,24 @@ impl Commentary {
         }
     }
 
+    /// Service de traduction en ligne (fournisseur, modèle, clé) : la pause
+    /// pour quota ne vaut que pour lui.
+    fn quota_config(&self) -> String {
+        let c = self.config();
+        format!(
+            "{}|{}|{}",
+            c.translate_provider.as_str(),
+            c.translate_model,
+            c.translate_api_key
+        )
+    }
+
+    /// File en pause pour quota : jusqu'à quand (ms), sinon `None`.
+    pub fn quota_paused_until(&self) -> Option<f64> {
+        let q = self.st().quota.clone()?;
+        (self.now() < q.until && q.config == self.quota_config()).then_some(q.until)
+    }
+
     /// `pump` : lance le premier travail qui peut partir.
     fn pump(&self) {
         if let Some(t) = self
@@ -1228,6 +1259,16 @@ impl Commentary {
         let start = {
             let mut st = self.st();
             let mut start = None;
+            if let Some(q) = st.quota.clone() {
+                if self.now() < q.until && q.config == self.quota_config() {
+                    if !st.queue.is_empty() {
+                        self.schedule_repump();
+                    }
+                    return;
+                }
+                st.quota = None;
+                println!("[commentaires] fin de la pause pour quota : la file reprend");
+            }
             while st.running.is_none() && !st.queue.is_empty() {
                 let queue = std::mem::take(&mut st.queue);
                 st.queue = queue
@@ -1420,7 +1461,19 @@ impl Commentary {
                     format!("Traduction des commentaires impossible : {m}"),
                 ),
             });
+            let quota = !res.ok && is_quota_error(&res.reason);
             this.finish(id, &job, ok_id, log_id, res, t0);
+            if quota {
+                let until = this.now() + quota_pause_ms();
+                this.st().quota = Some(QuotaPause {
+                    until,
+                    config: this.quota_config(),
+                });
+                println!(
+                    "[commentaires] quota du service de traduction épuisé : file en pause jusqu'à {} (les matchs en attente partiront ensuite)",
+                    iso_ms(until)
+                );
+            }
             {
                 let mut st = this.st();
                 if st.running.as_ref().is_some_and(|r| r.id == id) {
@@ -1611,6 +1664,14 @@ impl Commentary {
         if let Some(position) = self.queue_position(match_id) {
             let mut s = CommentaryStatus::new("queued");
             s.position = Some(position);
+            if let Some(until) = self.quota_paused_until() {
+                s.reason = Some(format!(
+                    "Quota du service de traduction épuisé : la traduction reprend automatiquement vers {}.",
+                    chrono::DateTime::from_timestamp_millis(until as i64)
+                        .map(crate::time::paris_time)
+                        .unwrap_or_default()
+                ));
+            }
             s.available_until = self.available_until(match_id, None);
             s.covered = self.covered_ranges(match_id);
             s.models = Some(self.current_models());

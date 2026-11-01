@@ -358,6 +358,10 @@ impl Work<'_> {
                     Ok(d) => d,
                     Err(e) => {
                         check_aborted(&self.signal)?;
+                        // Quota épuisé : inutile d'essayer les répliques suivantes.
+                        if crate::media::commentary_ai::is_quota_error(&e) {
+                            return Err(Stop::Voice(short(&e)));
+                        }
                         failed += g.idx.len();
                         last_err = short(&e);
                         self.dub.log_error(&format!(

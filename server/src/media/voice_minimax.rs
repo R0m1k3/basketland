@@ -192,6 +192,7 @@ async fn call(
         let what = match n {
             Some(1004.0) => "clé refusée".to_string(),
             Some(1008.0) => "crédit épuisé".to_string(),
+            Some(2056.0) => "quota du forfait atteint".to_string(),
             _ => msg.clone(),
         };
         return Err(MinimaxError {
@@ -205,7 +206,7 @@ async fn call(
                 }
             ),
             retry: n.is_some_and(|c| RETRY_CODES.contains(&c)),
-            fatal: n == Some(1004.0) || n == Some(1008.0),
+            fatal: matches!(n, Some(1004.0 | 1008.0 | 2056.0)),
         });
     }
     Ok(reply)

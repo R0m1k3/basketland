@@ -1401,6 +1401,22 @@ async fn liste_des_voix_et_configuration() {
     assert_eq!(voice_ai::voice_config(&hd).model, "mon/modele");
     assert!(voice_ai::voice_quality_override(&hd).is_some());
     std::env::remove_var("TTS_MODEL");
+    // Moteur choisi dans les Paramètres, même avec une clé MiniMax enregistrée.
+    let both = |engine: &'static str| {
+        Settings::from_pairs([("minimax_api_key", "mm-cle"), ("voice_engine", engine)])
+    };
+    assert_eq!(
+        voice_ai::voice_engine_name(&both("local")),
+        voice_ai::VoiceEngineName::Local
+    );
+    assert_eq!(
+        voice_ai::voice_engine_name(&both("minimax")),
+        voice_ai::VoiceEngineName::Minimax
+    );
+    assert_eq!(
+        voice_ai::voice_engine_name(&Settings::from_pairs(Some(("minimax_api_key", "mm-cle")))),
+        voice_ai::VoiceEngineName::Minimax
+    );
     set("DUB_DISABLED", "1");
     assert_eq!(
         voice_ai::voice_config(&s).disabled_reason.as_deref(),

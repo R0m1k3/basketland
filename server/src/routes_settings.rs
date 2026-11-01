@@ -138,6 +138,12 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     if let Some(engine) = body.get("transcribeEngine").and_then(Value::as_str) {
         updates.push((keys::TRANSCRIBE_ENGINE, Some(engine.to_string())));
     }
+    if body.contains_key("voiceEngine") && !s::is_voice_engine(body.get("voiceEngine")) {
+        return Err("voiceEngine invalide (attendu : 'local' ou 'minimax')".into());
+    }
+    if let Some(e) = body.get("voiceEngine").and_then(Value::as_str) {
+        updates.push((keys::VOICE_ENGINE, Some(e.to_string())));
+    }
     if body.contains_key("voiceQuality") && !s::is_voice_quality(body.get("voiceQuality")) {
         return Err("voiceQuality invalide (attendu : 'standard' ou 'hd')".into());
     }
@@ -254,6 +260,14 @@ mod tests {
         assert_eq!(crate::settings::voice_quality(&s(None)), "standard");
         assert_eq!(crate::settings::voice_quality(&s(Some("hd"))), "hd");
         assert_eq!(crate::settings::voice_quality(&s(Some("x"))), "standard");
+        assert_eq!(
+            plan(json!({"voiceEngine": "local", "voiceQuality": "hd"})),
+            Ok(vec![
+                ("voice_engine", Some("local".into())),
+                ("voice_quality", Some("hd".into()))
+            ])
+        );
+        assert!(plan(json!({"voiceEngine": "google"})).is_err());
     }
 
     #[test]

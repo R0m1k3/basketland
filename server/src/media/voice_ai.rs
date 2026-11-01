@@ -50,18 +50,18 @@ pub fn tts_model(s: &Settings) -> String {
     })
 }
 
-/// Pourquoi la qualité des voix choisie dans les Paramètres ne sert pas, ou
-/// `None` si elle est appliquée.
+/// Pourquoi le choix « Voix du doublage » des Paramètres ne sert pas, ou
+/// `None` s'il est appliqué (variables `TTS_ENGINE`, `TTS_MODEL`).
 pub fn voice_quality_override(s: &Settings) -> Option<String> {
-    if let Some(m) = env_trim("TTS_MODEL") {
+    if let Some(e) = env_trim("TTS_ENGINE") {
+        return Some(format!(
+            "La variable TTS_ENGINE = {e} est définie dans le conteneur : elle l'emporte sur ce choix. Retirez-la pour utiliser le choix fait ici."
+        ));
+    }
+    if let (Some(m), VoiceEngineName::Local) = (env_trim("TTS_MODEL"), voice_engine_name(s)) {
         return Some(format!(
             "La variable TTS_MODEL = {m} est définie dans le conteneur : elle l'emporte sur ce choix. Retirez-la pour utiliser la qualité choisie ici."
         ));
-    }
-    if voice_engine_name(s) == VoiceEngineName::Minimax {
-        return Some(
-            "Les voix passent par MiniMax (clé MiniMax enregistrée) : ce choix ne concerne que les voix embarquées.".into(),
-        );
     }
     None
 }
@@ -142,7 +142,8 @@ fn worker_path() -> String {
     })
 }
 
-/// `voiceEngineName` : `TTS_ENGINE`, sinon MiniMax dès qu'une clé MiniMax est donnée.
+/// `voiceEngineName` : `TTS_ENGINE`, sinon le choix des Paramètres (« Voix
+/// du doublage »), sinon MiniMax dès qu'une clé MiniMax est donnée.
 pub fn voice_engine_name(s: &Settings) -> VoiceEngineName {
     match env("TTS_ENGINE")
         .map(|v| js::trim(&v).to_lowercase())
@@ -150,8 +151,12 @@ pub fn voice_engine_name(s: &Settings) -> VoiceEngineName {
     {
         Some("minimax") => VoiceEngineName::Minimax,
         Some("local") => VoiceEngineName::Local,
-        _ if !minimax_config(s).key.is_empty() => VoiceEngineName::Minimax,
-        _ => VoiceEngineName::Local,
+        _ => match crate::settings::voice_engine_choice(s) {
+            Some("minimax") => VoiceEngineName::Minimax,
+            Some(_) => VoiceEngineName::Local,
+            None if !minimax_config(s).key.is_empty() => VoiceEngineName::Minimax,
+            None => VoiceEngineName::Local,
+        },
     }
 }
 

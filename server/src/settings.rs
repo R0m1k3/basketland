@@ -35,6 +35,7 @@ pub mod keys {
     /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'nvidia' (Parakeet).
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
     pub const VOICE_QUALITY: &str = "voice_quality";
+    pub const VOICE_ENGINE: &str = "voice_engine";
     /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
     pub const FETCH_PARALLEL: &str = "fetch_parallel";
     /// Noms à respecter dans les sous-titres (commentateurs, surnoms…), un par ligne.
@@ -255,6 +256,22 @@ pub const VOICE_QUALITIES: [&str; 2] = ["standard", "hd"];
 /// Valeur acceptée pour `voiceQuality`.
 pub fn is_voice_quality(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::String(s)) if VOICE_QUALITIES.contains(&s.as_str()))
+}
+
+/// Moteur des voix du doublage choisi dans les Paramètres : 'local' (voix
+/// embarquées) ou 'minimax' ; `None` : pas de choix (MiniMax dès qu'une clé
+/// MiniMax est donnée).
+pub fn voice_engine_choice(s: &Settings) -> Option<&'static str> {
+    match s.get(keys::VOICE_ENGINE) {
+        Some("local") => Some("local"),
+        Some("minimax") => Some("minimax"),
+        _ => None,
+    }
+}
+
+/// Valeur acceptée pour `voiceEngine`.
+pub fn is_voice_engine(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax")
 }
 
 /// Qualité des voix embarquées : 'hd', sinon 'standard' (défaut).
@@ -525,6 +542,7 @@ pub fn settings_view(s: &Settings) -> Value {
         "transcribeEngine": transcribe_engine(s),
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
         "voiceQuality": voice_quality(s),
+        "voiceEngine": crate::media::voice_ai::voice_engine_name(s).as_str(),
         "voiceQualityOverride": crate::media::voice_ai::voice_quality_override(s),
         "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
         "translateRepairModel": translate_repair_model(s),

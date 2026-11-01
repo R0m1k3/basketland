@@ -840,6 +840,9 @@ struct QueueState {
     queue: Vec<DubJob>,
     running: Option<Running>,
     next_id: u64,
+    /// Quota des voix en ligne épuisé : (fin de la pause en ms, configuration
+    /// des voix à ce moment) ; une autre configuration lève la pause.
+    quota: Option<(f64, String)>,
 }
 
 pub(crate) struct Inner {
@@ -1408,6 +1411,21 @@ impl Dub {
         }
     }
 
+    /// Moteur des voix et clé : la pause pour quota ne vaut que pour eux.
+    fn quota_config(&self) -> String {
+        let s = self
+            .db()
+            .with(Settings::load)
+            .unwrap_or_else(|_| Settings::unreadable());
+        let mm = crate::media::voice_minimax::minimax_config(&s);
+        format!(
+            "{}|{}|{}",
+            crate::media::voice_ai::voice_engine_name(&s).as_str(),
+            mm.model,
+            mm.key
+        )
+    }
+
     /// `pump` : lance le premier travail qui peut partir.
     fn pump(&self) {
         if let Some(t) = lock(&self.0.repump).take() {
@@ -1416,6 +1434,16 @@ impl Dub {
         let start = {
             let mut st = self.st();
             let mut start = None;
+            if let Some((until, conf)) = st.quota.clone() {
+                if self.0.commentary.now() < until && conf == self.quota_config() {
+                    if !st.queue.is_empty() {
+                        self.schedule_repump();
+                    }
+                    return;
+                }
+                st.quota = None;
+                self.log("[doublage] fin de la pause pour quota : la file reprend");
+            }
             if st.running.is_none() && !st.queue.is_empty() {
                 if self.disabled_reason_sync().is_some() {
                     st.queue.clear();
@@ -1541,7 +1569,16 @@ impl Dub {
                     format!("Doublage impossible : {}", short(&e)),
                 )
             });
+            let quota = !res.ok && crate::media::commentary_ai::is_quota_error(&res.reason);
             this.finish(id, &job, key, log_id, res);
+            if quota {
+                let until = this.0.commentary.now() + crate::media::commentary_ai::quota_pause_ms();
+                this.st().quota = Some((until, this.quota_config()));
+                this.log(&format!(
+                    "[doublage] quota des voix épuisé : doublage en pause jusqu'à {} (reprise automatique)",
+                    iso_ms(until)
+                ));
+            }
             {
                 let mut st = this.st();
                 if st.running.as_ref().is_some_and(|r| r.id == id) {

@@ -378,6 +378,49 @@ async fn une_erreur_de_service_devient_un_echec_service() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quota_epuise_la_file_attend_puis_reprend() {
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_REPUMP_MS", "20");
+    let started: Arc<Mutex<Vec<i64>>> = Arc::default();
+    let s2 = started.clone();
+    t.svc.set_runner(Some(Arc::new(move |job: Job, _, _, _| {
+        s2.lock().unwrap().push(job.match_id);
+        Box::pin(async move {
+            if job.match_id == A {
+                Err(CommentaryError::Service(ServiceError {
+                    message: "API MiniMax : quota ou crédit épuisé (HTTP 429)".into(),
+                    service: Service::Traduction,
+                }))
+            } else {
+                Ok(ok("fait"))
+            }
+        })
+    })));
+    t.svc.enqueue(A, EnqueueOptions::default());
+    t.svc.enqueue(B, EnqueueOptions::default());
+    for _ in 0..200 {
+        if t.svc.record(A).is_some() && t.svc.quota_paused_until().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Quota épuisé : B attend dans la file au lieu d'échouer à son tour.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(*started.lock().unwrap(), vec![A]);
+    assert!(t.svc.quota_paused_until().is_some());
+    let st = t.svc.status(B).to_json();
+    assert_eq!(st["status"], "queued");
+    assert!(st["reason"].as_str().unwrap().contains("Quota"), "{st}");
+    // Une heure plus tard, la file reprend d'elle-même.
+    t.clock.advance_ms(61 * 60_000);
+    t.svc.idle().await;
+    assert_eq!(*started.lock().unwrap(), vec![A, B]);
+    assert!(t.svc.quota_paused_until().is_none());
+    unset_env("COMMENTARY_REPUMP_MS");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn job_periodique_matchs_recents_sans_piste_a_jour() {
     let _g = LOCK.lock().await;
     let t = setup(&[A, B, C]);

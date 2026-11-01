@@ -206,10 +206,16 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   prend plus d'avance sur la lecture ; les noms sont corrigés après coup).
   Modèle téléchargé au premier usage dans `/data/models`. Vaut pour les
   prochaines traductions (« Relancer la traduction » refait une piste).
-- **Voix du doublage** : dans Paramètres › « Voix du doublage », les voix
-  embarquées sont Standard (Qwen3-TTS 0.6B, par défaut) ou HD (Qwen3-TTS
-  1.7B : mêmes voix clonées, intonation plus naturelle, ~4 Go de carte, 2
-  fois plus lent). Sans effet avec les voix MiniMax ou `TTS_MODEL`.
+- **Voix du doublage** : dans Paramètres › « Voix du doublage », un
+  administrateur choisit les voix embarquées Standard (Qwen3-TTS 0.6B), HD
+  (Qwen3-TTS 1.7B : mêmes voix clonées, intonation plus naturelle, ~4 Go de
+  carte, 2 fois plus lent) ou MiniMax, même si une clé MiniMax est
+  enregistrée (sans choix : MiniMax dès qu'une clé existe). `TTS_ENGINE` et
+  `TTS_MODEL` l'emportent.
+- **Quota épuisé** (MiniMax, OpenAI) : la file de traduction (ou de
+  doublage) se met en pause `QUOTA_PAUSE_MIN` minutes (60) au lieu
+  d'enchaîner les matchs ; la fiche l'indique, et un changement de clé, de
+  modèle ou de moteur lève la pause.
 - **Mot de passe perdu** : depuis le NAS,
 
   ```bash

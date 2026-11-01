@@ -312,6 +312,11 @@ export default function CommentaryStatus({
       title = 'Traduction : démarrage imminent';
       detail = 'Ce match passe avant tous les autres (un travail de fond éventuel est mis en pause).';
     }
+    // File en pause (quota du service de traduction épuisé) : le serveur dit quand elle reprend.
+    if (state.reason) {
+      title = 'Traduction en pause';
+      detail = state.reason;
+    }
   } else if (status === 'failed') {
     tone = 'text-loss';
     dot = 'bg-loss';
