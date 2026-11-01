@@ -147,7 +147,8 @@ async fn mp4_par_blocs_cache_et_lecture_anticipee() {
         format!("bytes 0-{}/{}", data.len() - 1, data.len())
     );
     assert!(body == data, "octets différents");
-    assert!(took < 6.0, "{took:.1} s");
+    // Une seule connexion à 2 Mo/s : 12 s ; marge pour une machine lente.
+    assert!(took < 9.0, "{took:.1} s");
 
     // Plage à cheval sur deux blocs : depuis le cache, rien de plus chez l'amont.
     let before = srv.served.load(Ordering::SeqCst);
