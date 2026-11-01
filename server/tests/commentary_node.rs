@@ -379,14 +379,22 @@ async fn step(
     let dir = cm::work_dir(&ok_id(&x.db, A));
     let mut c = calls.lock().unwrap().clone();
     c.extract.sort();
-    let work = std::fs::read_dir(&dir).ok().map(|d| {
-        let mut v: Vec<String> = d
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        v.sort();
-        v
-    });
+    // Écart voulu avec Node : en fin de travail, les transcriptions (.json)
+    // restent dans le dossier (une traduction relancée ne retranscrit pas) ;
+    // seul le reste est comparé, dossier sans rien d'autre = dossier effacé.
+    let ended = r.as_ref().is_ok_and(|o| o.ok);
+    let work = std::fs::read_dir(&dir)
+        .ok()
+        .map(|d| {
+            let mut v: Vec<String> = d
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|f| !(ended && f.ends_with(".json")))
+                .collect();
+            v.sort();
+            v
+        })
+        .filter(|v| !(ended && v.is_empty()));
     let events = events.lock().unwrap().clone();
     json!({
         "label": label,
@@ -527,6 +535,11 @@ async fn travaux_complets_comme_node() {
     scenario!("relance-forcee", |x| {
         let (d, c) = fake_deps(Fake::default());
         let a = step(&x, "premier", false, &d, &c, None).await;
+        // Écart voulu : Node effaçait les transcriptions en fin de travail, la
+        // relance retranscrivait tout. Rust les garde (la relance sans
+        // retranscription est vérifiée dans tests/commentary.rs) ; on les
+        // efface ici pour comparer au même point de départ que Node.
+        let _ = std::fs::remove_dir_all(cm::work_dir(&ok_id(&x.db, A)));
         let (d, c) = fake_deps(Fake::default());
         vec![a, step(&x, "force", true, &d, &c, None).await]
     });
@@ -673,6 +686,10 @@ async fn travaux_complets_comme_node() {
                     async move { std::fs::write(&out, vec![0u8; 4096]).map_err(|e| e.to_string()) },
                 )
             }));
+            if force {
+                // Transcriptions gardées par Rust, pas par Node : voir « relance-forcee ».
+                let _ = std::fs::remove_dir_all(cm::work_dir(&ok_id(&x.db, A)));
+            }
             let mut s = step(&x, label, force, &d, &c, None).await;
             let mut cuts = cuts.lock().unwrap().clone();
             cuts.sort_by(|a, b| a.partial_cmp(b).unwrap());

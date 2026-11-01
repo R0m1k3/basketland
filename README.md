@@ -426,7 +426,9 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 - **Un travail à la fois** (le GPU est partagé).
 - **Reprise** : tronçons audio, transcriptions et traductions déjà faites
   sont gardés dans `/data/commentary/<okId>/` jusqu'au succès ; un serveur
-  éteint ou un flux coupé ne fait pas tout recommencer. Une piste partielle
+  éteint ou un flux coupé ne fait pas tout recommencer. Après le succès, le
+  son est effacé mais les transcriptions restent (10 jours) : « Relancer la
+  traduction » retraduit tout sans refaire la transcription. Une piste partielle
   (travail interrompu) reste servie mais n'a pas le badge « VF » : le match
   est remis en file pour être terminé.
 - **Échecs** : flux vidéo ou service local injoignable → nouvel essai
@@ -592,8 +594,16 @@ regroupées sur tout le match, seuil `DUB_SPEAKER_SIM`), puis sa voix — une
 locutrice prend **F** (voir ci-dessous), les autres par temps de parole : le
 1er locuteur prend **A**, le 2e **B4**, les suivants **B1** ; une voix
 attribuée ne change plus de tout le match (sauf la bascule unique vers F).
+**Une phrase garde sa voix du début à la fin** : ses morceaux prennent tous
+le locuteur qui en dit la plus grande part (l'empreinte d'un morceau court
+est peu fiable). Les **noms des joueurs** sont dits comme un commentateur
+français les prononce : à chaque doublage, les joueurs et entraîneurs des
+deux équipes pas encore connus sont demandés une fois au modèle de
+traduction (« Jalen » → « Djaleune ») et gardés dans une mémoire commune à
+tous les matchs (`kv_cache`, `dub-name-spellings`) ; les sous-titres gardent
+la vraie orthographe (`DUB_NAME_SPELLING=0` désactive).
 Chaque réplique est dite (« ! » ajouté sur les moments forts : l'intonation
-suit la ponctuation), accélérée si elle déborde de sa place (×1,35 au plus, sinon la
+suit la ponctuation ; avec MiniMax, débit, volume et hauteur montent aussi), accélérée si elle déborde de sa place (×1,35 au plus, sinon la
 suivante est repoussée : deux voix ne parlent jamais en même temps), puis le
 tronçon est monté en AAC (`/data/dub/<match>/chunk-N.m4a`). Le doublage **ne
 tourne jamais en même temps qu'une traduction ou une analyse** (la carte
@@ -681,7 +691,7 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 | `MINIMAX_TRANSLATE_MODEL` | `MiniMax-M3.1-Flash` | Modèle texte MiniMax de la traduction (`MiniMax-M3` : plus soigné, plus lent). |
 | `MINIMAX_TTS_MODEL` | `speech-2.8-hd` | Modèle de voix MiniMax (`speech-2.8-turbo` : plus rapide et moins cher). |
 | `MINIMAX_VOICE_A`, `MINIMAX_VOICE_B4`, `MINIMAX_VOICE_B1`, `MINIMAX_VOICE_F` | voix françaises ci-dessus | `voice_id` MiniMax de chaque rôle (liste « System Voice ID » de la documentation MiniMax) ; vide : rôle retiré (repli sur une autre voix). |
-| `MINIMAX_EMOTIONS` | `1` | Moments forts : ton imposé à MiniMax (emphase 2 → « surprised », 1 → « happy »). `0` : le modèle choisit seul. |
+| `MINIMAX_EMOTIONS` | `1` | Moments forts : ton imposé à MiniMax (emphase 2 → « surprised », plus vite ×1,12, volume 1,5, hauteur +1 ; 1 → « happy », ×1,06, volume 1,2). `0` : le modèle choisit seul, débit et volume constants. |
 | `TTS_EMBED_THREADS` | `2` | Avec MiniMax : cœurs du processeur pour l'analyse des voix. |
 | `MINIMAX_TTS_SPEED` | `1` | Débit de parole MiniMax (0,5 à 2). |
 | `MINIMAX_API_URL` | `https://api.minimax.io` | Serveur de l'API (p. ex. `https://api-uw.minimax.io`). |
@@ -697,6 +707,7 @@ l'ordre de 60 000 à 100 000 caractères par match doublé.
 | `DUB_MAX_SPEAKERS` | `4` | Locuteurs au plus par match ; au-delà, une réplique rejoint le locuteur le plus proche. |
 | `DUB_FEMALE_PROB` | `0.85` | Probabilité moyenne « voix de femme » (classifieur, sur au moins 10 s de répliques dans les 30 premières secondes du locuteur) à partir de laquelle un locuteur prend la voix féminine `F`. Une valeur > 1 désactive la voix F automatique. |
 | `DUB_FEMALE_F0` | — (désactivé) | Repli si le classifieur manque (ou n'a pas assez entendu un nouveau locuteur) : hauteur de voix médiane (Hz) à partir de laquelle il prend `F`. Jamais contre le classifieur. |
+| `DUB_NAME_SPELLING` | `1` | Prononciation automatique des noms des joueurs (mémoire commune à tous les matchs). `0` : noms lus tels quels. |
 | `DUB_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail de doublage. |
 
 ## Développement local

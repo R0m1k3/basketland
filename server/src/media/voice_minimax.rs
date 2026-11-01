@@ -342,13 +342,34 @@ pub fn minimax_emotion(emphasis: Option<f64>) -> Option<&'static str> {
     }
 }
 
+/// `minimaxDelivery` : débit, volume et hauteur d'une réplique selon le
+/// moment, comme un commentateur dont la voix monte : 2 (moment fort) plus
+/// vite, plus fort et un peu plus haut ; 1 (voix qui monte) un peu plus vite
+/// et plus fort ; sinon le débit réglé. `MINIMAX_EMOTIONS=0` désactive aussi.
+pub fn minimax_delivery(speed: f64, emphasis: Option<f64>) -> (f64, f64, i64) {
+    if env("MINIMAX_EMOTIONS").as_deref() == Some("0") {
+        return (speed, 1.0, 0);
+    }
+    let e = emphasis.unwrap_or(0.0);
+    let (k, vol, pitch) = if e >= 2.0 {
+        (1.12, 1.5, 1)
+    } else if e >= 1.0 {
+        (1.06, 1.2, 0)
+    } else {
+        (1.0, 1.0, 0)
+    };
+    let s = js::round(js::min(2.0, speed * k) * 100.0) / 100.0;
+    (s, vol, pitch)
+}
+
 /// Corps exact (JSON) d'une synthèse `/v1/t2a_v2`.
 pub fn synth_body(cfg: &MinimaxConfig, voice_id: &str, text: &str, emphasis: Option<f64>) -> Value {
+    let (speed, vol, pitch) = minimax_delivery(cfg.speed, emphasis);
     let mut vs = Map::new();
     vs.insert("voice_id".into(), Value::from(voice_id));
-    vs.insert("speed".into(), js_num_value(cfg.speed));
-    vs.insert("vol".into(), Value::from(1));
-    vs.insert("pitch".into(), Value::from(0));
+    vs.insert("speed".into(), js_num_value(speed));
+    vs.insert("vol".into(), js_num_value(vol));
+    vs.insert("pitch".into(), Value::from(pitch));
     if let Some(e) = minimax_emotion(emphasis) {
         vs.insert("emotion".into(), Value::from(e));
     }

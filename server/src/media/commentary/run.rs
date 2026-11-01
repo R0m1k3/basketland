@@ -930,6 +930,7 @@ impl RunCtx {
                     .map(|c| TranslateLine {
                         i: c.seq,
                         en: c.text.clone(),
+                        strong: c.emphasis.is_some_and(|e| e >= 2),
                     })
                     .collect();
                 let res = (self.deps.translate)(
@@ -1123,6 +1124,7 @@ impl Commentary {
                 vec![TranslateLine {
                     i: c.seq,
                     en: c.text_en.clone(),
+                    strong: c.emphasis >= 2,
                 }],
                 context,
                 cfg.clone(),
@@ -1321,7 +1323,12 @@ impl Commentary {
         let done = Arc::new(Mutex::new(done));
 
         let cache_file = dir.join("translation.json");
-        let cache = TranslationCache::read(&cache_file, &cfg.translate_model);
+        // Relance explicite : tout est retraduit (seule la transcription est reprise).
+        let cache = if fresh {
+            TranslationCache::read(Path::new(""), &cfg.translate_model)
+        } else {
+            TranslationCache::read(&cache_file, &cfg.translate_model)
+        };
 
         let report: Report = {
             let (plans, done, target, progress) = (
@@ -1512,19 +1519,25 @@ impl Commentary {
                 "Aucune parole détectée dans le replay (transcription vide après filtrage)",
             ));
         };
-        // Dossier de travail effacé ; le son complet reste si ce match va être doublé.
-        if self.dub_wants_audio(job.match_id) && full_audio_file(&ok_id).exists() {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for e in entries.flatten() {
-                    if e.file_name() != "full.ogg" {
-                        let p = e.path();
-                        let _ = std::fs::remove_dir_all(&p).or_else(|_| std::fs::remove_file(&p));
-                    }
+        // Son effacé du dossier de travail (le son complet reste si ce match va
+        // être doublé) ; les transcriptions (petits .json) restent : une
+        // traduction relancée (« Relancer la traduction », doublage demandé
+        // après un changement de modèle…) ne refait pas la transcription.
+        let keep_full = self.dub_wants_audio(job.match_id) && full_audio_file(&ok_id).exists();
+        if !keep_full {
+            self.forget_full_audio(&ok_id);
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                let kept = (keep_full && name == "full.ogg")
+                    || (name.ends_with(".json") && e.path().is_file());
+                if !kept {
+                    let p = e.path();
+                    let _ = std::fs::remove_dir_all(&p).or_else(|_| std::fs::remove_file(&p));
                 }
             }
-        } else {
-            self.forget_full_audio(&ok_id);
-            let _ = std::fs::remove_dir_all(&dir);
         }
         Ok(CommentaryOutcome::ok(format!(
             "{} sous-titres traduits{} ; {total} tronçon(s), {} lot(s) ; {} + {} ; {} min",

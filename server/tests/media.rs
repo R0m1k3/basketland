@@ -223,6 +223,7 @@ fn lines(v: &[(i64, &str)]) -> Vec<TranslateLine> {
         .map(|(i, en)| TranslateLine {
             i: *i,
             en: en.to_string(),
+            strong: false,
         })
         .collect()
 }

@@ -37525,7 +37525,7 @@
        "authorization": "Bearer cle-secrete",
        "content-type": "application/json"
       },
-      "body": "{\"model\":\"speech-2.8-hd\",\"text\":\"Quel dunk !\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_Male_Speech_New\",\"speed\":1,\"vol\":1,\"pitch\":0,\"emotion\":\"surprised\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
+      "body": "{\"model\":\"speech-2.8-hd\",\"text\":\"Quel dunk !\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_Male_Speech_New\",\"speed\":1.12,\"vol\":1.5,\"pitch\":1,\"emotion\":\"surprised\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
      },
      {
       "url": "https://api.minimax.io/v1/t2a_v2",
@@ -37534,7 +37534,7 @@
        "authorization": "Bearer cle-secrete",
        "content-type": "application/json"
       },
-      "body": "{\"model\":\"speech-2.8-hd\",\"text\":\"Belle passe.\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_CasualMan\",\"speed\":1,\"vol\":1,\"pitch\":0,\"emotion\":\"happy\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
+      "body": "{\"model\":\"speech-2.8-hd\",\"text\":\"Belle passe.\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_CasualMan\",\"speed\":1.06,\"vol\":1.2,\"pitch\":0,\"emotion\":\"happy\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
      },
      {
       "url": "https://api.minimax.io/v1/t2a_v2",
@@ -37609,7 +37609,7 @@
        "authorization": "Bearer k2",
        "content-type": "application/json"
       },
-      "body": "{\"model\":\"speech-2.8-turbo\",\"text\":\"Quel dunk !\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_Male_Speech_New\",\"speed\":1.1,\"vol\":1,\"pitch\":0,\"emotion\":\"surprised\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
+      "body": "{\"model\":\"speech-2.8-turbo\",\"text\":\"Quel dunk !\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_Male_Speech_New\",\"speed\":1.23,\"vol\":1.5,\"pitch\":1,\"emotion\":\"surprised\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
      },
      {
       "url": "https://api-uw.minimax.io/v1/t2a_v2",
@@ -37618,7 +37618,7 @@
        "authorization": "Bearer k2",
        "content-type": "application/json"
       },
-      "body": "{\"model\":\"speech-2.8-turbo\",\"text\":\"Belle passe.\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_CasualMan\",\"speed\":1.1,\"vol\":1,\"pitch\":0,\"emotion\":\"happy\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
+      "body": "{\"model\":\"speech-2.8-turbo\",\"text\":\"Belle passe.\",\"stream\":false,\"language_boost\":\"French\",\"output_format\":\"hex\",\"voice_setting\":{\"voice_id\":\"French_CasualMan\",\"speed\":1.17,\"vol\":1.2,\"pitch\":0,\"emotion\":\"happy\"},\"audio_setting\":{\"sample_rate\":24000,\"format\":\"wav\",\"channel\":1}}"
      },
      {
       "url": "https://api-uw.minimax.io/v1/t2a_v2",

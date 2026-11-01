@@ -128,6 +128,7 @@ fn lines_of(v: &Value) -> Vec<TranslateLine> {
         .map(|l| TranslateLine {
             i: l["i"].as_i64().unwrap(),
             en: s(&l["en"]).to_string(),
+            strong: l["fort"].as_bool().unwrap_or(false),
         })
         .collect()
 }

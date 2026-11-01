@@ -688,7 +688,16 @@ async fn extrait_transcrit_traduit_et_stocke() {
             "traduction 3/3"
         ]
     );
-    assert!(!cm::work_dir(&ok_id(&t.db, A)).exists());
+    // Son effacé ; transcriptions (et cache des traductions) gardées.
+    let mut kept: Vec<String> = std::fs::read_dir(cm::work_dir(&ok_id(&t.db, A)))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    kept.sort();
+    assert_eq!(kept.len(), 4, "{kept:?}");
+    assert!(kept.iter().all(|f| f.ends_with(".json")), "{kept:?}");
+    assert!(kept.contains(&"translation.json".to_string()));
     assert_eq!(
         t.svc.status(A).to_json(),
         json!({ "status": "ready", "models": { "transcribe": WHISPER, "translate": DEFAULT_TRANSLATE_MODEL } })
@@ -697,6 +706,16 @@ async fn extrait_transcrit_traduit_et_stocke() {
         t.db.with(|c| cdb::commentary_ready_ids(c, &[A, B, 12345]))
             .unwrap();
     assert_eq!(ready.into_iter().collect::<Vec<_>>(), vec![A]);
+
+    // « Relancer la traduction » : tout est retraduit, rien n'est retranscrit
+    // ni relu dans le flux.
+    let (deps2, calls2) = queue_fake(false, false);
+    let (r, _) = run(&t.svc, A, true, &deps2, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    let c2 = calls2.lock().unwrap();
+    assert!(c2.transcribe.is_empty(), "{:?}", c2.transcribe);
+    assert!(c2.extract.is_empty(), "{:?}", c2.extract);
+    assert_eq!(c2.translate, 3);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1275,7 +1294,10 @@ async fn son_complet_reel_pendant_un_travail() {
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(files, vec!["full.ogg"]); // gardé pour le doublage
+    assert!(files.contains(&"full.ogg".to_string())); // gardé pour le doublage
+    assert!(files
+        .iter()
+        .all(|f| f == "full.ogg" || f.ends_with(".json"))); // et les transcriptions
     assert!((probe(&dir.join("full.ogg")) - 1300.0).abs() < 1.0);
 }
 

@@ -34,11 +34,13 @@
 //! aucune analyse ne tourne.
 
 mod assemble;
+mod names;
 mod run;
 mod speakers;
 mod text;
 
 pub use assemble::{assemble_args, assemble_chunk, AssembleClip};
+pub use names::{name_words, parse_spellings, Pronunciations, AUTO_KEY, SPELL_PROMPT};
 pub use speakers::{
     assign_roles, assign_speakers, cosine, empty_speakers, female_f0_hz, female_prob_min,
     heard_female, max_speakers, median, min_new_speaker_sec, parse_speakers, roles_used,
@@ -47,8 +49,8 @@ pub use speakers::{
 };
 pub use text::{
     cues_signature, download_text, emphasize, fit_cue, group_cues, js_json, js_num_str,
-    next_dub_chunk, place_clips, speech_ranges, to_fixed, CueFit, CueGroup, CLIP_GAP_SEC,
-    DUB_SAMPLE_RATE, MAX_TEMPO, SLOT_TAIL_SEC,
+    next_dub_chunk, place_clips, speech_ranges, to_fixed, unify_sentence_speakers, CueFit,
+    CueGroup, CLIP_GAP_SEC, DUB_SAMPLE_RATE, MAX_TEMPO, SLOT_TAIL_SEC,
 };
 
 use crate::commentary_db::{self as cdb, commentary_key, CommentaryTrackRow};
@@ -270,6 +272,11 @@ pub type AssembleFn = Arc<
 pub type LocalAudioFn =
     Arc<dyn Fn(String, f64, f64, String, AbortSignal) -> BoxFut<bool> + Send + Sync>;
 
+/// Orthographe phonétique de noms (`spellNames(noms, signal)`) : réponse
+/// brute du modèle de traduction, lue par [`parse_spellings`].
+pub type SpellNamesFn =
+    Arc<dyn Fn(Vec<String>, AbortSignal) -> BoxFut<Result<String, String>> + Send + Sync>;
+
 /// Dépendances externes d'un travail (`DubDeps`), remplaçables dans les tests.
 #[derive(Clone)]
 pub struct DubDeps {
@@ -278,6 +285,9 @@ pub struct DubDeps {
     pub open_voice: OpenVoiceFn,
     pub assemble: AssembleFn,
     pub local_audio: Option<LocalAudioFn>,
+    /// Prononciation des noms demandée au modèle de traduction ; absent : seul
+    /// le réglage « Prononciation des noms » sert.
+    pub spell_names: Option<SpellNamesFn>,
 }
 
 impl DubDeps {
@@ -291,6 +301,7 @@ impl DubDeps {
     ) -> Self {
         let c = CommentaryDeps::defaults(video);
         let cm = commentary.clone();
+        let spell_db = commentary.db().clone();
         DubDeps {
             resolve_stream: c.resolve_stream,
             extract: c.extract,
@@ -314,8 +325,58 @@ impl DubDeps {
                         .await
                 })
             })),
+            spell_names: Some(Arc::new(move |words, signal| {
+                let db = spell_db.clone();
+                Box::pin(async move { spell_names_online(&db, words, signal).await })
+            })),
         }
     }
+}
+
+/// Orthographes phonétiques demandées au modèle de traduction configuré
+/// (MiniMax, OpenAI, serveur externe ou Ollama embarqué). L'Ollama embarqué
+/// est démarré pour la demande puis arrêté avant que le doublage charge ses
+/// voix (la carte graphique est libre : aucune traduction ne tourne pendant
+/// un doublage). `DUB_NAME_SPELLING=0` désactive.
+async fn spell_names_online(
+    db: &Db,
+    words: Vec<String>,
+    signal: AbortSignal,
+) -> Result<String, String> {
+    use crate::media::commentary_ai::{self as ai, ServiceMode, TranslateContext};
+    if std::env::var("DUB_NAME_SPELLING").ok().as_deref() == Some("0") {
+        return Err("désactivée (DUB_NAME_SPELLING=0)".into());
+    }
+    let settings = db
+        .with(Settings::load)
+        .unwrap_or_else(|_| Settings::unreadable());
+    let cfg = ai::commentary_config(&settings);
+    if let Some(d) = &cfg.disabled_reason {
+        return Err(d.clone());
+    }
+    let o = TranslateContext {
+        signal: Some(signal.clone()),
+        timeout: Some(Duration::from_secs(180)),
+        ..Default::default()
+    };
+    let message = names::spell_message(&words);
+    if cfg.translate_mode != ServiceMode::Embedded {
+        return ai::chat_completion(SPELL_PROMPT, &message, &cfg, &o, 0.0, false)
+            .await
+            .map_err(|e| e.message);
+    }
+    let session = crate::media::local_ai::OllamaSession::open(None).await?;
+    let r = async {
+        session
+            .ensure_model(&cfg.translate_model, None, Some(&signal))
+            .await?;
+        ai::chat_completion(SPELL_PROMPT, &message, &cfg, &o, 0.0, false)
+            .await
+            .map_err(|e| e.message)
+    }
+    .await;
+    session.close().await;
+    r
 }
 
 // ---------------------------------------------------------------- contrat de l'API

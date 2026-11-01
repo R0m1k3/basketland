@@ -338,6 +338,50 @@ pub fn group_cues(
     groups
 }
 
+/// Une phrase ne change pas de voix en cours de route : les morceaux d'une
+/// même phrase (mêmes règles que [`group_cues`], sans tenir compte du
+/// locuteur) prennent tous le locuteur qui en dit la plus grande part.
+/// L'empreinte vocale d'un morceau court est peu fiable : sans cela, une
+/// phrase pouvait commencer avec une voix de femme et finir avec une voix
+/// d'homme.
+pub fn unify_sentence_speakers(
+    cues: &[CommentaryCueRow],
+    speakers: &[Option<i64>],
+) -> Vec<Option<i64>> {
+    let same = vec![Some(0); cues.len()];
+    let mut out = speakers.to_vec();
+    out.resize(cues.len(), None);
+    for g in group_cues(cues, &same, None, None) {
+        if g.idx.len() < 2 {
+            continue;
+        }
+        let mut talk: Vec<(i64, f64)> = Vec::new();
+        for &i in &g.idx {
+            let Some(sp) = speakers.get(i).copied().flatten() else {
+                continue;
+            };
+            let d = js::max(0.0, cues[i].end_ts - cues[i].start_ts);
+            match talk.iter_mut().find(|(s, _)| *s == sp) {
+                Some(t) => t.1 += d,
+                None => talk.push((sp, d)),
+            }
+        }
+        // Le premier locuteur l'emporte à égalité.
+        let mut best: Option<(i64, f64)> = None;
+        for &(s, d) in &talk {
+            if best.is_none_or(|(_, bd)| d > bd) {
+                best = Some((s, d));
+            }
+        }
+        if let Some((s, _)) = best {
+            for &i in &g.idx {
+                out[i] = Some(s);
+            }
+        }
+    }
+    out
+}
+
 /// `nextDubChunk` : prochain tronçon à doubler : celui de la position visée
 /// (`keep_to` > `target`) ou le suivant, sinon le premier. `todo` : (keep_from, keep_to).
 pub fn next_dub_chunk(todo: &[(f64, f64)], target: f64) -> Option<usize> {
@@ -365,6 +409,56 @@ pub fn download_text(done: f64, total: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(seq: i64, start: f64, end: f64, fr: &str) -> CommentaryCueRow {
+        CommentaryCueRow {
+            match_id: 1,
+            seq,
+            start_ts: start,
+            end_ts: end,
+            text_en: String::new(),
+            text_fr: fr.into(),
+            untranslated: 0,
+            emphasis: 0,
+        }
+    }
+
+    #[test]
+    fn une_phrase_garde_sa_voix() {
+        let cues = [
+            row(0, 0.0, 0.8, "Et voilà"),
+            row(1, 1.0, 3.5, "Curry qui prend le tir à trois points"),
+            row(2, 3.7, 4.2, "dedans !"),
+            row(3, 5.0, 7.0, "Quelle saison pour lui."),
+        ];
+        // Le premier morceau, court, pris pour une autre voix (une femme).
+        let speakers = [Some(2), Some(0), Some(2), Some(1)];
+        assert_eq!(
+            unify_sentence_speakers(&cues, &speakers),
+            [Some(0), Some(0), Some(0), Some(1)]
+        );
+        let groups = group_cues(
+            &cues,
+            &unify_sentence_speakers(&cues, &speakers),
+            None,
+            None,
+        );
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0].text,
+            "Et voilà Curry qui prend le tir à trois points dedans !"
+        );
+        // Deux phrases distinctes gardent chacune leur locuteur ; sans locuteur, rien ne change.
+        let two = [row(0, 0.0, 1.0, "Bien joué."), row(1, 1.2, 2.0, "Oui")];
+        assert_eq!(
+            unify_sentence_speakers(&two, &[Some(0), Some(1)]),
+            [Some(0), Some(1)]
+        );
+        assert_eq!(
+            unify_sentence_speakers(&cues[..2], &[None, None]),
+            [None, None]
+        );
+    }
 
     #[test]
     fn to_fixed_comme_javascript() {
