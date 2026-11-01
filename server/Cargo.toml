@@ -33,6 +33,7 @@ indexmap = "2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
 fancy-regex = "0.14"
+flate2 = "1"
 
 [features]
 # Moteur OCR natif (libtesseract 5 + Leptonica, voir src/media/tesseract.rs) :

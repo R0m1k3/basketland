@@ -18,8 +18,10 @@ use std::sync::Mutex;
 
 /// Jobs lancés par le cron Rust, que le planificateur de Node saute
 /// (`BL_RUST_JOBS`) : tous, analyses vidéo et pré-traductions comprises.
-pub const RUST_JOBS: [&str; 7] = [
+pub const RUST_JOBS: [&str; 9] = [
     "sync-schedule",
+    "sync-cup",
+    "sync-tv-fr",
     "sync-season",
     "sync-stats",
     "sync-videos",
@@ -109,6 +111,55 @@ pub fn current_season() -> i32 {
     }
 }
 
+/// Matchs du calendrier ESPN écrits en base, avec leurs notes (NBA Cup…).
+fn store_matches(c: &Connection, list: &[espn_events::ParsedMatch]) -> rusqlite::Result<usize> {
+    let n = idb::upsert_matches(c, list)?;
+    idb::save_notes(c, list)?;
+    Ok(n)
+}
+
+/// NBA Cup de la saison en cours : octobre à décembre (phase de groupes,
+/// quarts, demies, finale), pour que l'onglet NBA Cup ait tout le tournoi
+/// dès le début de saison, au-delà des 7 jours de `sync-schedule`.
+pub async fn sync_cup(db: &Db) -> JobResult {
+    run_logged(db, "sync-cup", || async {
+        let season = current_season();
+        let mut total = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+        for month0 in 9..12u32 {
+            let Some((from, to)) = month_bounds(season, month0) else {
+                continue;
+            };
+            let r = async {
+                let matches = espn_events::fetch_scoreboard_range(from, to, "nba", 1000).await?;
+                let cup = matches
+                    .iter()
+                    .filter(|m| crate::cup::round_of(&m.note).is_some())
+                    .count();
+                db.run(move |c| store_matches(c, &matches)).await?;
+                Ok::<usize, String>(cup)
+            }
+            .await;
+            match r {
+                Ok(n) => total += n,
+                Err(e) => errors.push(format!("{season}-{}: {e}", month0 + 1)),
+            }
+        }
+        if !errors.is_empty() && total == 0 {
+            return Err(errors.join(" | "));
+        }
+        Ok(format!(
+            "{total} matchs de NBA Cup (saison {season}){}",
+            if errors.is_empty() {
+                String::new()
+            } else {
+                format!(" — erreurs: {}", errors.join(" | "))
+            }
+        ))
+    })
+    .await
+}
+
 /// Calendrier : 7 jours passés + 7 jours à venir (+ live).
 pub async fn sync_schedule(db: &Db) -> JobResult {
     run_logged(db, "sync-schedule", || async {
@@ -117,7 +168,7 @@ pub async fn sync_schedule(db: &Db) -> JobResult {
         let to = (now + Duration::days(7)).date_naive();
         let matches = espn_events::fetch_scoreboard_range(from, to, "nba", 1000).await?;
         let n = matches.len();
-        db.run(move |c| idb::upsert_matches(c, &matches)).await?;
+        db.run(move |c| store_matches(c, &matches)).await?;
         Ok(format!(
             "{n} matchs ({}→{})",
             espn_date(from),
@@ -157,7 +208,7 @@ pub async fn sync_season(db: &Db, season: f64) -> JobResult {
             let r = async {
                 let matches = espn_events::fetch_scoreboard_range(from, to, "nba", 1000).await?;
                 let n = matches.len();
-                db.run(move |c| idb::upsert_matches(c, &matches)).await?;
+                db.run(move |c| store_matches(c, &matches)).await?;
                 Ok::<usize, String>(n)
             }
             .await;
@@ -453,6 +504,8 @@ pub async fn run_job(
         "sync-stats" => sync_stats(db, 15).await,
         "sync-videos" => replays.sync_videos(db, 20).await.0,
         "sync-subtitles" => sync_subtitles(db, 50).await,
+        "sync-cup" => sync_cup(db).await,
+        "sync-tv-fr" => crate::tv_fr::sync_tv_fr(db).await,
         _ => return None,
     })
 }

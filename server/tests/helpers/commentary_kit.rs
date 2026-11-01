@@ -139,6 +139,7 @@ pub fn insert_match(db: &Db, id: i64, duration: Option<f64>) {
         clock_display: "0.0".into(),
         venue: String::new(),
         broadcast: "NBC".into(),
+        note: String::new(),
     };
     let s = id.to_string();
     let ok_id = format!("1665649{}", &s[s.len().saturating_sub(7)..]);

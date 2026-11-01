@@ -153,6 +153,22 @@ body {
   @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-ink-500 bg-ink-900/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper-mute transition hover:border-flame/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
 }
 
+/* --- NBA Cup : fond doré des matchs du tournoi ----------------------- */
+.cup-card {
+  border-color: rgba(217, 184, 100, 0.45);
+  background:
+    radial-gradient(120% 140% at 50% -40%, rgba(217, 184, 100, 0.2), transparent 60%),
+    repeating-linear-gradient(135deg, rgba(217, 184, 100, 0.05) 0 2px, transparent 2px 14px),
+    #15130f;
+}
+.cup-card:hover {
+  border-color: rgba(240, 212, 138, 0.7);
+  background:
+    radial-gradient(120% 140% at 50% -40%, rgba(217, 184, 100, 0.26), transparent 60%),
+    repeating-linear-gradient(135deg, rgba(217, 184, 100, 0.06) 0 2px, transparent 2px 14px),
+    #191610;
+}
+
 /* --- Titres de section ------------------------------------------------ */
 .section-title {
   @apply font-display text-[26px] font-extrabold uppercase leading-none tracking-tight sm:text-[32px];

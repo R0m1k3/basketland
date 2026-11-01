@@ -9,12 +9,14 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Map, Value};
 
-const JOBS: [&str; 5] = [
+const JOBS: [&str; 7] = [
     "sync-schedule",
     "sync-season",
     "sync-stats",
     "sync-videos",
     "sync-subtitles",
+    "sync-cup",
+    "sync-tv-fr",
 ];
 
 /// En-tête tel que le voit Node : octets lus en ISO-8859-1.

@@ -43,6 +43,10 @@ pub struct ParsedMatch {
     pub clock_display: String,
     pub venue: String,
     pub broadcast: String,
+    /// Notes ESPN de la rencontre (« NBA Cup - Group Play »…), jointes par
+    /// « ; ». Absentes de [`ParsedMatch::to_json`] (contrat de Node) : elles
+    /// sont écrites à part (`ingest_db::save_notes`).
+    pub note: String,
 }
 
 impl ParsedMatch {
@@ -305,6 +309,20 @@ fn broadcast_names(comp: &Value) -> String {
     names.join(", ")
 }
 
+/// Titres des notes de la rencontre (`competitions[0].notes[].headline`).
+fn note_headlines(comp: &Value) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for n in items(comp.get("notes")) {
+        if let Some(h) = n.get("headline").and_then(Value::as_str) {
+            let h = h.trim();
+            if !h.is_empty() && !out.iter().any(|x| x == h) {
+                out.push(h.to_string());
+            }
+        }
+    }
+    out.join("; ")
+}
+
 fn competitor<'a>(comp: &'a Value, side: &str) -> Option<&'a Value> {
     comp.get("competitors")?
         .as_array()?
@@ -368,6 +386,7 @@ pub fn parse_event(ev: &Value, league: &str) -> Option<ParsedMatch> {
         clock_display: str_or_empty(prop(Some(status), "displayClock")),
         venue: str_or_empty(prop(comp.get("venue"), "fullName")),
         broadcast: broadcast_names(comp),
+        note: note_headlines(comp),
     })
 }
 

@@ -104,6 +104,22 @@ pub fn upsert_matches(c: &Connection, list: &[ParsedMatch]) -> rusqlite::Result<
     Ok(list.len())
 }
 
+/// Notes ESPN des matchs (colonne `competition`, ajoutée par `migrate`) :
+/// seules les notes présentes sont écrites (une fiche sans notes n'efface
+/// pas celles du calendrier). Nombre de lignes modifiées.
+pub fn save_notes(c: &Connection, list: &[ParsedMatch]) -> rusqlite::Result<usize> {
+    tx(c, || {
+        let mut st = c.prepare_cached(
+            "UPDATE matches SET competition = ?1 WHERE id = ?2 AND IFNULL(competition, '') <> ?1",
+        )?;
+        let mut n = 0;
+        for m in list.iter().filter(|m| !m.note.is_empty()) {
+            n += st.execute(params![m.note, num(m.id)])?;
+        }
+        Ok(n)
+    })
+}
+
 fn matches_where(
     c: &Connection,
     sql: &str,

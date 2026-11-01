@@ -13,6 +13,8 @@ Application web de replays NBA, conteneurisée pour Unraid : calendrier complet 
 | **Statistiques** | Section « Statistiques du match » affichée **uniquement** quand le match est terminé : boxscore des deux équipes, lignes de chaque joueur (MIN, PTS, FG, 3PT, FT, REB, AST, TO, STL, BLK, OREB, DREB, PF, ±), leaders du match. |
 | **VF française synchronisée** | Sous-titres en français calés sur la vidéo, générés à partir du play-by-play et alignés sur l'audio original. Export WebVTT. Ajustement manuel du décalage possible. |
 | **Classement** | Classement NBA par conférence. |
+| **Diffusion en France** | Sur chaque match : **beIN SPORTS** (avec la chaîne pour les matchs à venir, direct ou différé), lu dans le guide des programmes public [XMLTV Fr](https://xmltvfr.fr) toutes les 4 h, et **Prime Video** (matchs dont Prime Video est diffuseur chez ESPN, matchs joués en Europe). Le guide couvre environ 5 jours : la chaîne d'un match apparaît dans les jours qui précèdent, et reste affichée une fois le match joué. `BL_TV_GUIDE_URL` : autre guide XMLTV (vide : désactivé). |
+| **NBA Cup** | Fond doré pour les matchs du tournoi partout dans l'application, et onglet `/nba-cup` : matchs à venir, résultats, classements des groupes (reconstitués d'après les rencontres) et phase finale (quarts, demies, finale, « à déterminer » tant que l'affiche n'est pas connue). L'onglet ne montre que la saison en cours : il repart de zéro chaque saison. |
 | **Page équipe** | `/equipes/[abbr]` : prochain match, derniers résultats, replays disponibles et bilan de la saison. Les noms d'équipes de la fiche match y mènent. |
 
 ## Architecture

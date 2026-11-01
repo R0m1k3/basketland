@@ -154,3 +154,36 @@ export interface SettingsPage {
   version: { commit: string | null; builtAt: string | null };
   version_text: string;
 }
+
+/** Ligne du classement d'un groupe de la NBA Cup. */
+export interface CupGroupRow {
+  abbr: string;
+  wins: number;
+  losses: number;
+  /** Points marqués, encaissés, différence. */
+  pf: number;
+  pa: number;
+  diff: number;
+  /** Qualifié pour les quarts (connu une fois la phase de groupes finie). */
+  qualified: boolean;
+}
+
+/** `GET /api/pages/nba-cup` : NBA Cup de la saison la plus récente. */
+export interface NbaCupPage {
+  spoilers: SpoilerMode;
+  today: string;
+  season: number | null;
+  /** Nombre de matchs de NBA Cup connus pour la saison. */
+  total: number;
+  conferences: {
+    conference: 'Est' | 'Ouest';
+    /** Toute la phase de groupes de la conférence est jouée. */
+    complete: boolean;
+    groups: { name: string; played: number; total: number; rows: CupGroupRow[] }[];
+  }[];
+  /** Phase finale : `null` = affiche pas encore connue. */
+  bracket: { quarter: (GameView | null)[]; semi: (GameView | null)[]; final: (GameView | null)[] };
+  champion: string | null;
+  upcoming: GameView[];
+  results: GameView[];
+}

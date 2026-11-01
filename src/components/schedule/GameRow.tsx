@@ -5,7 +5,7 @@ import { teamInfo, type TeamInfo } from '@/lib/teams';
 import TeamLogo from '@/components/ui/TeamLogo';
 import StatusPill from '@/components/ui/StatusPill';
 import { RevealButton, ScoreValue } from '@/components/ui/Score';
-import GameBadges from './GameBadges';
+import GameBadges, { hasBadges } from './GameBadges';
 
 /** Libellé accessible d'un match : « Detroit Pistons à New York Knicks, 01:00 ». */
 export function gameLabel(g: GameView): string {
@@ -68,12 +68,15 @@ export default function GameRow({
   const { awayWin, homeWin } = outcome(game);
   const started = game.status === 'final' || game.status === 'live';
   const ot = game.period > 4 ? (game.period > 5 ? ` · ${game.period - 4} prol.` : ' · Prol.') : '';
-  const badges = game.hasReplay || game.hasStats;
+  const badges = hasBadges(game, true);
+  const cup = !!game.cup;
 
   return (
     <article
       data-scope={game.id}
-      className="group relative isolate overflow-hidden rounded-2xl border border-ink-700/70 bg-ink-900/70 transition hover:border-ink-500 hover:bg-ink-850"
+      className={`group relative isolate overflow-hidden rounded-2xl border transition ${
+        cup ? 'cup-card' : 'border-ink-700/70 bg-ink-900/70 hover:border-ink-500 hover:bg-ink-850'
+      }`}
       style={{ '--team-a': away.accent, '--team-b': home.accent } as CSSProperties}
     >
       <div className="team-stripe absolute inset-x-0 top-0 h-[2px] opacity-50 transition-opacity group-hover:opacity-100" />
@@ -119,13 +122,13 @@ export default function GameRow({
 
         {badges && (
           <div className="hidden justify-end lg:flex">
-            <GameBadges game={game} />
+            <GameBadges game={game} cup className="justify-end" />
           </div>
         )}
       </div>
       {badges && (
         <div className="pointer-events-none -mt-1 flex justify-center pb-3 lg:hidden">
-          <GameBadges game={game} size="sm" />
+          <GameBadges game={game} size="sm" cup className="justify-center px-3" />
         </div>
       )}
     </article>

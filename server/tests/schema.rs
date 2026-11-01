@@ -17,13 +17,27 @@ fn master(c: &Connection) -> Vec<String> {
         .collect()
 }
 
+/// Colonnes de `matches` ajoutées par `migrate` depuis le retrait de Node
+/// (NBA Cup, diffusion en France) : absentes des bases des fixtures.
+const SINCE_NODE: &str = ", competition TEXT DEFAULT '', tv_fr TEXT DEFAULT ''";
+
 fn node_schema(fixture: &str) -> Vec<String> {
     let fx: Value = serde_json::from_str(fixture).unwrap();
     fx["schema"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|s| s.as_str().unwrap().to_string())
+        .map(|s| {
+            let s = s.as_str().unwrap();
+            if s.starts_with("CREATE TABLE matches (") {
+                s.replace(
+                    ", video_kind TEXT)",
+                    &format!(", video_kind TEXT{SINCE_NODE})"),
+                )
+            } else {
+                s.to_string()
+            }
+        })
         .collect()
 }
 
@@ -80,7 +94,11 @@ fn ancienne_base_migree_comme_node() {
             .map(Result::unwrap)
             .collect()
     };
-    assert!(cols("matches").contains(&"video_kind".to_string()));
+    assert!(cols("matches").ends_with(&[
+        "video_kind".to_string(),
+        "competition".to_string(),
+        "tv_fr".to_string()
+    ]));
     assert!(cols("commentary_tracks").ends_with(&[
         "complete".to_string(),
         "chunk_sec".to_string(),
@@ -108,8 +126,10 @@ fn ancienne_base_migree_comme_node() {
     }
     // Rejouée : rien ne change (la piste reste complète, pas de colonne en double).
     let n = cols("commentary_tracks").len();
+    let m = cols("matches").len();
     migrate(&c).unwrap();
     assert_eq!(cols("commentary_tracks").len(), n);
+    assert_eq!(cols("matches").len(), m);
 }
 
 #[test]

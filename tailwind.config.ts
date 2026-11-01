@@ -34,6 +34,15 @@ const config: Config = {
         win: '#3DDC97',
         loss: '#FF6B6B',
         warn: '#FFC24B',
+        // NBA Cup : or pâle du trophée (fond et repères des matchs de la Cup).
+        cup: {
+          DEFAULT: '#D9B864',
+          hot: '#F0D48A',
+          deep: '#8A6A22',
+        },
+        // Diffuseurs en France.
+        bein: '#7B3FE4',
+        prime: '#1A98FF',
       },
       fontFamily: {
         display: ['var(--font-display)', 'Impact', 'sans-serif'],

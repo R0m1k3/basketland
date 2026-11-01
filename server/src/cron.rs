@@ -117,6 +117,31 @@ fn schedule(st: AppState) {
             }
         },
     );
+    // NBA Cup de la saison (octobre à décembre) : tout le tournoi, au-delà
+    // des 7 jours du calendrier.
+    let d = db.clone();
+    every(
+        Duration::from_secs(6 * 60 * MIN),
+        Duration::from_secs(30),
+        move || {
+            let d = d.clone();
+            async move {
+                ingest::sync_cup(&d).await;
+            }
+        },
+    );
+    // Diffusions beIN SPORTS (guide des programmes, mis à jour chaque nuit).
+    let d = db.clone();
+    every(
+        Duration::from_secs(4 * 60 * MIN),
+        Duration::from_secs(45),
+        move || {
+            let d = d.clone();
+            async move {
+                crate::tv_fr::sync_tv_fr(&d).await;
+            }
+        },
+    );
     let d = db.clone();
     every(
         Duration::from_secs(5 * MIN),
