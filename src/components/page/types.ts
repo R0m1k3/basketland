@@ -126,7 +126,7 @@ export interface StandingsPage {
 }
 
 /** Moteur de transcription embarqué (Paramètres). */
-export type TranscribeEngine = 'whisper' | 'whisper-large' | 'nvidia';
+export type TranscribeEngine = 'whisper' | 'whisper-large';
 /** « Moteur de traduction » (Paramètres). */
 export type TranslateSettingsView = {
   /** Moteur réellement utilisé. */

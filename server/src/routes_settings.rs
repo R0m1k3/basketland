@@ -65,9 +65,7 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     if body.contains_key("transcribeEngine")
         && !s::is_transcribe_engine(body.get("transcribeEngine"))
     {
-        return Err(
-            "transcribeEngine invalide (attendu : 'whisper', 'whisper-large' ou 'nvidia')".into(),
-        );
+        return Err("transcribeEngine invalide (attendu : 'whisper' ou 'whisper-large')".into());
     }
     if body.contains_key("fetchParallel") && !s::is_fetch_parallel(body.get("fetchParallel")) {
         return Err("fetchParallel invalide (attendu : un entier de 1 à 32, ou null)".into());
@@ -188,13 +186,6 @@ pub async fn post(State(st): State<AppState>, uri: OriginalUri, req: Request) ->
         match r {
             Ok(set) => {
                 s::apply_fetch_parallel(&set);
-                // Moteur NVIDIA choisi : modèle téléchargé tout de suite, pas à
-                // la première traduction.
-                if body.get("transcribeEngine").and_then(Value::as_str) == Some("nvidia")
-                    && crate::media::commentary_ai::transcribe_engine_override(&set).is_none()
-                {
-                    crate::media::local_ai::prefetch_parakeet();
-                }
                 let mut out = Map::new();
                 out.insert("ok".into(), Value::Bool(true));
                 if let Value::Object(v) = s::settings_view(&set) {
@@ -265,27 +256,22 @@ mod tests {
     fn moteur_de_transcription() {
         for bad in [
             json!({"transcribeEngine": "parakeet"}),
+            json!({"transcribeEngine": "nvidia"}),
             json!({"transcribeEngine": null}),
         ] {
             assert_eq!(
                 plan(bad),
-                Err(
-                    "transcribeEngine invalide (attendu : 'whisper', 'whisper-large' ou 'nvidia')"
-                        .into()
-                )
+                Err("transcribeEngine invalide (attendu : 'whisper' ou 'whisper-large')".into())
             );
         }
-        assert_eq!(
-            plan(json!({"transcribeEngine": "nvidia"})),
-            Ok(vec![("transcribe_engine", Some("nvidia".into()))])
-        );
         let s = |v: Option<&str>| {
             crate::settings::Settings::from_pairs(v.map(|v| ("transcribe_engine", v)))
         };
         assert_eq!(crate::settings::transcribe_engine(&s(None)), "whisper");
+        // Ancien choix Parakeet (retiré) : Whisper turbo.
         assert_eq!(
             crate::settings::transcribe_engine(&s(Some("nvidia"))),
-            "nvidia"
+            "whisper"
         );
         assert_eq!(crate::settings::transcribe_engine(&s(Some("x"))), "whisper");
         assert_eq!(
@@ -298,7 +284,7 @@ mod tests {
         );
         assert_eq!(
             crate::settings::settings_view(&s(Some("nvidia")))["transcribeEngine"],
-            "nvidia"
+            "whisper"
         );
     }
 

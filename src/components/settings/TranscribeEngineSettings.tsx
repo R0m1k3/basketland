@@ -17,11 +17,6 @@ const OPTIONS: { value: TranscribeEngine; title: string; text: string }[] = [
     title: 'Whisper large-v3',
     text: 'Le modèle Whisper complet : transcription plus précise quand le public ou la musique couvrent les commentateurs, et meilleurs noms. Environ 2 à 3 fois plus lent que turbo.',
   },
-  {
-    value: 'nvidia',
-    title: 'NVIDIA Parakeet',
-    text: 'Parakeet TDT 0.6B, bien plus rapide sur la carte graphique : la traduction prend plus d’avance sur la lecture. Les noms des joueurs sont corrigés après coup.',
-  },
 ];
 
 /**
@@ -61,11 +56,9 @@ export default function TranscribeEngineSettings({
     setMsg({
       ok: true,
       text:
-        r.data.transcribeEngine === 'nvidia'
-          ? 'NVIDIA Parakeet choisi pour les prochaines traductions. Le modèle est téléchargé au début de la première transcription (lignes « [parakeet] » dans les journaux du conteneur).'
-          : r.data.transcribeEngine === 'whisper-large'
-            ? 'Whisper large-v3 choisi pour les prochaines traductions. Le modèle (~3 Go) est téléchargé au début de la première transcription.'
-            : 'Whisper turbo choisi pour les prochaines traductions.',
+        r.data.transcribeEngine === 'whisper-large'
+          ? 'Whisper large-v3 choisi pour les prochaines traductions. Le modèle (~3 Go) est téléchargé au début de la première transcription.'
+          : 'Whisper turbo choisi pour les prochaines traductions.',
     });
   }
 

@@ -51,7 +51,7 @@ Sans carte NVIDIA, tout fonctionne aussi, mais la traduction tourne sur le
 processeur (bien plus lente : plusieurs heures par match).
 
 **Plusieurs cartes** (p. ex. RTX 5060 Ti + RTX 3060) : tout le travail
-(Ollama, Whisper, Parakeet) tourne sur **la carte 0**, au
+(Ollama, Whisper) tourne sur **la carte 0**, au
 sens de `nvidia-smi` (ordre du bus PCI). Variable `CUDA_VISIBLE_DEVICES` :
 `0` par défaut, `1` pour l'autre carte, vide pour les laisser toutes visibles.
 Le journal `[commentaires] Ollama embarqué prêt (GPU)` confirme qu'Ollama
@@ -134,15 +134,12 @@ L'image est construite automatiquement par GitHub Actions à chaque push sur `ma
 ghcr.io/r0m1k3/basketland:latest
 ```
 
-Deux variantes (avant cette séparation : une seule image de 13,4 Go compressés, ≈ 25 Go sur le disque) :
-
-| Image | Contenu | Taille (compressée) |
-|---|---|---|
-| `ghcr.io/r0m1k3/basketland:latest` | Application, Ollama (CUDA 12), Whisper | plus légère qu'avant (voix retirées) |
-| `ghcr.io/r0m1k3/basketland:full` | En plus NVIDIA Parakeet (≈ 1,5 Go) | un peu plus grande que `latest` |
-
-`full` n'est construite qu'à la demande (Actions → *Build and Push Docker
-Image* → *Run workflow*, case « full ») ou pour une version étiquetée.
+Une seule image : l'application, Ollama (CUDA 12) et Whisper. Le doublage
+(voix de synthèse) et NVIDIA Parakeet ont été retirés, ainsi que l'ancienne
+variante `:full`. Au démarrage, leurs modèles restés dans
+`/data/models` (Qwen3-TTS, Fish S2 Pro, Parakeet, empreintes vocales,
+cache `hf/xet`) et les pistes doublées (`/data/dub`) sont effacés
+(`[serveur] modèles retirés … effacés` dans le journal).
 
 **Mises à jour légères** : les couches lourdes (système, Ollama, Python et
 CUDA) sont dans une image de base (`Dockerfile.base`) reconstruite seulement
@@ -247,8 +244,7 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   reçoit la liste des joueurs, les noms propres sont bien reconnus), Whisper
   large-v3 complet (`Systran/faster-whisper-large-v3`, ~1,6 Go de carte en
   int8 : plus précis quand le public couvre les commentateurs, 2 à 3 fois
-  plus lent) ou NVIDIA Parakeet TDT 0.6B (bien plus rapide sur la carte graphique : la traduction
-  prend plus d'avance sur la lecture ; les noms sont corrigés après coup).
+  plus lent).
   Modèle téléchargé au premier usage dans `/data/models`. Vaut pour les
   prochaines traductions (« Relancer la traduction » refait une piste).
 - **Moteur de traduction** : dans Paramètres › « Moteur de traduction »,
@@ -510,17 +506,14 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
-| `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper, Parakeet), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
+| `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
 | `WHISPER_BEAM_SIZE` | `5` | Largeur du faisceau de Whisper (1 à 10). `5` : plus juste quand le public couvre les commentateurs ; `1` (décodage glouton) : 1,5 à 2 fois plus rapide, moins juste sur l'audio bruité. |
 | `WHISPER_VAD_THRESHOLD` | `0.35` | Seuil de détection de la parole (Silero VAD, 0,5 par défaut chez faster-whisper) : plus bas, moins de passages couverts par le public écartés comme « pas de parole ». |
 | `WHISPER_VAD_MIN_SILENCE_MS` | `1000` | Silence (ms) qui sépare deux passages de parole. |
 | `WHISPER_VAD_PAD_MS` | `400` | Marge (ms) gardée autour de chaque passage de parole. |
-| `PARAKEET_PYTHON` | `/opt/parakeet/bin/python` | Python du moteur « NVIDIA Parakeet » (Paramètres › Transcription des commentateurs). |
-| `PARAKEET_QUANTIZATION` | `auto` | Précision de Parakeet : `auto` (modèle d'origine sur carte NVIDIA, `int8` sur processeur), `int8` ou `fp32`. |
-| `PARAKEET_BATCH_SIZE` | `8` | Passages de parole transcrits ensemble par Parakeet. |
-| `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama (et de Parakeet, cache Hugging Face `hf/`). |
+| `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama. |
 | `TRANSLATE_MODEL` | `translategemma:12b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **TranslateGemma 12B** (Q4_K_M, ≈ 8,1 Go), le modèle de traduction de Google (voir plus bas). Alternatives : `gemma4:e4b` (1er du banc d'essai, plus léger), `gemma4:12b`, `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
 | `TRANSLATE_PARALLEL` | `2` (`8` en ligne) | Lots (ou phrases en mode `mt`) traduits en même temps : 2 avec Ollama (embarqué ou externe), 8 avec une API en ligne (MiniMax, OpenAI ; 1 à 16). L'Ollama embarqué règle `OLLAMA_NUM_PARALLEL` pareil ; pour un Ollama externe, le régler soi-même. Avec Ollama, c'est aussi le nombre de lots en cours **tous tronçons confondus** (les autres attendent leur tour dans Basketland, pas dans la file d'Ollama où l'attente comptait dans `TRANSLATE_TIMEOUT_MS`). Sur une carte de 12 Go ou plus avec `gemma4:e4b`, `4` accélère encore nettement. La réflexion des modèles (Gemma 4, Qwen 3) est coupée (`think: false`) : inutile pour traduire, elle ajoutait des centaines de jetons cachés à chaque lot et pouvait tronquer la réponse (`num_predict`). |

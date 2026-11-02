@@ -27,7 +27,7 @@ pub mod keys {
     /// Traduction des commentaires par MiniMax : '1' (activée) ; modèle texte.
     pub const MINIMAX_TRANSLATE: &str = "minimax_translate";
     pub const MINIMAX_TRANSLATE_MODEL: &str = "minimax_translate_model";
-    /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'nvidia' (Parakeet).
+    /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'whisper-large'.
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
     pub const TRANSLATE_ENGINE: &str = "translate_engine";
     pub const TRANSLATE_LOCAL_MODEL: &str = "translate_local_model";
@@ -181,20 +181,19 @@ pub fn auto_translate_enabled(s: &Settings) -> bool {
 }
 
 /// Moteurs de transcription embarqués proposés dans les Paramètres :
-/// Whisper large-v3-turbo (défaut), Whisper large-v3 complet (plus précis),
-/// NVIDIA Parakeet.
-pub const TRANSCRIBE_ENGINES: [&str; 3] = ["whisper", "whisper-large", "nvidia"];
+/// Whisper large-v3-turbo (défaut) et Whisper large-v3 complet (plus précis).
+pub const TRANSCRIBE_ENGINES: [&str; 2] = ["whisper", "whisper-large"];
 
 /// Valeur acceptée pour `transcribeEngine`.
 pub fn is_transcribe_engine(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::String(s)) if TRANSCRIBE_ENGINES.contains(&s.as_str()))
 }
 
-/// Moteur de transcription embarqué : 'nvidia' (Parakeet), 'whisper-large'
-/// (Whisper large-v3 complet), sinon 'whisper' (large-v3-turbo, défaut).
+/// Moteur de transcription embarqué : 'whisper-large' (Whisper large-v3
+/// complet), sinon 'whisper' (large-v3-turbo, défaut ; aussi pour l'ancien
+/// choix 'nvidia', Parakeet ayant été retiré).
 pub fn transcribe_engine(s: &Settings) -> &'static str {
     match s.get(keys::TRANSCRIBE_ENGINE) {
-        Some("nvidia") => "nvidia",
         Some("whisper-large") => "whisper-large",
         _ => "whisper",
     }

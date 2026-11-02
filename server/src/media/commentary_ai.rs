@@ -19,8 +19,7 @@
 use super::abort::{is_aborted, sleep, wait_aborted, AbortSignal};
 use super::commentary_cues::{parse_verbose_json, Transcript};
 use super::local_ai::{
-    ai_client, embedded_ollama_available, embedded_ollama_url, embedded_parakeet_available,
-    embedded_whisper_available, PARAKEET_MODEL,
+    ai_client, embedded_ollama_available, embedded_ollama_url, embedded_whisper_available,
 };
 use super::roster_names::{name_rendered, RosterIndex};
 use crate::api::js_num_value;
@@ -152,15 +151,13 @@ impl CommentaryConfig {
 
 impl CommentaryConfig {
     /// Moteurs employés, pour le journal du démarrage d'une traduction :
-    /// « transcription : NVIDIA Parakeet (…) ; traduction : MiniMax (…) ».
+    /// « transcription : Whisper embarqué (…) ; traduction : MiniMax (…) ».
     pub fn engines_label(&self) -> String {
         let asr = if self.transcribe_mode == ServiceMode::Remote {
             format!(
                 "serveur externe {} ({})",
                 self.transcribe_url, self.transcribe_model
             )
-        } else if super::local_ai::is_parakeet_model(&self.transcribe_model) {
-            format!("NVIDIA Parakeet embarqué ({})", self.transcribe_model)
         } else {
             format!("Whisper embarqué ({})", self.transcribe_model)
         };
@@ -181,9 +178,8 @@ impl CommentaryConfig {
 
 /// Pourquoi le moteur choisi dans les Paramètres (`transcribe_engine`) n'est
 /// PAS celui qui servira, ou `None` s'il est bien appliqué : serveur externe
-/// (`TRANSCRIBE_URL`), modèle imposé (`TRANSCRIBE_MODEL`), ou environnement
-/// Parakeet absent de l'image.
-pub fn transcribe_engine_override(s: &Settings) -> Option<String> {
+/// (`TRANSCRIBE_URL`) ou modèle imposé (`TRANSCRIBE_MODEL`).
+pub fn transcribe_engine_override(_s: &Settings) -> Option<String> {
     if let Some(url) = env_trim("TRANSCRIBE_URL") {
         return Some(format!(
             "La transcription passe par un serveur externe (TRANSCRIBE_URL = {url}) : ce choix est sans effet."
@@ -193,11 +189,6 @@ pub fn transcribe_engine_override(s: &Settings) -> Option<String> {
         return Some(format!(
             "La variable TRANSCRIBE_MODEL = {model} est définie dans le conteneur : elle l'emporte sur ce choix. Retirez-la pour utiliser le moteur choisi ici."
         ));
-    }
-    if settings::transcribe_engine(s) == "nvidia" && !embedded_parakeet_available() {
-        return Some(
-            "Parakeet est absent de cette image (environnement /opt/parakeet introuvable) : il n'est que dans l'image complète ghcr.io/r0m1k3/basketland:full.".into(),
-        );
     }
     None
 }
@@ -306,19 +297,13 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         Some(o) => o.url.clone(),
         None => trim_url(env("TRANSLATE_URL")),
     };
-    // Moteur embarqué choisi dans les Paramètres : Whisper (défaut) ou NVIDIA
-    // Parakeet ; `TRANSCRIBE_MODEL` l'emporte, et un serveur externe
+    // Moteur embarqué choisi dans les Paramètres : Whisper turbo (défaut) ou
+    // Whisper large-v3 ; `TRANSCRIBE_MODEL` l'emporte, et un serveur externe
     // (`TRANSCRIBE_URL`) garde son propre modèle.
     let chosen = (remote_asr.is_empty() && env_trim("TRANSCRIBE_MODEL").is_none())
         .then(|| crate::settings::transcribe_engine(s));
-    let nvidia = chosen == Some("nvidia");
     let whisper_large = chosen == Some("whisper-large");
-    let asr_ok = !remote_asr.is_empty()
-        || if nvidia {
-            embedded_parakeet_available()
-        } else {
-            embedded_whisper_available()
-        };
+    let asr_ok = !remote_asr.is_empty() || embedded_whisper_available();
     let mt_ok = !remote_mt.is_empty() || embedded_ollama_available();
     let disabled_reason = if env("COMMENTARY_DISABLED").as_deref() == Some("1") {
         Some("traduction des commentaires désactivée (COMMENTARY_DISABLED=1)")
@@ -342,9 +327,7 @@ pub fn commentary_config(s: &Settings) -> CommentaryConfig {
         transcribe_mode: mode(&remote_asr),
         translate_mode: mode(&remote_mt),
         transcribe_url: remote_asr.clone(),
-        transcribe_model: if nvidia {
-            PARAKEET_MODEL.into()
-        } else if whisper_large {
+        transcribe_model: if whisper_large {
             WHISPER_LARGE_MODEL.into()
         } else {
             env_trim("TRANSCRIBE_MODEL").unwrap_or_else(|| DEFAULT_TRANSCRIBE_MODEL.into())
@@ -2212,7 +2195,7 @@ mod tests {
             transcribe_mode: ServiceMode::Embedded,
             translate_mode: ServiceMode::Remote,
             transcribe_url: String::new(),
-            transcribe_model: crate::media::local_ai::PARAKEET_MODEL.into(),
+            transcribe_model: WHISPER_LARGE_MODEL.into(),
             translate_url: "https://api.minimax.io/v1".into(),
             translate_model: "MiniMax-M2".into(),
             translate_engine: TranslateEngine::Chat,
@@ -2226,7 +2209,7 @@ mod tests {
         };
         assert_eq!(
             c.engines_label(),
-            "transcription : NVIDIA Parakeet embarqué (nemo-parakeet-tdt-0.6b-v2) ; traduction : MiniMax (MiniMax-M2)"
+            format!("transcription : Whisper embarqué ({WHISPER_LARGE_MODEL}) ; traduction : MiniMax (MiniMax-M2)")
         );
         c.transcribe_model = "deepdml/faster-whisper-large-v3-turbo-ct2".into();
         c.translate_mode = ServiceMode::Embedded;
