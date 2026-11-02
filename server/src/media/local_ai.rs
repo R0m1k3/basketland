@@ -70,31 +70,76 @@ pub fn embedded_whisper_available() -> bool {
     Path::new(&p.python).exists() && Path::new(&p.worker).exists()
 }
 
-/// Modèle du moteur « NVIDIA » (Parakeet TDT 0.6B v2, anglais, par onnx-asr).
-pub const PARAKEET_MODEL: &str = "nemo-parakeet-tdt-0.6b-v2";
-
-/// Modèle de transcription NVIDIA Parakeet (sinon : Whisper).
-pub fn is_parakeet_model(model: &str) -> bool {
-    model.contains("parakeet")
+/// Modèles des moteurs retirés (doublage : Qwen3-TTS, Fish S2 Pro, empreintes
+/// et genre des voix ; transcription : NVIDIA Parakeet) restés dans
+/// `models` (`/data/models`) : effacés, avec le cache de téléchargement
+/// Hugging Face (`hf/xet`, refait au besoin). Les modèles de Whisper
+/// (`whisper/`) et d'Ollama (`ollama/`) ne sont pas touchés. Rend les
+/// dossiers effacés et la place libérée (octets).
+pub fn purge_retired_models(models: &Path) -> (Vec<PathBuf>, u64) {
+    let hf = models.join("hf");
+    let mut targets = vec![
+        models.join("omni-home"),
+        hf.join("speechbrain"),
+        hf.join("xet"),
+    ];
+    if let Ok(rd) = std::fs::read_dir(hf.join("hub")) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            let retired = [
+                "models--fishaudio--",
+                "models--qwen--qwen3-tts",
+                "models--jaesunghuh--",
+                "models--speechbrain--",
+                "models--istupakov--",
+            ]
+            .iter()
+            .any(|p| name.starts_with(p))
+                || (name.starts_with("models--") && name.contains("parakeet"));
+            if retired {
+                targets.push(e.path());
+            }
+        }
+    }
+    let mut removed = Vec::new();
+    let mut freed = 0;
+    for t in targets {
+        let Ok(meta) = std::fs::symlink_metadata(&t) else {
+            continue;
+        };
+        let size = if meta.is_dir() {
+            dir_size(&t)
+        } else {
+            meta.len()
+        };
+        let r = if meta.is_dir() {
+            std::fs::remove_dir_all(&t)
+        } else {
+            std::fs::remove_file(&t)
+        };
+        match r {
+            Ok(()) => {
+                freed += size;
+                removed.push(t);
+            }
+            Err(e) => eprintln!("[modèles] {} non effacé : {e}", t.display()),
+        }
+    }
+    (removed, freed)
 }
 
-/// Python et script du moteur Parakeet (`PARAKEET_PYTHON`, `PARAKEET_WORKER`).
-pub fn parakeet_paths() -> (String, String) {
-    (
-        env_or("PARAKEET_PYTHON", || "/opt/parakeet/bin/python".into()),
-        env_or("PARAKEET_WORKER", || {
-            cwd()
-                .join("scripts")
-                .join("parakeet_worker.py")
-                .to_string_lossy()
-                .into_owned()
-        }),
-    )
-}
-
-pub fn embedded_parakeet_available() -> bool {
-    let (python, worker) = parakeet_paths();
-    Path::new(&python).exists() && Path::new(&worker).exists()
+/// Taille d'un dossier (fichiers seulement, liens non suivis).
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    rd.flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
+            _ => 0,
+        })
+        .sum()
 }
 
 pub fn embedded_ollama_available() -> bool {
@@ -197,24 +242,6 @@ fn whisper_ready_error(e: Option<&Value>) -> String {
     }
 }
 
-fn parakeet_ready_error(e: Option<&Value>) -> String {
-    match e {
-        None | Some(Value::Null) => "Parakeet : échec du chargement".into(),
-        Some(v) => js_string(v),
-    }
-}
-
-fn parakeet_exit_message(why: &str, tail: &str) -> String {
-    format!(
-        "Parakeet s'est arrêté ({why}){}",
-        if tail.is_empty() {
-            String::new()
-        } else {
-            format!(" : {tail}")
-        }
-    )
-}
-
 fn whisper_exit_message(why: &str, tail: &str) -> String {
     format!(
         "Whisper s'est arrêté ({why}){}",
@@ -226,9 +253,8 @@ fn whisper_exit_message(why: &str, tail: &str) -> String {
     )
 }
 
-/// Environnement des processus Whisper et Parakeet : cache Hugging Face
-/// (`/data/models/hf`) et cuBLAS/cuDNN des paquets pip de l'environnement
-/// Whisper (Parakeet les partage).
+/// Environnement du processus Whisper : cache Hugging Face
+/// (`/data/models/hf`) et cuBLAS/cuDNN des paquets pip de son environnement.
 fn worker_env(models: &Path) -> Vec<(String, String)> {
     let lib = whisper_library_path(&embedded_paths().python);
     let mut env = vec![
@@ -251,98 +277,17 @@ fn worker_env(models: &Path) -> Vec<(String, String)> {
     env
 }
 
-/// Téléchargement du modèle Parakeet en cours (un seul à la fois).
-static PARAKEET_PREFETCH: AtomicBool = AtomicBool::new(false);
-
-/// Télécharge en arrière-plan le modèle Parakeet (`parakeet_worker.py
-/// --prefetch` : fichiers seulement, rien n'est chargé sur le GPU), pour que
-/// la première traduction n'attende pas les ~2,5 Go du modèle. Appelé dès que
-/// le moteur NVIDIA est choisi dans les Paramètres, et au démarrage s'il l'est
-/// déjà ; sans effet si un téléchargement est déjà en cours ou si Parakeet est
-/// absent de l'image. Modèle déjà présent : le processus le constate et quitte.
-pub fn prefetch_parakeet() {
-    if !embedded_parakeet_available() || PARAKEET_PREFETCH.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tokio::spawn(async move {
-        let r = run_parakeet_prefetch().await;
-        PARAKEET_PREFETCH.store(false, Ordering::SeqCst);
-        if let Err(e) = r {
-            eprintln!("[parakeet] téléchargement anticipé du modèle impossible : {e}");
-        }
-    });
-}
-
-async fn run_parakeet_prefetch() -> Result<(), String> {
-    let (python, worker) = parakeet_paths();
-    let models = models_dir();
-    std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
-    let mut child = Command::new(&python)
-        .args([
-            worker.as_str(),
-            "--model",
-            PARAKEET_MODEL,
-            "--device",
-            &env_or("WHISPER_DEVICE", || "auto".into()),
-            "--prefetch",
-        ])
-        .envs(worker_env(&models))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| short(&spawn_error_text(&python, &e)))?;
-    lower_priority(child.id());
-    if let Some(mut err) = child.stderr.take() {
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            match err.read(&mut chunk).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            }
-            while let Some(i) = buf.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = buf.drain(..=i).collect();
-                let l = String::from_utf8_lossy(&line);
-                let l = js::trim(&l);
-                if !l.is_empty() {
-                    if l.starts_with("[parakeet]") {
-                        println!("{l}");
-                    } else {
-                        println!("[parakeet] {l}");
-                    }
-                }
-            }
-        }
-    }
-    let status = child.wait().await.map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("le processus s'est arrêté ({status})"))
-    }
-}
-
 impl WhisperSession {
     /// `WhisperSession.open` : lance le processus et attend que le modèle soit
     /// prêt (`WHISPER_LOAD_TIMEOUT_MS`, 30 min par défaut ; le premier
     /// lancement le télécharge).
-    ///
-    /// Modèle Parakeet ([`is_parakeet_model`]) : même protocole, processus
-    /// `scripts/parakeet_worker.py` (moteur « NVIDIA » de la page Paramètres).
     pub async fn open(model: &str, timeout: Option<Duration>) -> Result<WhisperSession, String> {
         let p = embedded_paths();
-        let parakeet = is_parakeet_model(model);
-        let (python, worker, name) = if parakeet {
-            let (py, w) = parakeet_paths();
-            (py, w, "Parakeet")
-        } else {
-            (p.python.clone(), p.worker.clone(), "Whisper")
-        };
+        let (python, worker, name) = (p.python.clone(), p.worker.clone(), "Whisper");
         let models = models_dir();
         std::fs::create_dir_all(&models).map_err(|e| e.to_string())?;
         let env = worker_env(&models);
-        let mut args = vec![
+        let args = vec![
             worker,
             "--model".into(),
             model.into(),
@@ -352,15 +297,13 @@ impl WhisperSession {
             env_or("WHISPER_COMPUTE_TYPE", || "auto".into()),
             "--download-root".into(),
             models.join("whisper").to_string_lossy().into_owned(),
-        ];
-        if !parakeet {
             // Recherche en faisceau (`WHISPER_BEAM_SIZE`, 5) : plus juste que le
             // décodage glouton (1) quand le public couvre les commentateurs,
             // 1,5 à 2 fois plus lent (la carte a la marge).
-            args.push("--beam-size".into());
-            args.push(whisper_beam_size().to_string());
-        }
-        let tag = if parakeet { "[parakeet]" } else { "[whisper]" };
+            "--beam-size".into(),
+            whisper_beam_size().to_string(),
+        ];
+        let tag = "[whisper]";
         let spec = WorkerSpec {
             program: python.clone(),
             args,
@@ -378,16 +321,8 @@ impl WhisperSession {
                 }
             }),
             on_stderr_end: Box::new(|| {}),
-            ready_error: if parakeet {
-                parakeet_ready_error
-            } else {
-                whisper_ready_error
-            },
-            exit_message: if parakeet {
-                parakeet_exit_message
-            } else {
-                whisper_exit_message
-            },
+            ready_error: whisper_ready_error,
+            exit_message: whisper_exit_message,
         };
         let (worker, ready) = JsonWorker::spawn(spec).map_err(|e| {
             format!(
@@ -427,11 +362,7 @@ impl WhisperSession {
                     None | Some(Value::Null) => "?".to_string(),
                     Some(v) => js_string(v),
                 };
-                if parakeet {
-                    println!("[commentaires] Parakeet (NVIDIA) embarqué prêt ({model}, {device})");
-                } else {
-                    println!("[commentaires] Whisper embarqué prêt ({model}, {device})");
-                }
+                println!("[commentaires] Whisper embarqué prêt ({model}, {device})");
                 Ok(s)
             }
             Err(e) => {
@@ -847,6 +778,47 @@ impl Drop for OllamaSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modeles_retires_effaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = tmp.path();
+        let mk = |rel: &str| {
+            let d = m.join(rel);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("poids.bin"), vec![0u8; 1000]).unwrap();
+        };
+        for rel in [
+            "hf/hub/models--fishaudio--s2-pro",
+            "hf/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base",
+            "hf/hub/models--Qwen--Qwen3-TTS-Tokenizer-12Hz",
+            "hf/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx",
+            "hf/hub/models--JaesungHuh--voice-gender-classifier",
+            "hf/speechbrain/spkrec-ecapa-voxceleb",
+            "hf/xet/chunk-cache",
+            "omni-home/cache",
+            // Gardés : Whisper, Ollama, et tout autre modèle Hugging Face.
+            "whisper/models--deepdml--faster-whisper-large-v3-turbo-ct2",
+            "ollama/blobs",
+            "hf/hub/models--Systran--faster-whisper-large-v3",
+        ] {
+            mk(rel);
+        }
+        let (removed, freed) = purge_retired_models(m);
+        assert_eq!(removed.len(), 8, "{removed:?}");
+        assert_eq!(freed, 8000);
+        for kept in [
+            "whisper/models--deepdml--faster-whisper-large-v3-turbo-ct2",
+            "ollama/blobs",
+            "hf/hub/models--Systran--faster-whisper-large-v3",
+        ] {
+            assert!(m.join(kept).join("poids.bin").exists(), "{kept}");
+        }
+        assert!(!m.join("omni-home").exists() && !m.join("hf/xet").exists());
+        // Rien de plus à effacer ensuite.
+        assert_eq!(purge_retired_models(m), (vec![], 0));
+        assert_eq!(purge_retired_models(&m.join("absent")), (vec![], 0));
+    }
 
     #[test]
     fn echec_d_ollama_explique() {

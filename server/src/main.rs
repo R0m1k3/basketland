@@ -97,8 +97,18 @@ async fn main() {
         Ok(Err(e)) => eprintln!("[serveur] {e}"),
         Err(e) => eprintln!("[serveur] schéma de la base : {e}"),
     }
-    // Doublage français retiré : les pistes doublées (audio) ne servent plus.
+    // Doublage français et Parakeet retirés : leurs modèles (plusieurs Go) et
+    // les pistes doublées (audio) ne servent plus.
     tokio::task::spawn_blocking(|| {
+        let models = basketland_server::media::local_ai::models_dir();
+        let (removed, freed) = basketland_server::media::local_ai::purge_retired_models(&models);
+        if !removed.is_empty() {
+            println!(
+                "[serveur] modèles retirés (voix du doublage, Parakeet) effacés : {} dossier(s), {:.1} Go libérés",
+                removed.len(),
+                freed as f64 / 1e9
+            );
+        }
         let dir = basketland_server::ingest::data_dir().join("dub");
         if dir.is_dir() {
             match std::fs::remove_dir_all(&dir) {

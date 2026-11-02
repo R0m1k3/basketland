@@ -1,8 +1,7 @@
 //! Processus enfants des tâches lourdes : priorité CPU basse
 //! (`procPriority.ts`), arrêt propre (`stopChild` de `localAi.ts`), et
 //! processus de travail Python qui parlent JSON, une ligne par message, sur
-//! stdin/stdout (Whisper, Parakeet) — protocole de `scripts/whisper_worker.py`
-//! et `scripts/parakeet_worker.py`.
+//! stdin/stdout (Whisper) — protocole de `scripts/whisper_worker.py`.
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;
