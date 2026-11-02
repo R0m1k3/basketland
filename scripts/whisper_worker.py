@@ -39,15 +39,39 @@ def load_model(name: str, device: str, compute_type: str, download_root: str):
             import ctranslate2
 
             if ctranslate2.get_cuda_device_count() > 0:
-                # int8_float16 : ~1,2-1,5 Go de VRAM au lieu de ~2-2,5 Go en
-                # float16, sans perte mesurable ; la carte est partagée avec
-                # la traduction et le doublage.
-                return make("cuda", "int8_float16" if compute_type == "auto" else compute_type), "cuda"
+                # float16 : pleine précision du modèle (~1,6 Go de VRAM pour
+                # turbo, ~3 Go pour large-v3) ; int8_float16 (WHISPER_COMPUTE_TYPE)
+                # économise la moitié de la mémoire, au prix d'un peu de justesse.
+                return make("cuda", "float16" if compute_type == "auto" else compute_type), "cuda"
             if device == "cuda":
                 log("aucun GPU CUDA visible : repli sur le processeur")
         except Exception as e:  # bibliothèques CUDA absentes ou pilote trop ancien
             log(f"GPU inutilisable ({e}) : repli sur le processeur")
     return make("cpu", "int8" if compute_type == "auto" else compute_type), "cpu"
+
+
+def env_float(name: str, default: float, lo: float, hi: float) -> float:
+    try:
+        return max(lo, min(hi, float(os.environ.get(name) or default)))
+    except ValueError:
+        log(f"{name} invalide : {default} utilisé")
+        return default
+
+
+def vad_parameters() -> dict:
+    """
+    Détection de la parole (Silero VAD) réglée pour un commentaire sportif :
+    la voix est couverte par le public et la musique, le seuil par défaut
+    (0,5) écarte des passages entiers comme « pas de parole ».
+    `WHISPER_VAD_THRESHOLD` (0,35) : probabilité de parole minimale ;
+    `WHISPER_VAD_MIN_SILENCE_MS` (1000) : silence qui sépare deux passages ;
+    `WHISPER_VAD_PAD_MS` (400) : marge gardée autour de chaque passage.
+    """
+    return {
+        "threshold": env_float("WHISPER_VAD_THRESHOLD", 0.35, 0.05, 0.95),
+        "min_silence_duration_ms": int(env_float("WHISPER_VAD_MIN_SILENCE_MS", 1000, 100, 10000)),
+        "speech_pad_ms": int(env_float("WHISPER_VAD_PAD_MS", 400, 0, 2000)),
+    }
 
 
 def batch_size_for(device: str) -> int:
@@ -148,6 +172,7 @@ def main() -> int:
                 hotwords=req.get("hotwords") or None,
                 word_timestamps=True,
                 vad_filter=True,
+                vad_parameters=vad_parameters(),
                 beam_size=args.beam_size,
                 # Évite qu'une hallucination se propage d'un segment au suivant.
                 condition_on_previous_text=False,

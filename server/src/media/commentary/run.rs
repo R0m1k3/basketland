@@ -452,6 +452,22 @@ fn chunk_audio(dir: &Path, p: &ChunkPlan) -> PathBuf {
     dir.join(format!("{}.ogg", chunk_name(p)))
 }
 
+/// Réglages de la transcription qui changent son résultat : une transcription
+/// gardée n'est reprise que s'ils n'ont pas changé (sinon elle est refaite).
+/// `v2` : recherche en faisceau, pleine précision, détection de la parole
+/// réglée pour le commentaire sportif.
+fn asr_settings() -> String {
+    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    format!(
+        "v2|beam={}|compute={}|vad={},{},{}",
+        crate::media::local_ai::whisper_beam_size(),
+        env("WHISPER_COMPUTE_TYPE"),
+        env("WHISPER_VAD_THRESHOLD"),
+        env("WHISPER_VAD_MIN_SILENCE_MS"),
+        env("WHISPER_VAD_PAD_MS"),
+    )
+}
+
 fn chunk_json(dir: &Path, p: &ChunkPlan) -> PathBuf {
     dir.join(format!("{}.json", chunk_name(p)))
 }
@@ -770,6 +786,7 @@ impl RunCtx {
         let cache_json = chunk_json(&self.dir, plan);
         if let Some(v) = read_json(&cache_json) {
             if v.get("model").and_then(Value::as_str) == Some(self.cfg.transcribe_model.as_str())
+                && v.get("asr").and_then(Value::as_str) == Some(asr_settings().as_str())
                 && js::truthy(v.get("transcript"))
             {
                 return Ok(parse_verbose_json(&v["transcript"]));
@@ -833,7 +850,7 @@ impl RunCtx {
         }
         write_json(
             &cache_json,
-            &json!({ "model": self.cfg.transcribe_model, "transcript": transcript.to_json() }),
+            &json!({ "model": self.cfg.transcribe_model, "asr": asr_settings(), "transcript": transcript.to_json() }),
         )
         .map_err(io_err)?;
         let _ = std::fs::remove_file(&audio); // transcrit : l'audio du tronçon ne sert plus

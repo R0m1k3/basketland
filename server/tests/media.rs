@@ -1093,11 +1093,11 @@ async fn parakeet_embarque_protocole() {
     assert!(e.starts_with("Parakeet ne démarre pas"), "{e}");
     use basketland_server::media::local_ai::whisper_beam_size;
     for (v, want) in [
-        (None, 1),
-        (Some("5"), 5),
-        (Some("0"), 1),
-        (Some("x"), 1),
-        (Some("11"), 1),
+        (None, 5),
+        (Some("1"), 1),
+        (Some("0"), 5),
+        (Some("x"), 5),
+        (Some("11"), 5),
     ] {
         match v {
             Some(v) => set("WHISPER_BEAM_SIZE", v),
@@ -1161,9 +1161,9 @@ async fn whisper_embarque_protocole() {
             "auto",
             "--download-root",
             dir.path().join("models/whisper").to_string_lossy(),
-            // Décodage glouton par défaut (`WHISPER_BEAM_SIZE`).
+            // Recherche en faisceau par défaut (`WHISPER_BEAM_SIZE`).
             "--beam-size",
-            "1"
+            "5"
         ])
         .as_array()
         .unwrap()[..]
