@@ -596,6 +596,8 @@ async fn ollama_embarque_api_native() {
         json!({ "temperature": 0.2, "top_p": 0.9, "num_ctx": 4096, "num_predict": 1200 })
     );
     assert_eq!(b0["format"]["required"], json!(["t"]));
+    // Gemma 4 réfléchit par défaut sous Ollama : coupé (lent, réponse tronquée).
+    assert_eq!(b0["think"], json!(false));
     let b1: Value = serde_json::from_str(&reqs[1].body).unwrap();
     assert!(b1.get("format").is_none());
 }

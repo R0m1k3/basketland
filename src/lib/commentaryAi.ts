@@ -609,6 +609,8 @@ export async function chatCompletion(
           messages,
           stream: false,
           keep_alive: '10m',
+          // Gemma 4, Qwen 3… réfléchissent par défaut sous Ollama : coupé (lent, réponse tronquée).
+          think: false,
           format: json && schemaSafe(cfg.translateModel) ? TRANSLATION_SCHEMA : undefined,
           options: { temperature, top_p: 0.9, num_ctx: 4096, num_predict: 1200 },
         }

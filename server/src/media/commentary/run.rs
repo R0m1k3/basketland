@@ -24,7 +24,8 @@ use crate::media::audio::{
 use crate::media::audio_energy::{audio_envelope, with_energy, Envelope};
 use crate::media::commentary_ai::{
     transcribe_audio, translate_batch, whisper_prompt, CommentaryConfig, Service, ServiceMode,
-    TranscribeOptions, TranslateContext, TranslateLine, TranslatedLine, CONTEXT_LINES,
+    TranscribeOptions, TranslateContext, TranslateLine, TranslateProvider, TranslatedLine,
+    CONTEXT_LINES,
 };
 use crate::media::commentary_cues::{parse_verbose_json, Transcript};
 use crate::media::local_ai::{OllamaSession, WhisperSession};
@@ -587,6 +588,25 @@ struct RunCtx {
     mt: Mutex<Option<MtShared>>,
     /// Échecs du son seul (DASH) dans ce travail : au deuxième, on ne le retente plus.
     dash_failures: AtomicUsize,
+    /// Lots en cours de traduction, tous tronçons confondus ([`lot_slots`]).
+    lot_slots: tokio::sync::Semaphore,
+}
+
+/// Lots traduits en même temps sur l'ensemble des tronçons en cours. Ollama
+/// ne sert que `OLLAMA_NUM_PARALLEL` (= `cfg.parallel`) requêtes à la fois et
+/// met les autres en attente chez lui : avec trois tronçons d'avance, six lots
+/// partaient pour deux places, et l'attente comptait dans le délai de la
+/// requête (`TRANSLATE_TIMEOUT_MS`), au risque d'un faux « serveur
+/// injoignable » qui arrête le travail. L'attente se fait donc ici, dans
+/// l'ordre d'arrivée (les tronçons les plus anciens d'abord, publiés plus
+/// tôt). Une API en ligne garde ses `parallel` lots par tronçon.
+fn lot_slots(cfg: &CommentaryConfig) -> usize {
+    let per_chunk = cfg.parallel.max(1);
+    if cfg.translate_provider == TranslateProvider::Ollama {
+        per_chunk
+    } else {
+        per_chunk * translate_ahead()
+    }
 }
 
 fn locked<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -950,6 +970,12 @@ impl RunCtx {
                         strong: c.emphasis.is_some_and(|e| e >= 2),
                     })
                     .collect();
+                let _slot = self
+                    .lot_slots
+                    .acquire()
+                    .await
+                    .map_err(|e| CommentaryError::Other(e.to_string()))?;
+                self.check_aborted()?;
                 let res = (self.deps.translate)(
                     lines,
                     context,
@@ -1395,6 +1421,7 @@ impl Commentary {
             asr: Mutex::new(None),
             mt: Mutex::new(None),
             dash_failures: AtomicUsize::new(0),
+            lot_slots: tokio::sync::Semaphore::new(lot_slots(&cfg)),
         });
         // Extraction anticipée du tronçon suivant pendant que le GPU traite le courant.
         let mut prefetched: HashMap<usize, tokio::task::JoinHandle<Result<(), RunFail>>> =
