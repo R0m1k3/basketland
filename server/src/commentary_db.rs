@@ -181,8 +181,8 @@ pub fn chunk_seq_base(idx: usize) -> i64 {
 }
 
 /// `openCommentaryTrack` : ouvre (ou reprend) la piste d'un match. Autre
-/// vidéo, autres modèles, autre découpage — ou `fresh` : tout est effacé
-/// (doublage compris). Rend les index des tronçons déjà publiés.
+/// vidéo, autres modèles, autre découpage — ou `fresh` : tout est effacé.
+/// Rend les index des tronçons déjà publiés.
 pub fn open_commentary_track(
     c: &Connection,
     match_id: i64,
@@ -203,9 +203,6 @@ pub fn open_commentary_track(
                 "DELETE FROM commentary_cues WHERE match_id = ?1",
                 "DELETE FROM commentary_chunks WHERE match_id = ?1",
                 "DELETE FROM commentary_tracks WHERE match_id = ?1",
-                // Sous-titres refaits de zéro : le doublage qui les disait n'est plus valable.
-                "DELETE FROM dub_chunks WHERE match_id = ?1",
-                "UPDATE dub_tracks SET complete = 0 WHERE match_id = ?1",
             ] {
                 c.execute(sql, [match_id as f64])?;
             }
@@ -242,15 +239,6 @@ pub fn publish_commentary_chunk(
             [match_id as f64, base, base + 100_000.0],
         )?;
         insert_cues(c, match_id, cues)?;
-        // Tronçon (re)traduit : son doublage éventuel disait les anciens sous-titres, il sera refait.
-        c.execute(
-            "DELETE FROM dub_chunks WHERE match_id = ?1 AND idx = ?2",
-            [match_id as f64, chunk.idx as f64],
-        )?;
-        c.execute(
-            "UPDATE dub_tracks SET complete = 0 WHERE match_id = ?1",
-            [match_id as f64],
-        )?;
         c.execute(
             "INSERT OR REPLACE INTO commentary_chunks (match_id, idx, keep_from, keep_to) VALUES (?1, ?2, ?3, ?4)",
             [
@@ -428,7 +416,7 @@ pub fn untranslated_commentary_cues(
 }
 
 /// `setCommentaryCueTranslation` : traduction enfin trouvée ; compte de la
-/// piste recalculé, doublage à refaire.
+/// piste recalculé.
 pub fn set_commentary_cue_translation(
     c: &Connection,
     match_id: i64,
@@ -442,10 +430,6 @@ pub fn set_commentary_cue_translation(
         )?;
         c.execute(
             "UPDATE commentary_tracks SET untranslated = (SELECT COUNT(*) FROM commentary_cues WHERE match_id = ?1 AND untranslated != 0) WHERE match_id = ?1",
-            [match_id as f64],
-        )?;
-        c.execute(
-            "UPDATE dub_tracks SET complete = 0 WHERE match_id = ?1",
             [match_id as f64],
         )?;
         Ok(())
@@ -529,7 +513,7 @@ pub struct CommentaryChunkRow {
 }
 
 /// `commentaryKey` : identité d'une piste traduite (vidéo, modèles,
-/// découpage) ; un doublage fait pour une autre clé est à refaire.
+/// découpage).
 pub fn commentary_key(t: &CommentaryTrackRow) -> String {
     format!(
         "{}|{}|{}|{}",

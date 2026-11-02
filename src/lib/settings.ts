@@ -4,16 +4,7 @@
  * repartir vers le navigateur (voir `openAiSettingsView`).
  */
 import { settingGet, settingSet } from './db';
-import {
-  MINIMAX_DEFAULT_MODEL,
-  MINIMAX_DEFAULT_TEXT_MODEL,
-  MINIMAX_DEFAULT_VOICES,
-  MINIMAX_FRENCH_VOICES,
-  MINIMAX_MODELS,
-  MINIMAX_ROLES,
-  MINIMAX_TEXT_MODELS,
-  type MinimaxRole,
-} from './minimaxCatalog';
+import { MINIMAX_DEFAULT_TEXT_MODEL, MINIMAX_TEXT_MODELS } from './minimaxCatalog';
 
 /** Clés connues. */
 export const SETTING_KEYS = {
@@ -21,12 +12,8 @@ export const SETTING_KEYS = {
   openaiModel: 'openai_model',
   /** « Traduction automatique » : '1' (activée) ou '0' (désactivée). */
   autoTranslate: 'auto_translate',
-  /** « Version française » : 'sous-titres' (défaut) ou 'doublage'. */
-  vfMode: 'vf_mode',
-  /** Voix du doublage par MiniMax : clé API, modèle, voix par rôle (JSON { A, B4, B1, F }). */
+  /** Clé API MiniMax (traduction des commentaires). */
   minimaxApiKey: 'minimax_api_key',
-  minimaxModel: 'minimax_tts_model',
-  minimaxVoices: 'minimax_voices',
   /** Traduction des commentaires par MiniMax : '1' (activée) ; modèle texte. */
   minimaxTranslate: 'minimax_translate',
   minimaxTranslateModel: 'minimax_translate_model',
@@ -51,8 +38,7 @@ export function setSetting(key: string, value: string | null): void {
  * - désactivée : rien ne part tout seul (ni jobs du cron, ni lancement à
  *   l'ouverture de la fiche, ni replay tout juste trouvé) et les travaux de
  *   fond déjà en file sont abandonnés (`inNightWindow`, nightWindow.ts) ;
- *   un match n'est traduit que sur un clic « Sous-titrer ce match » (ou
- *   « Doubler ce match »).
+ *   un match n'est traduit que sur un clic « Sous-titrer ce match ».
  * Seule la valeur '0' désactive : clé absente ou autre valeur = activée.
  */
 export function autoTranslateEnabled(): boolean {
@@ -61,33 +47,6 @@ export function autoTranslateEnabled(): boolean {
 
 export function setAutoTranslate(enabled: boolean): void {
   setSetting(SETTING_KEYS.autoTranslate, enabled ? '1' : '0');
-}
-
-/**
- * « Version française » (réglage administrateur) :
- * - 'sous-titres' (DÉFAUT, clé absente ou valeur inconnue) : les
- *   commentaires sont traduits et affichés en sous-titres ;
- * - 'doublage' : « Doubler ce match » est mis en avant sur la fiche et le
- *   lecteur part en « VF doublée » tant que l'utilisateur n'a rien choisi.
- *   Une traduction ne lance jamais le doublage, dans aucun mode : seul
- *   « Doubler ce match » le lance (avec la traduction s'il le faut).
- * Le doublage part toujours des sous-titres : la traduction est faite dans
- * les deux modes.
- */
-export type VfMode = 'sous-titres' | 'doublage';
-
-export const VF_MODES: readonly VfMode[] = ['sous-titres', 'doublage'];
-
-export function isVfMode(v: unknown): v is VfMode {
-  return typeof v === 'string' && (VF_MODES as readonly string[]).includes(v);
-}
-
-export function vfMode(): VfMode {
-  return getSetting(SETTING_KEYS.vfMode) === 'doublage' ? 'doublage' : 'sous-titres';
-}
-
-export function setVfMode(mode: VfMode): void {
-  setSetting(SETTING_KEYS.vfMode, mode);
 }
 
 /**
@@ -131,19 +90,7 @@ export function modelError(model: string): string | null {
   return null;
 }
 
-// ------------------------------------------------------------------ MiniMax (voix du doublage)
-
-/** Voix MiniMax enregistrées (rôles absents : valeur par défaut ou variable d'environnement). */
-export function savedMinimaxVoices(): Partial<Record<MinimaxRole, string>> {
-  try {
-    const v = JSON.parse(getSetting(SETTING_KEYS.minimaxVoices) || '{}') as Record<string, unknown>;
-    const out: Partial<Record<MinimaxRole, string>> = {};
-    for (const r of MINIMAX_ROLES) if (typeof v[r] === 'string' && v[r]) out[r] = v[r] as string;
-    return out;
-  } catch {
-    return {};
-  }
-}
+// ------------------------------------------------------------------ MiniMax (traduction)
 
 export interface MinimaxSettingsView {
   /** Une clé est enregistrée dans la page Paramètres. */
@@ -152,10 +99,6 @@ export interface MinimaxSettingsView {
   keyMasked: string | null;
   /** Une clé est donnée par la variable MINIMAX_API_KEY (utilisée faute de clé enregistrée). */
   envKey: boolean;
-  /** Modèle en service (enregistré, sinon MINIMAX_TTS_MODEL, sinon défaut). */
-  model: string;
-  /** Voix en service par rôle (enregistrée, sinon MINIMAX_VOICE_<rôle>, sinon défaut). */
-  voices: Record<MinimaxRole, string>;
   /** Traduction des commentaires par MiniMax demandée (sert dès qu'une clé est là). */
   translate: boolean;
   /** Modèle texte de la traduction. */
@@ -165,15 +108,10 @@ export interface MinimaxSettingsView {
 /** Ce que l'interface peut afficher de la configuration MiniMax (jamais la clé complète). */
 export function minimaxSettingsView(): MinimaxSettingsView {
   const key = getSetting(SETTING_KEYS.minimaxApiKey);
-  const saved = savedMinimaxVoices();
-  const voices = {} as Record<MinimaxRole, string>;
-  for (const r of MINIMAX_ROLES) voices[r] = saved[r] ?? (process.env[`MINIMAX_VOICE_${r}`]?.trim() || MINIMAX_DEFAULT_VOICES[r]);
   return {
     keySet: !!key,
     keyMasked: key ? maskApiKey(key) : null,
     envKey: !!process.env.MINIMAX_API_KEY?.trim(),
-    model: getSetting(SETTING_KEYS.minimaxModel) || process.env.MINIMAX_TTS_MODEL?.trim() || MINIMAX_DEFAULT_MODEL,
-    voices,
     translate: minimaxTranslateWanted(),
     translateModel: minimaxTranslateModel(),
   };
@@ -199,23 +137,4 @@ export function minimaxTranslateModel(): string {
 
 export function minimaxTranslateModelError(model: string): string | null {
   return MINIMAX_TEXT_MODELS.some((m) => m.id === model) ? null : 'Modèle de traduction MiniMax inconnu.';
-}
-
-export function minimaxModelError(model: string): string | null {
-  return MINIMAX_MODELS.some((m) => m.id === model) ? null : 'Modèle MiniMax inconnu.';
-}
-
-/** Voix par rôle saisies : rend la valeur à enregistrer (JSON), ou un message d'erreur. */
-export function parseMinimaxVoices(raw: unknown): { value: string | null } | { error: string } {
-  if (raw === null) return { value: null };
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'minimaxVoices invalide' };
-  const out: Partial<Record<MinimaxRole, string>> = {};
-  for (const [role, id] of Object.entries(raw as Record<string, unknown>)) {
-    if (!(MINIMAX_ROLES as readonly string[]).includes(role)) return { error: `Rôle de voix inconnu : ${role}` };
-    // Catalogue, ou identifiant de voix MiniMax plausible (voix venue d'une variable d'environnement).
-    const plausible = typeof id === 'string' && (MINIMAX_FRENCH_VOICES.some((v) => v.id === id) || /^[A-Za-z0-9_ ().-]{1,100}$/.test(id));
-    if (!plausible) return { error: `Voix MiniMax invalide pour ${role}` };
-    out[role as MinimaxRole] = id;
-  }
-  return { value: Object.keys(out).length ? JSON.stringify(out) : null };
 }

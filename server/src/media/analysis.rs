@@ -25,7 +25,7 @@
 //! l'horloge du service de traduction ([`AnalysisOptions::shared_with`]).
 //! Les routes appelleront [`Analysis::status`] et [`Analysis::enqueue`]
 //! (voir [`crate::sync_route`]) ; le cron [`Analysis::enqueue_recent`] ; le
-//! panneau d'activité et le doublage [`Analysis::activity`].
+//! panneau d'activité [`Analysis::activity`].
 
 use crate::analysis_db::{self as adb};
 use crate::db::{self, Db, MatchRow};
@@ -469,8 +469,7 @@ pub struct AnalysisActivity {
     pub queued: Vec<i64>,
 }
 
-/// Phase d'une analyse de fond qui attend la fin d'une lecture (le doublage
-/// ne la compte pas comme une occupation du GPU).
+/// Phase d'une analyse de fond qui attend la fin d'une lecture.
 pub const PAUSED_PHASE: &str = "en pause pendant la lecture";
 
 impl AnalysisActivity {
@@ -628,7 +627,7 @@ pub(crate) struct Inner {
     runner: Mutex<Option<Runner>>,
     repump: Mutex<Option<tokio::task::JoinHandle<()>>>,
     idle: Notify,
-    /// Un doublage demandé tient-il la carte graphique ? (les analyses de fond attendent)
+    /// Une traduction tient-elle la carte graphique ? (les analyses de fond attendent)
     gpu_reserved: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
 }
 
@@ -828,7 +827,7 @@ impl Analysis {
 
     /// Remplace l'exécuteur (`__setAnalysisRunnerForTests`) et vide la file ;
     /// `None` : l'analyse réelle avec les dépendances du service.
-    /// Pose le crochet « un doublage demandé tient la carte graphique » :
+    /// Pose le crochet « une traduction tient la carte graphique » :
     /// pendant ce temps, les analyses de FOND attendent en file.
     pub fn set_gpu_reserved(&self, f: Option<Arc<dyn Fn() -> bool + Send + Sync>>) {
         *self
@@ -993,7 +992,7 @@ impl Analysis {
         {
             t.abort();
         }
-        // Lu avant le verrou de la file (le doublage a le sien).
+        // Lu avant le verrou de la file (la traduction a le sien).
         let reserved = self.gpu_reserved();
         let to_start = {
             let mut st = self.st();
@@ -1003,7 +1002,7 @@ impl Analysis {
                 if st.queue.iter().any(|j| j.background) && !self.in_night_window() {
                     st.queue.retain(|j| !j.background);
                 }
-                // Pendant une lecture, ou pendant un doublage demandé, les
+                // Pendant une lecture, ou pendant une traduction, les
                 // analyses de fond attendent en file.
                 let watching =
                     st.queue.iter().any(|j| j.background) && (reserved || self.someone_watching());
@@ -1244,8 +1243,7 @@ impl Analysis {
         }
     }
 
-    /// `analysisActivity` : panneau « En cours de traitement » (et occupation
-    /// du GPU vue par le doublage, qui ignore les analyses [`PAUSED_PHASE`]).
+    /// `analysisActivity` : panneau « En cours de traitement ».
     pub fn activity(&self) -> AnalysisActivity {
         let st = self.st();
         AnalysisActivity {

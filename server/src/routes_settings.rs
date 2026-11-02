@@ -32,11 +32,10 @@ pub async fn get(State(st): State<AppState>, uri: OriginalUri, headers: HeaderMa
 type Check = fn(&str) -> Option<&'static str>;
 
 /// Champs texte : (champ du corps, clé de la table, validation).
-const TEXT_FIELDS: [(&str, &str, Check); 5] = [
+const TEXT_FIELDS: [(&str, &str, Check); 4] = [
     ("openaiApiKey", keys::OPENAI_API_KEY, s::api_key_error),
     ("openaiModel", keys::OPENAI_MODEL, s::model_error),
     ("minimaxApiKey", keys::MINIMAX_API_KEY, s::minimax_key_error),
-    ("minimaxModel", keys::MINIMAX_MODEL, s::minimax_model_error),
     (
         "minimaxTranslateModel",
         keys::MINIMAX_TRANSLATE_MODEL,
@@ -62,9 +61,6 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
     }
     if body.get("autoTranslate").is_some_and(|v| !v.is_boolean()) {
         return Err("autoTranslate invalide (attendu : true ou false)".into());
-    }
-    if body.contains_key("vfMode") && !s::is_vf_mode(body.get("vfMode")) {
-        return Err("vfMode invalide (attendu : 'sous-titres' ou 'doublage')".into());
     }
     if body.contains_key("transcribeEngine")
         && !s::is_transcribe_engine(body.get("transcribeEngine"))
@@ -154,33 +150,11 @@ fn plan_updates(body: &Map<String, Value>) -> Result<Vec<(&'static str, Option<S
             updates.push((keys::TRANSLATE_ENGINE, b.then(|| "minimax".into())));
         }
     }
-    if let Some(v) = body.get("minimaxVoices") {
-        updates.push((keys::MINIMAX_VOICES, s::parse_minimax_voices(v)?));
-    }
     if let Some(b) = body.get("autoTranslate").and_then(Value::as_bool) {
         updates.push((keys::AUTO_TRANSLATE, Some(if b { "1" } else { "0" }.into())));
     }
-    if s::is_vf_mode(body.get("vfMode")) {
-        let mode = body
-            .get("vfMode")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        updates.push((keys::VF_MODE, Some(mode.to_string())));
-    }
     if let Some(engine) = body.get("transcribeEngine").and_then(Value::as_str) {
         updates.push((keys::TRANSCRIBE_ENGINE, Some(engine.to_string())));
-    }
-    if body.contains_key("voiceEngine") && !s::is_voice_engine(body.get("voiceEngine")) {
-        return Err("voiceEngine invalide (attendu : 'local' ou 'minimax')".into());
-    }
-    if let Some(e) = body.get("voiceEngine").and_then(Value::as_str) {
-        updates.push((keys::VOICE_ENGINE, Some(e.to_string())));
-    }
-    if body.contains_key("voiceQuality") && !s::is_voice_quality(body.get("voiceQuality")) {
-        return Err("voiceQuality invalide (attendu : 'standard' ou 'hd')".into());
-    }
-    if let Some(q) = body.get("voiceQuality").and_then(Value::as_str) {
-        updates.push((keys::VOICE_QUALITY, Some(q.to_string())));
     }
     Ok(updates)
 }
@@ -254,60 +228,22 @@ mod tests {
             Err("openaiModel invalide".into())
         );
         assert_eq!(
-            plan(json!({"autoTranslate": "1", "vfMode": "x"})),
+            plan(json!({"autoTranslate": "1"})),
             Err("autoTranslate invalide (attendu : true ou false)".into())
         );
         assert_eq!(
-            plan(json!({"vfMode": null})),
-            Err("vfMode invalide (attendu : 'sous-titres' ou 'doublage')".into())
-        );
-        assert_eq!(
-            plan(
-                json!({"openaiApiKey": "  ", "minimaxTranslate": true, "vfMode": "doublage", "autoTranslate": false})
-            ),
+            plan(json!({"openaiApiKey": "  ", "minimaxTranslate": true, "autoTranslate": false})),
             Ok(vec![
                 ("openai_api_key", None),
                 ("minimax_translate", Some("1".into())),
                 ("translate_engine", Some("minimax".into())),
                 ("auto_translate", Some("0".into())),
-                ("vf_mode", Some("doublage".into())),
             ])
         );
     }
 
     #[test]
-    fn qualite_des_voix() {
-        assert_eq!(
-            plan(json!({"voiceQuality": "hd"})),
-            Ok(vec![("voice_quality", Some("hd".into()))])
-        );
-        for bad in [
-            json!({"voiceQuality": "max"}),
-            json!({"voiceQuality": null}),
-        ] {
-            assert!(plan(bad).is_err());
-        }
-        let s = |v: Option<&str>| {
-            crate::settings::Settings::from_pairs(v.map(|v| ("voice_quality", v)))
-        };
-        assert_eq!(crate::settings::voice_quality(&s(None)), "standard");
-        assert_eq!(crate::settings::voice_quality(&s(Some("hd"))), "hd");
-        assert_eq!(crate::settings::voice_quality(&s(Some("x"))), "standard");
-        assert_eq!(
-            plan(json!({"voiceEngine": "local", "voiceQuality": "hd"})),
-            Ok(vec![
-                ("voice_engine", Some("local".into())),
-                ("voice_quality", Some("hd".into()))
-            ])
-        );
-        assert!(plan(json!({"voiceEngine": "google"})).is_err());
-        assert_eq!(
-            plan(json!({"voiceEngine": "fish"})),
-            Ok(vec![("voice_engine", Some("fish".into()))])
-        );
-        // Ancien choix Voxtral enregistré : Fish S2 Pro.
-        let old = crate::settings::Settings::from_pairs(Some(("voice_engine", "voxtral")));
-        assert_eq!(crate::settings::voice_engine_choice(&old), Some("fish"));
+    fn moteur_de_traduction() {
         assert_eq!(
             plan(
                 json!({"translateEngine": "local", "translateLocalModel": "hf.co/mradermacher/Hunyuan-MT-7B-GGUF:Q8_0"})

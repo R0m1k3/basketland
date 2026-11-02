@@ -6,8 +6,8 @@
 
 use super::plan::{audio_sources, chunk_cues, chunk_name, covered_from, next_chunk, ChunkCue};
 use super::workdir::{
-    full_audio_file, full_audio_wanted, path_str, pause, read_json, work_dir, write_json,
-    ExtractFullFn, FullAudioWait,
+    full_audio_wanted, path_str, pause, read_json, work_dir, write_json, ExtractFullFn,
+    FullAudioWait,
 };
 use super::{
     env_num_or, ok_id_of, BoxFut, ChunkPlan, Commentary, CommentaryControl, CommentaryError,
@@ -434,7 +434,7 @@ fn overlap_enabled() -> bool {
 
 /// `maxLeadSec` : `COMMENTARY_MAX_LEAD_SEC`, avance maximale sur la lecture
 /// (0 par défaut : aucune, la traduction va au bout du match d'une traite,
-/// pour qu'un doublage puisse partir de sous-titres complets).
+/// pour que les sous-titres soient complets au plus tôt).
 fn max_lead_sec() -> f64 {
     match std::env::var("COMMENTARY_MAX_LEAD_SEC") {
         Ok(raw) if !raw.is_empty() => {
@@ -1563,20 +1563,15 @@ impl Commentary {
                 "Aucune parole détectée dans le replay (transcription vide après filtrage)",
             ));
         };
-        // Son effacé du dossier de travail (le son complet reste si ce match va
-        // être doublé) ; les transcriptions (petits .json) restent : une
-        // traduction relancée (« Relancer la traduction », doublage demandé
-        // après un changement de modèle…) ne refait pas la transcription.
-        let keep_full = self.dub_wants_audio(job.match_id) && full_audio_file(&ok_id).exists();
-        if !keep_full {
-            self.forget_full_audio(&ok_id);
-        }
+        // Son effacé du dossier de travail ; les transcriptions (petits .json)
+        // restent : une traduction relancée (« Relancer la traduction », après
+        // un changement de modèle…) ne refait pas la transcription.
+        self.forget_full_audio(&ok_id);
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for e in entries.flatten() {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                let kept = (keep_full && name == "full.ogg")
-                    || (name.ends_with(".json") && e.path().is_file());
+                let kept = name.ends_with(".json") && e.path().is_file();
                 if !kept {
                     let p = e.path();
                     let _ = std::fs::remove_dir_all(&p).or_else(|_| std::fs::remove_file(&p));

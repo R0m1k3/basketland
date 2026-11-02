@@ -3,20 +3,16 @@
 use crate::db::Db;
 use crate::media::analysis::{Analysis, AnalysisDeps, AnalysisOptions};
 use crate::media::commentary::Commentary;
-use crate::media::dub::{self, Dub};
 use crate::proxy::Upstream;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 
-/// Files médias (étapes 6b et 7) : traduction des commentaires, doublage,
-/// analyse vidéo. Une seule instance par processus, partagée par `Clone` ;
-/// les trois partagent la table des spectateurs et l'horloge de la traduction,
-/// le doublage est branché sur la traduction (crochets) et lit l'activité de
-/// l'analyse (le GPU n'est pas partagé avec une analyse en cours).
+/// Files médias (étapes 6b et 7) : traduction des commentaires et analyse
+/// vidéo. Une seule instance par processus, partagée par `Clone` ; les deux
+/// partagent la table des spectateurs et l'horloge de la traduction.
 #[derive(Clone)]
 pub struct Media {
     pub commentary: Commentary,
-    pub dub: Dub,
     pub analysis: Analysis,
 }
 
@@ -26,47 +22,24 @@ impl Media {
         let commentary = Commentary::new(db.clone(), video.clone());
         let analysis = Analysis::with_options(
             db.clone(),
-            AnalysisDeps::defaults(db, video.clone()),
+            AnalysisDeps::defaults(db, video),
             AnalysisOptions::shared_with(&commentary),
         );
-        let dub = Dub::new(commentary.clone(), video);
-        Media::wire(commentary, dub, analysis)
+        Media::wire(commentary, analysis)
     }
 
-    /// Services donnés (tests) : le doublage lit l'activité de l'analyse.
-    pub fn wire(commentary: Commentary, dub: Dub, analysis: Analysis) -> Self {
-        let a = analysis.clone();
-        dub.set_analysis_activity(Some(Arc::new(move || {
-            let act = a.activity();
-            dub::AnalysisActivity {
-                running: act
-                    .running
-                    .into_iter()
-                    .map(|r| dub::AnalysisRun {
-                        match_id: r.match_id,
-                        phase: r.phase,
-                        done: r.done,
-                        total: r.total,
-                    })
-                    .collect(),
-                queued: act.queued,
-            }
-        })));
-        // Par référence faible : le doublage tient déjà l'analyse (pas de cycle d'Arc).
-        // Les analyses de fond attendent aussi la fin d'une traduction : ffmpeg
-        // et Tesseract à côté de Whisper et d'Ollama, c'est la mémoire du NAS
-        // qui sature.
-        let d = Arc::downgrade(&dub.0);
+    /// Services donnés (tests).
+    pub fn wire(commentary: Commentary, analysis: Analysis) -> Self {
+        // Les analyses de fond attendent la fin d'une traduction : ffmpeg et
+        // Tesseract à côté de Whisper et d'Ollama, c'est la mémoire du NAS qui
+        // sature. Par référence faible : pas de cycle d'Arc.
         let c = Arc::downgrade(&commentary.0);
         analysis.set_gpu_reserved(Some(Arc::new(move || {
-            d.upgrade()
-                .is_some_and(|i| !dub::Dub(i).gpu_reservations().is_empty())
-                || c.upgrade()
-                    .is_some_and(|i| Commentary(i).running_match_id().is_some())
+            c.upgrade()
+                .is_some_and(|i| Commentary(i).running_match_id().is_some())
         })));
         Media {
             commentary,
-            dub,
             analysis,
         }
     }
@@ -81,7 +54,7 @@ pub struct AppState {
     pub video: crate::video::Video,
     /// Recherche des replays basketball-video (cache des listes, recherches en vol).
     pub replays: crate::replay::Replays,
-    /// Files de traduction, de doublage et d'analyse.
+    /// Files de traduction et d'analyse.
     pub media: Media,
     /// Export statique de l'interface (`BL_STATIC_DIR`) : servi par Rust ;
     /// sans lui, tout ce qui n'est pas routé est relayé à Node.

@@ -5,7 +5,7 @@
 //! - [`detect_cuts`] : intervalles de très faible énergie = coupures (pubs, transitions) ;
 //! - [`analyze_hls_audio`] : décode l'audio d'un flux HLS via ffmpeg et calcule le profil ;
 //! - [`extract_audio_chunk`], [`extract_full_audio`], [`cut_audio`] : son
-//!   mono 16 kHz Opus 24 kb/s en Ogg, pour Whisper et le doublage.
+//!   mono 16 kHz Opus 24 kb/s en Ogg, pour Whisper.
 
 use super::abort::{wait_aborted, AbortSignal};
 use super::proc::{exit_code_text, keep_tail, lower_priority, spawn_error_text};

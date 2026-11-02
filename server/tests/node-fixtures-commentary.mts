@@ -370,7 +370,6 @@ await scenario('tronçons-120', async () => {
 });
 await scenario('son-complet', async () => {
   process.env.COMMENTARY_FULL_AUDIO_POLL_MS = '5';
-  const g = globalThis as { __dubWantsAudio?: (id: number) => boolean };
   const mk = () => {
     const f = fakeDeps();
     const full: string[] = [];
@@ -388,17 +387,9 @@ await scenario('son-complet', async () => {
     };
     return { f, full, cuts };
   };
-  g.__dubWantsAudio = () => false;
   const a = mk();
   const s1 = await step('sans-doublage', J(), a.f);
-  g.__dubWantsAudio = () => true;
-  const b = mk();
-  const s2 = await step('doublage', J(true), b.f);
-  delete g.__dubWantsAudio;
-  return [
-    { ...s1, full: a.full, cuts: [...a.cuts].sort((x, y) => x - y) },
-    { ...s2, full: b.full, cuts: [...b.cuts].sort((x, y) => x - y) },
-  ];
+  return [{ ...s1, full: a.full, cuts: [...a.cuts].sort((x, y) => x - y) }];
 });
 out.runs = runs;
 

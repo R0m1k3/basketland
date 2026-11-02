@@ -26,7 +26,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-/// État des files médias (traduction, doublage, activité), lu par
+/// État des files médias (traduction, activité), lu par
 /// `routes_pages::media_state`.
 #[derive(Debug, Clone, Default)]
 pub struct MediaState {
@@ -36,8 +36,6 @@ pub struct MediaState {
     pub activity: Value,
     /// `commentaryDisabledReason()`.
     pub commentary_disabled_reason: Option<String>,
-    /// `await dubDisabledReason()` (demandé pour la page Paramètres seule).
-    pub dub_disabled_reason: Option<String>,
 }
 
 /// Contexte d'une page : instant présent, cookie « scores masqués », session,
@@ -422,7 +420,6 @@ pub fn match_page(c: &Connection, ctx: &PageCtx, raw: &str) -> PageResult {
         "has_video": has_video,
         "positions": positions,
         "auto_translate": settings::auto_translate_enabled(&s),
-        "vf_mode": settings::vf_mode(&s),
         "is_admin": ctx.session.is_some_and(|s| s.role == "admin"),
     })))
 }
@@ -686,31 +683,21 @@ fn version_text(v: &crate::version::AppVersion) -> String {
 }
 
 /// `GET /api/pages/parametres` (session requise : sans session, 401 ; la page
-/// renvoyait vers `/login?next=/parametres`). `dub_disabled_reason` ne sert
-/// qu'à un administrateur.
-pub fn parametres(
-    c: &Connection,
-    session: &Session,
-    media: &MediaState,
-) -> rusqlite::Result<Value> {
+/// renvoyait vers `/login?next=/parametres`).
+pub fn parametres(c: &Connection, session: &Session) -> rusqlite::Result<Value> {
     let admin = session.role == "admin";
     let admin_data = if admin {
         let s = Settings::load(c)?;
         json!({
             "users": crate::accounts::list_users(c)?,
             "auto_translate": settings::auto_translate_enabled(&s),
-            "vf_mode": settings::vf_mode(&s),
             "transcribe_engine": settings::transcribe_engine(&s),
             "transcribe_engine_override": crate::media::commentary_ai::transcribe_engine_override(&s),
-            "voice_quality": settings::voice_quality(&s),
-            "voice_engine": crate::media::voice_ai::voice_engine_name(&s).as_str(),
-            "minimax_key_set": !crate::media::voice_minimax::minimax_config(&s).key.is_empty(),
-            "voice_quality_override": crate::media::voice_ai::voice_quality_override(&s),
+            "minimax_key_set": settings::minimax_api_key(&s).is_some(),
             "translate_repair_model": settings::translate_repair_model(&s),
             "extra_names": s.get(settings::keys::EXTRA_NAMES).unwrap_or_default(),
             "fetch_parallel": settings::fetch_parallel(&s)
                 .unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
-            "voice_disabled_reason": media.dub_disabled_reason,
             "minimax": settings::minimax_settings_view(&s),
             "translate": settings::translate_settings_view(&s),
             "openai": settings::openai_settings_view(&s),

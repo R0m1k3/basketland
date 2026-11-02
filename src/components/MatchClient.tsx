@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import VideoPlayer, { type Marker } from '@/components/VideoPlayer';
-import CommentaryStatus, { type CommandResult, type CommentaryState, type DubBannerState } from '@/components/match/CommentaryStatus';
+import CommentaryStatus, { type CommandResult, type CommentaryState } from '@/components/match/CommentaryStatus';
 import { Playback, PlaybackContext, SEEK_EVENT, type Subtitle } from '@/components/match/playback';
 import { periodName } from '@/components/match/format';
 
@@ -21,50 +21,14 @@ interface Props {
   /**
    * Réglage « Traduction automatique » : activé, la traduction part toute
    * seule une fois la lecture lancée ; désactivé, seulement sur un clic
-   * « Sous-titrer ce match » (ou « Doubler ce match »).
+   * « Sous-titrer ce match ».
    */
   autoTranslate: boolean;
-  /**
-   * Réglage « Version française » : en mode « doublage », le lecteur part en
-   * « VF doublée » tant que l'utilisateur n'a rien choisi.
-   */
-  vfMode: 'sous-titres' | 'doublage';
-  /** Administrateur : boutons « Relancer la traduction » et « Relancer le doublage ». */
+  /** Administrateur : bouton « Relancer la traduction ». */
   isAdmin: boolean;
 }
 
-/** Manifeste du doublage (GET/POST /dub), réduit à ce que montre le bandeau. */
-interface DubManifestLite {
-  status?: DubBannerState['status'];
-  reason?: string;
-  progress?: { done: number; total: number };
-  step?: string;
-  stopped?: boolean;
-  chunks?: unknown[];
-}
-
-function toDubBanner(d: DubManifestLite): DubBannerState | null {
-  if (!d.status) return null;
-  return {
-    status: d.status,
-    reason: d.reason,
-    progress: d.progress,
-    step: d.step,
-    stopped: d.stopped === true,
-    chunks: Array.isArray(d.chunks) ? d.chunks.length : 0,
-  };
-}
-
-function sameDub(a: DubBannerState | null, b: DubBannerState | null): boolean {
-  return (
-    a === b ||
-    (!!a && !!b && a.status === b.status && a.reason === b.reason && a.step === b.step && a.stopped === b.stopped && a.chunks === b.chunks && a.progress?.done === b.progress?.done && a.progress?.total === b.progress?.total)
-  );
-}
-
 const POLL_MS = 12_000;
-/** Doublage en cours : étapes et téléchargement des voix suivis de plus près. */
-const DUB_RUNNING_POLL_MS = 5_000;
 /** La traduction démarre quand le lecteur a autant d'avance chargée (s)… */
 const START_BUFFER_SEC = 15;
 /** …ou au plus tard après ce délai. */
@@ -81,7 +45,7 @@ function sameSubtitles(a: Subtitle[], b: Subtitle[]): boolean {
  * partagée par contexte. Ce composant ne re-rend qu'au chargement des
  * sous-titres et aux changements d'état de la traduction.
  */
-export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays, positions, autoTranslate, vfMode, isAdmin }: Props) {
+export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays, positions, autoTranslate, isAdmin }: Props) {
   const playback = useMemo(() => new Playback(), []);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [commentary, setCommentary] = useState<CommentaryState | null>(null);
@@ -211,57 +175,6 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
   const relaunch = useCallback(() => command('retry'), [command]);
   const stopTranslation = useCallback(() => command('stop'), [command]);
 
-  // Doublage : manifeste lu SANS `?t=` (aucun effet de bord : seul le lecteur,
-  // VF doublée choisie, signale la position), au chargement, quand l'état de
-  // la traduction change, et toutes les 12 s tant qu'il est en file (5 s en cours).
-  const [dub, setDub] = useState<DubBannerState | null>(null);
-  const dubSeq = useRef(0);
-  const loadDub = useCallback(() => {
-    const my = ++dubSeq.current;
-    return fetch(`/api/matches/${matchId}/dub`, { cache: 'no-store' })
-      .then((r) => (r.ok ? (r.json() as Promise<DubManifestLite>) : null))
-      .then((d) => {
-        if (!d || my !== dubSeq.current) return;
-        const next = toDubBanner(d);
-        setDub((prev) => (sameDub(prev, next) ? prev : next));
-      })
-      .catch(() => undefined);
-  }, [matchId]);
-  useEffect(() => {
-    if (video.src) void loadDub();
-  }, [status, video.src, loadDub]);
-  const dubStatus = dub?.status;
-  useEffect(() => {
-    if (dubStatus !== 'waiting' && dubStatus !== 'running') return;
-    const timer = setInterval(() => void loadDub(), dubStatus === 'running' ? DUB_RUNNING_POLL_MS : POLL_MS);
-    return () => clearInterval(timer);
-  }, [dubStatus, loadDub]);
-
-  // « Doubler ce match » / « Reprendre le doublage » et « Arrêter le doublage » (tout utilisateur) ;
-  // `retry` : « Relancer le doublage », administrateurs.
-  const dubCommand = useCallback(
-    (action: 'start' | 'retry' | 'stop'): Promise<CommandResult> => {
-      ++dubSeq.current; // une lecture en vol ne doit pas écraser la réponse de la commande
-      return fetch(`/api/matches/${matchId}/dub`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      })
-        .then(async (r) => {
-          const d = (await r.json().catch(() => ({}))) as { dub?: DubManifestLite; commentary?: CommentaryState; message?: string; error?: string };
-          if (d.dub) setDub(toDubBanner(d.dub));
-          if (d.commentary) setCommentary(d.commentary);
-          const accepted = r.ok && (d.dub?.status === 'waiting' || d.dub?.status === 'running');
-          return { ok: r.ok, accepted, message: d.message ?? d.error ?? (r.ok ? null : `Erreur ${r.status}`) };
-        })
-        .catch(() => ({ ok: false, accepted: false, message: 'Serveur injoignable. Vérifiez votre connexion.' }));
-    },
-    [matchId],
-  );
-  const startDub = useCallback(() => dubCommand('start'), [dubCommand]);
-  const relaunchDub = useCallback(() => dubCommand('retry'), [dubCommand]);
-  const stopDub = useCallback(() => dubCommand('stop'), [dubCommand]);
-
   // Positions des actions, triées par seq.
   const pos = useMemo(() => positions.slice().sort((a, b) => a[0] - b[0]), [positions]);
   const bySeq = useMemo(() => new Map(plays.map((p) => [p[0], p])), [plays]);
@@ -308,7 +221,6 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
       <section id="replay" aria-label="Replay" className="space-y-3">
         <div ref={playerRef} className="-mx-4 sm:mx-0">
           <VideoPlayer
-            matchId={matchId}
             kind={video.kind}
             src={video.src}
             subtitles={subtitles}
@@ -316,20 +228,14 @@ export default function MatchClient({ matchId, video, awayAbbr, homeAbbr, plays,
             awayAbbr={awayAbbr}
             homeAbbr={homeAbbr}
             durationHint={video.duration}
-            dubDefault={vfMode === 'doublage'}
           />
         </div>
         <CommentaryStatus
           state={commentary}
           hasReplay={!!video.src}
           autoTranslate={auto}
-          vfMode={vfMode}
-          dub={dub}
           onStart={startManually}
           onRelaunch={isAdmin ? relaunch : undefined}
-          onDub={startDub}
-          onDubRelaunch={isAdmin ? relaunchDub : undefined}
-          onDubStop={stopDub}
           onStop={stopTranslation}
           position={playback.currentTime}
         />

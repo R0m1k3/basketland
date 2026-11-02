@@ -7,8 +7,6 @@ import TeamLogo from '@/components/ui/TeamLogo';
 import { DEFAULT_SUB_DELAY, usePlayback, useScreenLines, type Subtitle } from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime } from '@/components/match/format';
-import { useDubPlayer } from '@/components/match/useDubPlayer';
-import type { DubState } from '@/components/match/dubPlayer';
 import { teamInfo } from '@/lib/teams';
 
 export type { Subtitle };
@@ -27,10 +25,6 @@ interface Props {
   awayAbbr: string;
   homeAbbr: string;
   durationHint?: number | null;
-  /** Identifiant du match : sert à la VF doublée (manifeste /api/matches/[id]/dub). */
-  matchId?: number;
-  /** « Voix » par défaut quand l'utilisateur n'a jamais choisi : VF doublée (réglage « Version française » = doublage). */
-  dubDefault?: boolean;
 }
 
 type SubSize = 'S' | 'M' | 'L' | 'XL';
@@ -165,7 +159,7 @@ function errorMessage(data: ErrorData): string {
  * Aucune donnée temporelle ne passe par l'état React de ce composant : la
  * barre de progression et le chrono s'abonnent à l'horloge `Playback`.
  */
-export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAbbr, homeAbbr, durationHint, matchId, dubDefault = false }: Props) {
+export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAbbr, homeAbbr, durationHint }: Props) {
   const playback = usePlayback();
   const shellRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -194,9 +188,6 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   const [subPos, setSubPos] = useState<SubPos>('haut');
   const [subDelay, setSubDelay] = useState(DEFAULT_SUB_DELAY);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
-  // VF doublée (voix française de synthèse) : indépendante des sous-titres.
-  const [dubOn, setDubOn] = useState(false);
-  const { state: dub, unlock: unlockDub } = useDubPlayer(videoRef, matchId ?? null, dubOn);
 
   const posKey = src ? `bl:pos:${src}` : null;
 
@@ -208,14 +199,13 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     const d = Number(readPref('bl:subdelay'));
     if (readPref('bl:subdelay') !== null && Number.isFinite(d)) setSubDelay(Math.max(-5, Math.min(10, d)));
     if (readPref('bl:vf') === '0') setVfOn(false);
-    if (readPref('bl:dub') === '1' || (readPref('bl:dub') === null && dubDefault)) setDubOn(true);
     const q = readPref('bl:quality');
     if (q && q !== 'auto' && Number.isFinite(Number(q))) setQuality(Number(q));
     if (posKey) {
       const p = Number(readPref(posKey));
       if (Number.isFinite(p) && p > 30) setResumeAt(p);
     }
-  }, [posKey, dubDefault]);
+  }, [posKey]);
 
   // Branche l'horloge partagée sur l'élément vidéo.
   useEffect(() => {
@@ -481,12 +471,11 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
       const v = videoRef.current;
       if (!v) return;
       warmUp();
-      unlockDub(); // geste : le contexte audio de la VF doublée peut démarrer
       setStarted(true);
       if (from !== undefined) playback.seek(from);
       void v.play().catch(() => undefined);
     },
-    [playback, warmUp, unlockDub],
+    [playback, warmUp],
   );
 
   const togglePlay = useCallback(() => {
@@ -549,15 +538,6 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     setSubDelay(v);
     writePref('bl:subdelay', String(v));
   }, []);
-
-  const chooseDub = useCallback(
-    (on: boolean) => {
-      if (on) unlockDub(true); // dans le clic : le navigateur autorise le son Web Audio
-      setDubOn(on);
-      writePref('bl:dub', on ? '1' : '0');
-    },
-    [unlockDub],
-  );
 
   const chooseSpeed = useCallback((s: number) => {
     setSpeed(s);
@@ -759,7 +739,6 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
             </div>
             <TimeText />
             <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
-              {dubOn && dub.available && <DubBadge active={dub.active} hint={dub.hint} />}
               <CtrlButton label={vfOn ? 'Masquer la VF (C)' : 'Afficher la VF (C)'} onClick={toggleVf} pressed={vfOn}>
                 <span
                   className={`rounded-[5px] border-2 px-1 font-display text-[13px] font-bold leading-[14px] ${
@@ -796,9 +775,6 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           onSubDelay={chooseDelay}
           speed={speed}
           onSpeed={chooseSpeed}
-          dub={dub}
-          dubOn={dubOn}
-          onDub={chooseDub}
           onClose={closeMenu}
         />
       )}
@@ -1021,9 +997,6 @@ function SettingsMenu({
   onSubDelay,
   speed,
   onSpeed,
-  dub,
-  dubOn,
-  onDub,
   onClose,
 }: {
   levels: LevelOption[];
@@ -1038,9 +1011,6 @@ function SettingsMenu({
   onSubDelay: (d: number) => void;
   speed: number;
   onSpeed: (s: number) => void;
-  dub: DubState;
-  dubOn: boolean;
-  onDub: (on: boolean) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -1059,16 +1029,6 @@ function SettingsMenu({
       aria-label="Réglages du lecteur"
       className="absolute bottom-[58px] right-2 z-20 max-h-[calc(100%-66px)] w-[248px] max-w-[80vw] overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-ink-900/95 p-3 text-sm shadow-card backdrop-blur-xl sm:bottom-[68px] sm:right-4 sm:max-h-[calc(100%-80px)]"
     >
-      {dub.available && (
-        <MenuGroup title="Voix" hint={dub.hint ?? undefined}>
-          <Seg active={!dubOn} onClick={() => onDub(false)}>
-            Originale (VO)
-          </Seg>
-          <Seg active={dubOn} onClick={() => onDub(true)}>
-            VF doublée
-          </Seg>
-        </MenuGroup>
-      )}
       {levels.length > 0 && (
         <MenuGroup title="Qualité" hint={qualityLabel}>
           <Seg active={quality === 'auto'} onClick={() => onQuality('auto')}>
@@ -1143,17 +1103,6 @@ function Seg({ active, onClick, children }: { active: boolean; onClick: () => vo
     >
       {children}
     </button>
-  );
-}
-
-/** Pastille « VF doublée » à côté du bouton VF, quand la voix française est choisie. */
-function DubBadge({ active, hint }: { active: boolean; hint: string | null }) {
-  const label = active ? 'VF doublée active' : hint?.startsWith('VF doublée') ? hint : `VF doublée : ${hint ?? 'version originale ici'}`;
-  return (
-    <span className={`${active ? 'chip-flame' : 'chip'} mr-1 hidden whitespace-nowrap sm:inline-flex`} title={label}>
-      <span className={`h-1.5 w-1.5 rounded-full ${active ? 'bg-flame' : 'bg-paper-faint'}`} aria-hidden="true" />
-      VF doublée
-    </span>
   );
 }
 

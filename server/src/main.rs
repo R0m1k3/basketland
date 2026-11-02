@@ -97,6 +97,19 @@ async fn main() {
         Ok(Err(e)) => eprintln!("[serveur] {e}"),
         Err(e) => eprintln!("[serveur] schéma de la base : {e}"),
     }
+    // Doublage français retiré : les pistes doublées (audio) ne servent plus.
+    tokio::task::spawn_blocking(|| {
+        let dir = basketland_server::ingest::data_dir().join("dub");
+        if dir.is_dir() {
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => println!(
+                    "[serveur] doublage retiré : pistes doublées effacées ({})",
+                    dir.display()
+                ),
+                Err(e) => eprintln!("[serveur] {} non effacé : {e}", dir.display()),
+            }
+        }
+    });
     // Node n'est lancé qu'une fois le port public obtenu : jamais d'application orpheline.
     // Interface statique servie par Rust (`BL_STATIC_DIR`) : plus de Node.
     let static_dir = state::static_dir_from_env();

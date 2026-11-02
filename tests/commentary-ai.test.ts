@@ -472,7 +472,7 @@ describe('API OpenAI (clé dans les paramètres ou OPENAI_API_KEY)', () => {
   });
 });
 
-describe('API MiniMax (traduction demandée dans les paramètres, même clé que les voix)', () => {
+describe('API MiniMax (traduction demandée dans les paramètres)', () => {
   beforeEach(() => {
     freshDb();
     setEnv();

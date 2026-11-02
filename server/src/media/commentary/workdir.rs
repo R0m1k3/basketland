@@ -1,5 +1,5 @@
 //! Dossier de travail d'une vidéo (`${dataDir()}/commentary/<okId>/`) et son
-//! complet du match partagé entre traduction et doublage (`startFullAudio`,
+//! complet du match pour la traduction (`startFullAudio`,
 //! `waitFullAudio`, `sliceFullAudio`, `dropFullAudio` de `commentary.ts`).
 
 use super::{BoxFut, Commentary};
@@ -153,7 +153,7 @@ impl Commentary {
     }
 
     /// `startFullAudio` : extraction du son complet lancée une fois et
-    /// partagée (traduction, doublage), indépendante de tout travail. Déjà sur
+    /// partagée, indépendante de tout travail. Déjà sur
     /// disque : rien à faire. Échec : extraction tronçon par tronçon.
     pub(crate) fn start_full_audio(
         &self,
@@ -275,7 +275,7 @@ impl Commentary {
     }
 
     /// `sliceFullAudio` : découpe `length` s du son complet à partir de `start`
-    /// (pour le doublage) s'il est là et couvre la plage ; `false` sinon
+    /// s'il est là et couvre la plage ; `false` sinon
     /// (l'appelant lit alors le flux).
     pub async fn slice_full_audio(
         &self,
@@ -307,8 +307,7 @@ impl Commentary {
         r.is_ok()
     }
 
-    /// `dropFullAudio` : le son complet ne sert plus (traduction et doublage
-    /// finis) : effacé, sauf extraction ou traduction en cours sur cette vidéo.
+    /// `dropFullAudio` : le son complet ne sert plus (traduction finie) : effacé, sauf extraction ou traduction en cours sur cette vidéo.
     pub fn drop_full_audio(&self, ok_id: &str) {
         let translating = self.running_ok_id().as_deref() == Some(ok_id);
         let mut map = self.full_audios();

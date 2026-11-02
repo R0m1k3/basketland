@@ -7,12 +7,11 @@
  *
  * Traduction et analyse de fond : seulement si la « Traduction automatique »
  * est activée (/parametres, activée par défaut) et dans la fenêtre autorisée
- * (COMMENTARY_NIGHT_WINDOW) — voir `queueRecentWork`. Pas de doublage de
- * fond : un match n'est doublé que sur « Doubler ce match » (dub.ts).
+ * (COMMENTARY_NIGHT_WINDOW) — voir `queueRecentWork`.
  *
  * Jobs repris par le serveur Rust (`BL_RUST_JOBS`, posé par server/src/node.rs) :
  * Node ne les lance plus, voir `rustJobs`. Lancé par le serveur Rust, Node
- * n'en lance aucun : Rust tient aussi les files de traduction, de doublage et
+ * n'en lance aucun : Rust tient aussi les files de traduction et
  * d'analyse (étape 6b de docs/migration-rust.md).
  */
 import { countMatches } from './db';

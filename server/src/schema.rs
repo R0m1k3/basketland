@@ -5,8 +5,8 @@
 //! `CREATE`, une base créée par Rust est donc identique à une base créée par
 //! Node (vérifié par `tests/schema.rs` contre les bases des fixtures).
 //!
-//! Garder ces textes en phase avec `SCHEMA_SQL`, `AUTH_SCHEMA_SQL` et
-//! `DUB_SCHEMA_SQL` de `db.ts` tant que Node les a encore.
+//! Garder ces textes en phase avec `SCHEMA_SQL` et `AUTH_SCHEMA_SQL` de
+//! `db.ts` tant que Node les a encore.
 
 use rusqlite::Connection;
 use std::path::Path;
@@ -221,35 +221,6 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 "#;
 
-/// `DUB_SCHEMA_SQL` : doublage français.
-pub const DUB_SCHEMA_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS dub_tracks (
-  match_id INTEGER PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
-  ok_id TEXT NOT NULL,
-  commentary_key TEXT NOT NULL,
-  -- Rôles de voix utilisés (JSON : ["A","B4",…]).
-  voices TEXT NOT NULL DEFAULT '[]',
-  -- Locuteurs reconnus et leur voix (JSON, voir dub.ts : SpeakerState).
-  speakers TEXT NOT NULL DEFAULT '{}',
-  complete INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dub_chunks (
-  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
-  idx INTEGER NOT NULL,
-  start_ts REAL NOT NULL,
-  end_ts REAL NOT NULL,
-  file TEXT NOT NULL,
-  -- Plages de parole française, en temps absolu de la vidéo (JSON [[s, e], …]).
-  speech TEXT NOT NULL DEFAULT '[]',
-  -- Empreinte des sous-titres doublés : un tronçon retraduit est redoublé.
-  cues_sig TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (match_id, idx)
-);
-"#;
-
 /// Conseil donné quand le dossier ou le fichier de la base n'est pas inscriptible.
 const PERMISSION_HINT: &str = "Vérifiez que le volume est inscriptible par l'utilisateur du conteneur (uid 1000) : sur Unraid, chown -R 1000:1000 /mnt/user/appdata/basketland";
 
@@ -302,8 +273,8 @@ pub fn migrate(c: &Connection) -> rusqlite::Result<()> {
             "ALTER TABLE commentary_cues ADD COLUMN emphasis INTEGER NOT NULL DEFAULT 0",
         )?;
     }
-    // Doublage français (tables nouvelles).
-    c.execute_batch(DUB_SCHEMA_SQL)
+    // Doublage français retiré : ses tables (pistes et tronçons doublés) disparaissent.
+    c.execute_batch("DROP TABLE IF EXISTS dub_chunks; DROP TABLE IF EXISTS dub_tracks;")
 }
 
 /// Crée la base au besoin et applique schéma et migrations (`openDatabase`).

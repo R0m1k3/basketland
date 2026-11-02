@@ -23,15 +23,10 @@ use basketland_server::media::roster_names as roster;
 use basketland_server::media::video_scan::{
     self as scan, FrameObservation, LocateResult, ScanDeps, ScanOptions, ScoreboardReading,
 };
-use basketland_server::media::voice_ai::{list_voices, voice_config, voice_engine_name};
-use basketland_server::media::voice_minimax::{
-    minimax_config, minimax_emotion, synth_body, to_wav,
-};
 use basketland_server::settings::{self as st, Settings};
 use basketland_server::vf_sync::{BreakInfo, Interval, ResolvedAnchor, TimedPlay};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
-use std::path::Path;
 
 fn root() -> String {
     std::fs::canonicalize(format!("{}/..", env!("CARGO_MANIFEST_DIR")))
@@ -284,7 +279,11 @@ fn fonctions_pures_comme_node() {
             "isRepetitionLoop" => Value::from(cues::is_repetition_loop(s(input))),
             "hallucinationReason" => {
                 let seg = &segments_of(&json!([input["seg"]]))[0];
-                opt_str(cues::hallucination_reason(seg, input["isolated"].as_bool().unwrap(), input["prompt"].as_str()))
+                opt_str(cues::hallucination_reason(
+                    seg,
+                    input["isolated"].as_bool().unwrap(),
+                    input["prompt"].as_str(),
+                ))
             }
             "filterTranscript" => {
                 let t = cues::parse_verbose_json(&input["transcript"]);
@@ -299,22 +298,50 @@ fn fonctions_pures_comme_node() {
             }
             "mergeTranscripts" => {
                 // Entrées : sorties de shiftTranscript (déjà décalées), relues telles quelles.
-                let list: Vec<Transcript> = input.as_array().unwrap().iter().map(|t| Transcript { segments: segments_of(&t["segments"]), words: words_of(&t["words"]) }).collect();
+                let list: Vec<Transcript> = input
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| Transcript {
+                        segments: segments_of(&t["segments"]),
+                        words: words_of(&t["words"]),
+                    })
+                    .collect();
                 cues::merge_transcripts(&list).to_json()
             }
-            "punctuateWords" => words_json(&cues::punctuate_words(&words_of(&input["words"]), &segments_of(&input["segments"]))),
-            "wordsFromTranscript" => words_json(&cues::words_from_transcript(&cues::parse_verbose_json(input))),
+            "punctuateWords" => words_json(&cues::punctuate_words(
+                &words_of(&input["words"]),
+                &segments_of(&input["segments"]),
+            )),
+            "wordsFromTranscript" => words_json(&cues::words_from_transcript(
+                &cues::parse_verbose_json(input),
+            )),
             "joinWords" => Value::from(cues::join_words(&words_of(input))),
-            "buildCues" => Value::Array(cues::build_cues(&words_of(&input["words"]), &cue_opts(&input["opts"])).iter().map(|c| c.to_json()).collect()),
-            "cueEmphasis" => Value::from(cues::cue_emphasis(&words_of(&input["words"]), s(&input["text"]))),
-            "wrapTwoLines" => Value::from(cues::wrap_two_lines(s(&input["text"]), input["max"].as_u64().unwrap() as usize)),
+            "buildCues" => Value::Array(
+                cues::build_cues(&words_of(&input["words"]), &cue_opts(&input["opts"]))
+                    .iter()
+                    .map(|c| c.to_json())
+                    .collect(),
+            ),
+            "cueEmphasis" => Value::from(cues::cue_emphasis(
+                &words_of(&input["words"]),
+                s(&input["text"]),
+            )),
+            "wrapTwoLines" => Value::from(cues::wrap_two_lines(
+                s(&input["text"]),
+                input["max"].as_u64().unwrap() as usize,
+            )),
             "rosterIndex" => {
                 let r = full_roster(input);
                 json!({ "surnames": r.surnames.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(), "full": r.full })
             }
             "nearestSurname" => opt_str(roster::nearest_surname(s(input), &main_roster).as_deref()),
             "fixRosterNames" => Value::from(roster::fix_roster_names(s(input), &main_roster)),
-            "editDistance" => Value::from(roster::edit_distance(s(&input[0]), s(&input[1]), input[2].as_u64().unwrap() as usize)),
+            "editDistance" => Value::from(roster::edit_distance(
+                s(&input[0]),
+                s(&input[1]),
+                input[2].as_u64().unwrap() as usize,
+            )),
             "foldName" => Value::from(roster::fold_name(s(input))),
             "nameRendered" => json!([
                 roster::name_rendered(s(&input[0]), s(&input[1]), Some(&main_roster)),
@@ -332,7 +359,12 @@ fn fonctions_pures_comme_node() {
                 for k in ["Edey", "Queta"] {
                     assert!(!p.contains(k), "{k} dans la consigne");
                 }
-                for k in ["entraîneurs", "N'ajoute jamais un nom", "triple-double", "aucun mot anglais"] {
+                for k in [
+                    "entraîneurs",
+                    "N'ajoute jamais un nom",
+                    "triple-double",
+                    "aucun mot anglais",
+                ] {
                     assert!(p.contains(k), "{k} absent de la consigne");
                 }
                 n += 1;
@@ -344,14 +376,33 @@ fn fonctions_pures_comme_node() {
                 let r = (!input["roster"].is_null()).then(|| full_roster(&input["roster"]));
                 let model = s(&input["model"]);
                 if c["fn"] == "buildUserMessage" {
-                    Value::from(ai::build_user_message(&lines, &ctx, model, r.as_ref(), input["match"].as_str()))
+                    Value::from(ai::build_user_message(
+                        &lines,
+                        &ctx,
+                        model,
+                        r.as_ref(),
+                        input["match"].as_str(),
+                    ))
                 } else {
-                    Value::from(ai::build_plain_message(&lines[1].en, &ctx, model, r.as_ref(), input["match"].as_str()))
+                    Value::from(ai::build_plain_message(
+                        &lines[1].en,
+                        &ctx,
+                        model,
+                        r.as_ref(),
+                        input["match"].as_str(),
+                    ))
                 }
             }
-            "parseTranslation" => Value::Array(ai::parse_translation(s(input)).into_iter().map(|(k, v)| json!([k, v])).collect()),
+            "parseTranslation" => Value::Array(
+                ai::parse_translation(s(input))
+                    .into_iter()
+                    .map(|(k, v)| json!([k, v]))
+                    .collect(),
+            ),
             "parsePlainTranslation" => Value::from(ai::parse_plain_translation(s(input))),
-            "validTranslation" => Value::from(ai::valid_translation(s(&input[0]), input[1].as_str())),
+            "validTranslation" => {
+                Value::from(ai::valid_translation(s(&input[0]), input[1].as_str()))
+            }
             "anchors" => {
                 let a = ai::anchors(s(input));
                 json!({ "numbers": a.numbers, "names": a.names })
@@ -363,7 +414,11 @@ fn fonctions_pures_comme_node() {
             "whisperPrompt" => {
                 let many: Vec<String> = (0..100).map(|i| format!("Player Number{i}")).collect();
                 json!([
-                    ai::whisper_prompt("Los Angeles Lakers", "Portland Trail Blazers", &["LeBron James", "Deni Avdija"]),
+                    ai::whisper_prompt(
+                        "Los Angeles Lakers",
+                        "Portland Trail Blazers",
+                        &["LeBron James", "Deni Avdija"]
+                    ),
                     ai::whisper_prompt("A", "B", &many),
                     ai::whisper_prompt::<&str>("A", "B", &[]),
                 ])
@@ -371,7 +426,9 @@ fn fonctions_pures_comme_node() {
             "groupSentences" => Value::Array(
                 ai::group_sentences(&lines_of(input))
                     .iter()
-                    .map(|g| Value::Array(g.iter().map(|l| json!({ "i": l.i, "en": l.en })).collect()))
+                    .map(|g| {
+                        Value::Array(g.iter().map(|l| json!({ "i": l.i, "en": l.en })).collect())
+                    })
                     .collect(),
             ),
             "splitProportional" => {
@@ -389,10 +446,19 @@ fn fonctions_pures_comme_node() {
             "gemmaRawPrompt" => Value::from(ai::gemma_raw_prompt("SYS\nligne", "USER \"é\"")),
             "chatCompletion" => {
                 let cfg = cfg_of(&input["cfg"]);
-                let body = ai::chat_body(s(&input["system"]), s(&input["user"]), &cfg, num(&input["temperature"]), input["json"].as_bool().unwrap());
+                let body = ai::chat_body(
+                    s(&input["system"]),
+                    s(&input["user"]),
+                    &cfg,
+                    num(&input["temperature"]),
+                    input["json"].as_bool().unwrap(),
+                );
                 let mut headers = Map::new();
                 if !cfg.translate_api_key.is_empty() {
-                    headers.insert("authorization".into(), Value::from(format!("Bearer {}", cfg.translate_api_key)));
+                    headers.insert(
+                        "authorization".into(),
+                        Value::from(format!("Bearer {}", cfg.translate_api_key)),
+                    );
                 }
                 headers.insert("content-type".into(), Value::from("application/json"));
                 json!({ "content": "ok", "request": { "url": ai::chat_url(&cfg), "method": "POST", "headers": headers, "body": body } })
@@ -401,38 +467,23 @@ fn fonctions_pures_comme_node() {
                 let cfg = cfg_of(&input["cfg"]);
                 json!({ "fr": "ok", "request": { "url": format!("{}/api/generate", ai::ollama_base(&cfg.translate_url)), "method": "POST", "headers": { "content-type": "application/json" }, "body": ai::mt_body(s(&input["en"]), &cfg) } })
             }
-            "toWav" => {
-                let w = to_wav(hex_decode(s(&input["hex"])), 24_000);
-                json!({ "hex": hex_encode(&w.wav), "duration": js_num_value(w.duration), "sampleRate": w.sample_rate })
-            }
             "settingsView" => {
-                let set = Settings::from_pairs(input["settings"].as_object().unwrap().iter().map(|(k, v)| (k.as_str(), s(v))));
+                let set = Settings::from_pairs(
+                    input["settings"]
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), s(v))),
+                );
                 let env = input["env"].as_object().unwrap().clone();
                 let fixed = input["fixedEnv"].as_object().unwrap().clone();
                 set_env(&fixed);
                 set_env(&env);
-                let mc = minimax_config(&set);
-                let vc = voice_config(&set);
-                let mut vcj = json!({
-                    "engine": vc.engine.as_str(), "model": vc.model, "device": vc.device,
-                    "voicesDir": vc.voices_dir.to_string_lossy(), "python": vc.python, "modelsDir": vc.models_dir.to_string_lossy(),
-                });
-                if let Some(r) = &vc.disabled_reason {
-                    vcj["disabledReason"] = Value::from(r.clone());
-                }
                 let out = json!({
                     "openai": st::openai_settings_view(&set),
                     "minimax": st::minimax_settings_view(&set),
                     "autoTranslate": st::auto_translate_enabled(&set),
-                    "vfMode": st::vf_mode(&set),
-                    "minimaxConfig": {
-                        "url": mc.url, "key": mc.key, "model": mc.model,
-                        "voices": mc.voices.iter().map(|(r, v)| (r.clone(), Value::from(v.clone()))).collect::<Map<_, _>>(),
-                        "speed": js_num_value(mc.speed),
-                    },
                     "commentaryConfig": ai::commentary_config(&set).to_json(),
-                    "voiceConfig": vcj,
-                    "voiceEngine": voice_engine_name(&set).as_str(),
                     "openAiConfig": ai::openai_config(&set).map_or(Value::Null, |(key, model)| json!({ "key": key, "model": model })),
                     "minimaxTranslateConfig": ai::minimax_translate_config(&set).map_or(Value::Null, |o| json!({ "url": o.url, "key": o.key, "model": o.model })),
                 });
@@ -440,21 +491,19 @@ fn fonctions_pures_comme_node() {
                 clear_env(&fixed);
                 out
             }
-            "parseMinimaxVoices" => match st::parse_minimax_voices(input) {
-                Ok(v) => json!({ "value": v }),
-                Err(e) => json!({ "error": e }),
-            },
-            "keyErrors" => json!([opt_str(st::api_key_error(s(input))), opt_str(st::minimax_key_error(s(input))), st::mask_api_key(s(input))]),
-            "modelErrors" => json!([opt_str(st::model_error(s(input))), opt_str(st::minimax_model_error(s(input))), opt_str(st::minimax_translate_model_error(s(input)))]),
-            "listVoices" => Value::Array(
-                list_voices(Some(Path::new(s(input))))
-                    .iter()
-                    .map(|v| json!({ "id": v.id, "role": v.role, "label": v.label, "gender": v.gender }))
-                    .collect(),
-            ),
-            "minimaxEmotion" => opt_str(minimax_emotion(input.as_f64())),
+            "keyErrors" => json!([
+                opt_str(st::api_key_error(s(input))),
+                opt_str(st::minimax_key_error(s(input))),
+                st::mask_api_key(s(input))
+            ]),
+            "modelErrors" => json!([
+                opt_str(st::model_error(s(input))),
+                opt_str(st::minimax_translate_model_error(s(input)))
+            ]),
             "envelope" => {
-                last_pcm = base64::engine::general_purpose::STANDARD.decode(s(&input["pcm"])).unwrap();
+                last_pcm = base64::engine::general_purpose::STANDARD
+                    .decode(s(&input["pcm"]))
+                    .unwrap();
                 let env = envelope_from_pcm(&last_pcm, 8000.0, FRAME_SEC);
                 let ws = words_of(&input["words"]);
                 json!({
@@ -471,11 +520,24 @@ fn fonctions_pures_comme_node() {
                 json!({ "words": j["words"], "segments": j["segments"] })
             }
             "computeRmsDb" => {
-                let samples: Vec<f64> = last_pcm.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f64).collect();
-                Value::Array(compute_rms_db(&samples, num(&input["sampleRate"]), 1.0).into_iter().map(js_num_value).collect())
+                let samples: Vec<f64> = last_pcm
+                    .chunks_exact(2)
+                    .map(|b| i16::from_le_bytes([b[0], b[1]]) as f64)
+                    .collect();
+                Value::Array(
+                    compute_rms_db(&samples, num(&input["sampleRate"]), 1.0)
+                        .into_iter()
+                        .map(js_num_value)
+                        .collect(),
+                )
             }
             "detectCuts" => {
-                let p: Vec<f64> = input["profile"].as_array().unwrap().iter().map(num).collect();
+                let p: Vec<f64> = input["profile"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(num)
+                    .collect();
                 let o = &input["opts"];
                 let opts = CutOptions {
                     drop_db: opt_f(&o["dropDb"]),
@@ -503,29 +565,23 @@ fn fonctions_pures_comme_node() {
                     Some(x) => std::env::set_var("COMMENTARY_NIGHT_WINDOW", x),
                     None => std::env::remove_var("COMMENTARY_NIGHT_WINDOW"),
                 }
-                let at = chrono::DateTime::parse_from_rfc3339(s(&input["at"])).unwrap().with_timezone(&chrono::Utc);
+                let at = chrono::DateTime::parse_from_rfc3339(s(&input["at"]))
+                    .unwrap()
+                    .with_timezone(&chrono::Utc);
                 let out = json!({ "open": in_schedule_window(at), "label": night_window_label() });
                 std::env::remove_var("COMMENTARY_NIGHT_WINDOW");
                 out
             }
             // Rejoués par les tests asynchrones ci-dessous.
-            "transcribeAudio" | "minimaxSynth" | "planRefinement" | "scanInputs" | "scanVideo" => continue,
+            "transcribeAudio" | "minimaxSynth" | "planRefinement" | "scanInputs" | "scanVideo" => {
+                continue
+            }
             other => panic!("cas inconnu : {other}"),
         };
         same(&got, want, &what);
         n += 1;
     }
     assert!(n > 400, "{n} cas seulement");
-}
-
-fn hex_decode(h: &str) -> Vec<u8> {
-    (0..h.len() / 2)
-        .map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap())
-        .collect()
-}
-
-fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn scan_inputs(all: &[Value]) -> (Vec<TimedPlay>, Vec<BreakInfo>, f64) {
@@ -853,88 +909,6 @@ async fn transcription_multipart_comme_node() {
         n += 1;
     }
     std::env::remove_var("TRANSCRIBE_API_KEY");
-    assert_eq!(n, 3);
-}
-
-#[tokio::test]
-async fn requetes_minimax_comme_node() {
-    let _g = ENV.lock().await;
-    let all = cases();
-    let (base, log) = fake::serve(|path| {
-        if path.ends_with("/v1/get_voice") {
-            let voices: Vec<Value> = ["French_Male_Speech_New", "French_MaleNarrator", "French_CasualMan", "French_FemaleAnchor"].iter().map(|v| json!({ "voice_id": v })).collect();
-            json!({ "base_resp": { "status_code": 0 }, "system_voice": voices }).to_string()
-        } else {
-            let wav = to_wav(vec![0u8; 4800], 24_000).wav;
-            json!({ "base_resp": { "status_code": 0 }, "data": { "audio": hex_encode(&wav) }, "extra_info": { "audio_sample_rate": 24000 } }).to_string()
-        }
-    })
-    .await;
-    let dir = tempfile::tempdir().unwrap();
-    let mut n = 0;
-    for c in all.iter().filter(|c| c["fn"] == "minimaxSynth") {
-        let env = c["input"].as_object().unwrap().clone();
-        set_env(&env);
-        std::env::set_var("MINIMAX_API_URL", &base);
-        std::env::set_var("MINIMAX_RETRY_MS", "0");
-        log.lock().unwrap().clear();
-        let set = Settings::default();
-        let sess = basketland_server::media::voice_minimax::MinimaxVoiceSession::open(
-            &set,
-            None,
-            |_| async { Err("pas de Python".to_string()) },
-        )
-        .await
-        .unwrap();
-        let mut results = Vec::new();
-        for (text, voice, emphasis) in [
-            ("  Quel contre   de Wembanyama !", "B4", None),
-            ("Quel dunk !", "A", Some(2.0)),
-            ("Belle passe.", "B1", Some(1.0)),
-            ("Remise en jeu.", "A", Some(0.5)),
-        ] {
-            let out = dir.path().join("v.wav");
-            let (d, sr) = sess
-                .synth(text, voice, &out.to_string_lossy(), None, emphasis)
-                .await
-                .unwrap();
-            results.push(json!({ "duration": js_num_value(d), "sampleRate": sr }));
-        }
-        let want = ok(c);
-        same(&Value::Array(results), &want["results"], "résultats");
-        same(&json!(sess.voices()), &want["voices"], "voix");
-        let reqs = log.lock().unwrap().clone();
-        let wreqs = want["requests"].as_array().unwrap();
-        assert_eq!(reqs.len(), wreqs.len());
-        for (r, w) in reqs.iter().zip(wreqs) {
-            let wurl = s(&w["url"]);
-            assert!(wurl.ends_with(&r.path), "{wurl} / {}", r.path);
-            assert_eq!(
-                String::from_utf8_lossy(&r.body),
-                s(&w["body"]),
-                "corps {}",
-                r.path
-            );
-            assert_eq!(
-                r.headers.get("authorization").unwrap().to_str().unwrap(),
-                s(&w["headers"]["authorization"])
-            );
-            assert_eq!(
-                r.headers.get("content-type").unwrap().to_str().unwrap(),
-                "application/json"
-            );
-        }
-        // Corps construits hors session : identiques aussi.
-        let mc = minimax_config(&set);
-        assert_eq!(
-            synth_body(&mc, "French_CasualMan", "Belle passe.", Some(1.0)).to_string(),
-            s(&wreqs[3]["body"])
-        );
-        clear_env(&env);
-        std::env::remove_var("MINIMAX_API_URL");
-        std::env::remove_var("MINIMAX_RETRY_MS");
-        n += 1;
-    }
     assert_eq!(n, 3);
 }
 

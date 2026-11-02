@@ -114,14 +114,7 @@ fn ancienne_base_migree_comme_node() {
         )
         .unwrap();
     assert_eq!(complete, 1);
-    for t in [
-        "dub_tracks",
-        "dub_chunks",
-        "users",
-        "sessions",
-        "settings",
-        "ingest_log",
-    ] {
+    for t in ["users", "sessions", "settings", "ingest_log"] {
         assert!(!cols(t).is_empty(), "{t}");
     }
     // Rejouée : rien ne change (la piste reste complète, pas de colonne en double).
