@@ -29,6 +29,9 @@ pub fn lower_priority(pid: Option<u32>) {
     let Some(pid) = pid.filter(|p| *p > 0) else {
         return;
     };
+    // Processus lourds (Whisper, Ollama, voix, ffmpeg) tués en premier par le
+    // noyau si la mémoire du NAS manque, avant les services du NAS.
+    super::mem_guard::protect_host(pid, 1000);
     if nice == 0 {
         return;
     }
@@ -216,6 +219,21 @@ struct WorkerInner {
 #[derive(Clone)]
 pub struct JsonWorker {
     inner: Arc<WorkerInner>,
+    /// Partagé par les seules copies du `JsonWorker` (pas par ses tâches de
+    /// lecture) : à la dernière copie lâchée, le processus est arrêté.
+    _reaper: Arc<Reaper>,
+}
+
+/// Arrête (SIGTERM) un processus encore vivant quand plus personne ne le
+/// tient : un travail annulé ou paniqué sans `close()` laissait sinon le
+/// worker Python (1 à 3 Go de mémoire) tourner jusqu'à la fin du conteneur,
+/// et le travail suivant en lançait un second.
+pub struct Reaper(pub Supervised);
+
+impl Drop for Reaper {
+    fn drop(&mut self) {
+        self.0.signal(libc::SIGTERM);
+    }
 }
 
 impl JsonWorker {
@@ -235,8 +253,10 @@ impl JsonWorker {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let (ready_tx, ready_rx) = oneshot::channel();
+        let sup = Supervised::new(child);
+        let reaper = Arc::new(Reaper(sup.clone()));
         let inner = Arc::new(WorkerInner {
-            sup: Supervised::new(child),
+            sup,
             stdin: tokio::sync::Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
             ready: Mutex::new(Some(ready_tx)),
@@ -357,7 +377,13 @@ impl JsonWorker {
                 }
             });
         }
-        Ok((JsonWorker { inner }, ready_rx))
+        Ok((
+            JsonWorker {
+                inner,
+                _reaper: reaper,
+            },
+            ready_rx,
+        ))
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -461,6 +487,31 @@ mod tests {
         let e = std::io::Error::from(std::io::ErrorKind::NotFound);
         assert_eq!(spawn_error_text("/x/python", &e), "spawn /x/python ENOENT");
         assert_eq!(signal_name(libc::SIGKILL), "SIGKILL");
+    }
+
+    #[tokio::test]
+    async fn worker_lache_sans_close_arrete() {
+        // Un travail annulé lâche sa session sans `close()` : le processus
+        // (ici un `sleep` qui ne lit pas stdin) ne doit pas rester en vie.
+        let spec = WorkerSpec {
+            program: "sh".into(),
+            args: vec!["-c".into(), "sleep 30".into()],
+            env: Vec::new(),
+            on_stderr: Box::new(|_| {}),
+            on_stderr_end: Box::new(|| {}),
+            ready_error: |_| String::new(),
+            exit_message: |_, _| String::new(),
+        };
+        let (w, _ready) = JsonWorker::spawn(spec).unwrap();
+        let copy = w.clone();
+        let sup = w.inner.sup.clone();
+        drop(w);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!sup.has_exited(), "une copie tient encore le worker");
+        drop(copy);
+        let st = tokio::time::timeout(Duration::from_secs(5), sup.wait()).await;
+        assert!(st.is_ok(), "processus toujours vivant");
+        assert_eq!(exit_text(st.unwrap().as_ref()), "SIGTERM");
     }
 
     #[tokio::test]

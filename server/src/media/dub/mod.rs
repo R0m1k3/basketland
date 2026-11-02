@@ -1572,12 +1572,20 @@ impl Dub {
                 }
             }
         });
-        let work = runner(
+        let run = runner(
             job.clone(),
             progress,
             signal.clone(),
             self.control_for(&job),
         );
+        let work = {
+            let signal = signal.clone();
+            async move {
+                // Assez de mémoire libre sur le NAS pour les voix.
+                crate::media::mem_guard::wait_for_room("doublage", &signal).await;
+                run.await
+            }
+        };
         let this = self.clone();
         tokio::spawn(async move {
             let timeout = job_timeout_ms();
@@ -1586,6 +1594,11 @@ impl Dub {
             let mut handle = tokio::spawn(work);
             let res = tokio::select! {
                 r = &mut handle => r.unwrap_or_else(|e| Err(e.to_string())),
+                why = crate::media::mem_guard::watch() => {
+                    signal.abort();
+                    this.log(&format!("[mémoire] match {match_id} : {why}"));
+                    Ok(DubOutcome::failed(DubFailureKind::Service, format!("Doublage suspendu : {why}")))
+                }
                 _ = tokio::time::sleep(Duration::from_millis(timeout as u64)) => {
                     signal.abort();
                     Err(format!(

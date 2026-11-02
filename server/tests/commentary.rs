@@ -1570,16 +1570,19 @@ async fn recouvrement_plusieurs_traductions_en_meme_temps() {
     assert!(r.unwrap().ok);
     let sequential = published(&t.db);
 
-    // Trois tronçons traduits à la fois (défaut) : la traduction du tronçon 2
-    // commence avant la fin de celle du tronçon 1, et ainsi de suite.
+    // Trois tronçons traduits à la fois (défaut), avec trois places chez
+    // Ollama (un lot par tronçon ici) : la traduction du tronçon 2 commence
+    // avant la fin de celle du tronçon 1, et ainsi de suite.
     let t = setup(&[A, B, C]);
     set_env("COMMENTARY_CHUNK_SEC", "600");
     set_env("COMMENTARY_OVERLAP", "1");
+    set_env("TRANSLATE_PARALLEL", "3");
     let (deps, log) = timed_fake(300);
     let t0 = std::time::Instant::now();
     let (r, events) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
     let elapsed = t0.elapsed();
     set_env("COMMENTARY_OVERLAP", "0");
+    unset_env("TRANSLATE_PARALLEL");
     assert!(r.unwrap().ok);
     let log = log.lock().unwrap().clone();
     let pos = |s: &str| {
@@ -1607,6 +1610,43 @@ async fn recouvrement_plusieurs_traductions_en_meme_temps() {
     // Le chevauchement est prouvé par l'ordre des débuts et fins ci-dessus ; la
     // durée n'est qu'indicative (une machine lente ne doit pas faire échouer).
     eprintln!("trois traductions de 300 ms en {elapsed:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recouvrement_lots_limites_aux_places_d_ollama() {
+    let _g = LOCK.lock().await;
+    // Ollama à une place (TRANSLATE_PARALLEL=1), trois tronçons d'avance : la
+    // transcription avance, mais un seul lot part à la fois (les autres
+    // attendent ici, pas dans la file d'Ollama où l'attente compte dans le
+    // délai de la requête), dans l'ordre des tronçons.
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    set_env("COMMENTARY_OVERLAP", "1");
+    set_env("TRANSLATE_PARALLEL", "1");
+    let (deps, log) = timed_fake(200);
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    set_env("COMMENTARY_OVERLAP", "0");
+    unset_env("TRANSLATE_PARALLEL");
+    assert!(r.unwrap().ok);
+    let log = log.lock().unwrap().clone();
+    let pos = |s: &str| {
+        log.iter()
+            .position(|x| x == s)
+            .unwrap_or_else(|| panic!("{s} : {log:?}"))
+    };
+    assert!(
+        pos("transcription 1197") < pos("fin Play number 1 is good."),
+        "{log:?}"
+    );
+    assert!(
+        pos("fin Play number 1 is good.") < pos("début Play number 2 is good."),
+        "{log:?}"
+    );
+    assert!(
+        pos("fin Play number 2 is good.") < pos("début Play number 3 is good."),
+        "{log:?}"
+    );
+    assert_eq!(t.svc.status(A).to_json()["status"], "ready");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

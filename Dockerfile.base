@@ -1,0 +1,145 @@
+# syntax=docker/dockerfile:1
+#
+# Image de BASE de Basketland : système, ffmpeg, Ollama et les environnements
+# Python des moteurs d'IA (plusieurs Go). Elle ne change presque jamais : la
+# CI ne la reconstruit que si ce fichier ou scripts/voice-requirements.txt
+# change (étiquette = empreinte de ces fichiers). L'image de l'application
+# (Dockerfile) part de cette base et n'ajoute que le serveur Rust,
+# l'interface et les scripts (~100 Mo) : une mise à jour ne retélécharge
+# plus que ces quelques couches, le NAS garde les couches lourdes.
+#
+# Deux variantes (cibles) :
+#   - `lite` (défaut, image `latest`) : Ollama, Whisper, Qwen3-TTS ;
+#   - `full` (image `full`) : en plus Fish Audio S2 Pro (vLLM, ~10 Go) et
+#     NVIDIA Parakeet (~1,5 Go), avec le compilateur C qu'exige vLLM.
+
+# ---------------------------------------------------------------- Ollama
+# Traduction des commentaires : binaire Ollama et ses bibliothèques CUDA,
+# repris de l'image officielle, version figée. Seules les bibliothèques
+# CUDA 12 sont gardées (elles tournent avec tous les pilotes récents) : les
+# variantes CUDA 13 (doublon de CUDA 12, 0,9 Go), MLX CUDA 13 (2,9 Go,
+# moteur des modèles d'images, inutile ici), ROCm et Vulkan sont retirées.
+FROM ollama/ollama:0.40.5 AS ollama-src
+FROM debian:bookworm-slim AS ollama
+COPY --from=ollama-src /usr/bin/ollama /ollama/bin/ollama
+COPY --from=ollama-src /usr/lib/ollama /ollama/lib
+RUN find /ollama/lib -mindepth 1 -maxdepth 1 \( -iname 'rocm*' -o -iname 'vulkan*' -o -iname 'cuda_v13*' -o -iname 'mlx*' \) -exec rm -rf {} + \
+ && test -d /ollama/lib/cuda_v12 \
+ && du -sh /ollama/lib
+
+# ---------------------------------------------------------------- Whisper
+# Transcription des commentaires : faster-whisper (CTranslate2) dans un
+# environnement Python dédié, avec cuBLAS et cuDNN installés par pip — pas
+# besoin d'image CUDA de base, le pilote est fourni par l'hôte (runtime
+# NVIDIA). Versions figées : PyAV 18+ casse faster-whisper 1.2.1
+# (« open() got an unexpected keyword argument 'metadata_errors' »).
+FROM debian:bookworm-slim AS python
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv \
+ && rm -rf /var/lib/apt/lists/*
+
+FROM python AS whisper
+RUN python3 -m venv /opt/whisper \
+ && /opt/whisper/bin/pip install \
+      faster-whisper==1.2.1 ctranslate2==4.8.2 av==17.1.0 \
+      nvidia-cublas-cu12==12.9.2.10 nvidia-cudnn-cu12==9.26.1.1
+
+# ---------------------------------------------------------------- Voix (Qwen3-TTS)
+# Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices),
+# SpeechBrain ECAPA (empreintes vocales des commentateurs) et le classifieur
+# homme/femme de scripts/voice_gender.py, dans un environnement Python séparé
+# de Whisper (torch et transformers aux versions imposées par qwen-tts).
+# Liste complète et figée dans scripts/voice-requirements.txt, installée sans
+# résolution (--no-deps).
+#
+# cuBLAS et cuDNN ne sont pas installés une seconde fois : ceux de Whisper
+# (/opt/whisper, mêmes versions majeures que celles attendues par torch 2.8)
+# sont reliés par lien symbolique, que torch trouve par son RPATH
+# ($ORIGIN/../../nvidia/<bibliothèque>/lib) : ~1,3 Go de moins.
+# Le contrôle final charge torch avec ces bibliothèques (sans GPU, pas besoin
+# du pilote) : un lien cassé ou un cuDNN incompatible fait échouer le build,
+# pas le premier doublage.
+FROM whisper AS tts
+COPY scripts/voice-requirements.txt /tmp/voice-requirements.txt
+RUN python3 -m venv /opt/tts \
+ && /opt/tts/bin/pip install --no-deps -r /tmp/voice-requirements.txt \
+ && SP="$(/opt/tts/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && WSP="$(/opt/whisper/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && ln -s "$WSP/nvidia/cublas" "$SP/nvidia/cublas" \
+ && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
+ && /opt/tts/bin/python -c "import re, torch, torch.backends.cudnn as cudnn; v = cudnn.version(); libs = sorted(set(re.findall(r'\S+/lib(?:cublas|cudnn)\.so\.\d+', open('/proc/self/maps').read()))); print('torch', torch.__version__, 'CUDA', torch.version.cuda, 'cuDNN', v, libs); assert v and len(libs) == 2 and all(l.startswith('/opt/whisper/') for l in libs), libs" \
+ && /opt/tts/bin/python -c "import torchaudio, soundfile, librosa, safetensors.torch, huggingface_hub, speechbrain.inference.speaker, qwen_tts" \
+ && rm /tmp/voice-requirements.txt
+
+# ---------------------------------------------------------------- Parakeet (image complète)
+# Second moteur de transcription : NVIDIA Parakeet TDT 0.6B v2 (anglais),
+# exécuté par ONNX Runtime (onnx-asr) dans un environnement séparé. cuBLAS et
+# cuDNN sont ceux de Whisper (liens symboliques) ; s'y ajoutent les seules
+# bibliothèques CUDA qui leur manquent pour ONNX Runtime. Le contrôle final
+# charge les bibliothèques CUDA d'ONNX Runtime : un lien cassé fait échouer
+# le build, pas la première traduction.
+FROM whisper AS parakeet
+RUN python3 -m venv /opt/parakeet \
+ && /opt/parakeet/bin/pip install \
+      "onnx-asr[hub]==0.12.0" onnxruntime-gpu==1.23.2 \
+      nvidia-cuda-runtime-cu12==12.9.79 nvidia-cuda-nvrtc-cu12==12.9.86 nvidia-curand-cu12==10.3.10.19 \
+      nvidia-cufft-cu12==11.4.1.4 \
+ && SP="$(/opt/parakeet/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && WSP="$(/opt/whisper/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" \
+ && ln -s "$WSP/nvidia/cublas" "$SP/nvidia/cublas" \
+ && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
+ && /opt/parakeet/bin/python -c "import ctypes, os, onnxruntime as rt, onnx_asr; rt.preload_dlls(directory=''); ctypes.CDLL(os.path.join(os.path.dirname(rt.__file__), 'capi', 'libonnxruntime_providers_cuda.so')); p = rt.get_available_providers(); print('onnxruntime', rt.__version__, p); assert 'CUDAExecutionProvider' in p"
+
+# ---------------------------------------------------------------- Fish Audio S2 Pro (image complète)
+# Fish Audio S2 Pro (5 milliards de paramètres) servi par vLLM-Omni
+# (`vllm serve fishaudio/s2-pro --omni`), démarré par le doublage sur la carte
+# graphique puis arrêté. Environnement séparé : vLLM impose ses propres torch
+# et bibliothèques CUDA. Versions figées (vLLM-Omni 0.22). Poids (~11 Go)
+# téléchargés au premier usage dans /data/models/hf.
+FROM python AS omni
+RUN python3 -m venv /opt/omni \
+ && /opt/omni/bin/pip install vllm==0.22.0 vllm-omni==0.22.0 \
+ && test -x /opt/omni/bin/vllm \
+ && /opt/omni/bin/python -c "import importlib.metadata as m; print('vllm', m.version('vllm'), 'vllm-omni', m.version('vllm-omni'), 'torch', m.version('torch'))"
+
+# ---------------------------------------------------------------- système commun
+# Debian seule (la même glibc et le même Python que les environnements
+# /opt/* construits plus haut).
+#
+# Utilisateur `node` (uid 1000) : le même que dans les anciennes images,
+# basées sur l'image `node`, pour que les volumes /data existants (dont les
+# fichiers appartiennent à 1000:1000) restent inscriptibles.
+#
+# ffmpeg : audio des replays et images du bandeau de score. `util-linux` :
+# `setpriv` (l'entrypoint lâche les privilèges root). `tini` : PID 1 qui
+# récupère les processus enfants terminés (Python, Ollama, ffmpeg) au lieu
+# de les laisser en zombies. `libtesseract5` : OCR natif du serveur Rust.
+FROM debian:bookworm-slim AS system
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 libtesseract5 tzdata tini \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 1000 node \
+ && useradd --uid 1000 --gid node --create-home --home-dir /home/node --shell /bin/sh node
+
+# ---------------------------------------------------------------- lite
+# /opt/tts dépend de /opt/whisper (liens symboliques vers cuBLAS et cuDNN).
+FROM system AS lite
+COPY --from=ollama /ollama/bin/ollama /usr/bin/ollama
+COPY --from=ollama /ollama/lib /usr/lib/ollama
+COPY --from=whisper /opt/whisper /opt/whisper
+COPY --from=tts /opt/tts /opt/tts
+
+# ---------------------------------------------------------------- full
+# `gcc`, `libc6-dev`, `python3-dev` : Fish S2 Pro (vLLM) compile au démarrage
+# ses noyaux GPU avec Triton, qui a besoin d'un compilateur C et des en-têtes
+# de Python (« Failed to find C compiler » sinon).
+FROM lite AS full
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=parakeet /opt/parakeet /opt/parakeet
+COPY --from=omni /opt/omni /opt/omni
+
+# Cible par défaut : la variante allégée.
+FROM lite

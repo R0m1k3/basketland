@@ -61,6 +61,9 @@ async fn main() {
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", node::node_port()));
 
+    // Le serveur passe après les services du NAS si la mémoire manque (ses
+    // processus lourds, eux, passent en tout premier : `lower_priority`).
+    basketland_server::media::mem_guard::protect_host(std::process::id(), 300);
     let st = state::AppState::new(
         db::Db::new(db::default_db_path()),
         proxy::Upstream::new(&node_url),

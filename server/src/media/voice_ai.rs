@@ -202,7 +202,7 @@ pub fn voice_config(s: &Settings) -> VoiceConfig {
         && !crate::media::voice_fish::embedded_fish_available()
     {
         Some(format!(
-            "Fish S2 Pro absent de cette image ({} introuvable) : mettez l'image à jour",
+            "Fish S2 Pro absent de cette image ({} introuvable) : il n'est que dans l'image complète ghcr.io/r0m1k3/basketland:full",
             crate::media::voice_fish::embedded_fish_bin()
         ))
     } else if !Path::new(&worker_path()).exists() {

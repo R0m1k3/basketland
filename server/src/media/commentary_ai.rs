@@ -196,7 +196,7 @@ pub fn transcribe_engine_override(s: &Settings) -> Option<String> {
     }
     if settings::transcribe_engine(s) == "nvidia" && !embedded_parakeet_available() {
         return Some(
-            "Parakeet est absent de cette image (environnement /opt/parakeet introuvable) : mettez l'image à jour.".into(),
+            "Parakeet est absent de cette image (environnement /opt/parakeet introuvable) : il n'est que dans l'image complète ghcr.io/r0m1k3/basketland:full.".into(),
         );
     }
     None
@@ -1348,6 +1348,12 @@ pub fn chat_body(
         b.insert("messages".into(), messages);
         b.insert("stream".into(), Value::Bool(false));
         b.insert("keep_alive".into(), Value::from("10m"));
+        // Gemma 4, Qwen 3… « réfléchissent » par défaut sous Ollama : des
+        // centaines de jetons cachés par lot (bien plus lent),
+        // comptés dans `num_predict` (réponse tronquée, lot retenté). Inutile
+        // pour traduire des sous-titres ; sans effet sur un modèle qui ne
+        // réfléchit pas.
+        b.insert("think".into(), Value::Bool(false));
         if json_mode && schema_safe(&cfg.translate_model) {
             b.insert("format".into(), translation_schema());
         }
@@ -1407,6 +1413,20 @@ fn missing_model(cfg: &CommentaryConfig) -> String {
         "modèle de traduction « {m} » absent d'Ollama (ollama pull {m})",
         m = cfg.translate_model
     )
+}
+
+/// Signale (une fois) un modèle qui réfléchit encore malgré `think: false`
+/// (Ollama trop ancien) : c'est ce qui rend la traduction locale très lente.
+fn warn_if_thinking(d: Option<&Value>, model: &str) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let thinking = js::prop(js::prop(d, "message"), "thinking")
+        .and_then(Value::as_str)
+        .is_some_and(|t| !t.trim().is_empty());
+    if thinking && !WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "[commentaires] {model} réfléchit avant de traduire malgré think=false (Ollama trop ancien ?) : traduction ralentie"
+        );
+    }
 }
 
 /// `chatCompletion` : appel brut au LLM ; [`ServiceError`] si le serveur ne
@@ -1485,6 +1505,9 @@ pub async fn chat_completion(
                     }
                     break;
                 }
+            }
+            if native {
+                warn_if_thinking(d, &cfg.translate_model);
             }
             let content = if raw {
                 js::prop(d, "response")
