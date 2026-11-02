@@ -50,6 +50,13 @@ conteneur**, sur la carte graphique. Une seule fois sur le NAS :
 Sans carte NVIDIA, tout fonctionne aussi, mais la traduction tourne sur le
 processeur (bien plus lente : plusieurs heures par match).
 
+**Plusieurs cartes** (p. ex. RTX 5060 Ti + RTX 3060) : tout le travail
+(Ollama, Whisper, Parakeet, voix, Fish S2 Pro) tourne sur **la carte 0**, au
+sens de `nvidia-smi` (ordre du bus PCI). Variable `CUDA_VISIBLE_DEVICES` :
+`0` par défaut, `1` pour l'autre carte, vide pour les laisser toutes visibles.
+Le journal `[commentaires] Ollama embarqué prêt (GPU)` confirme qu'Ollama
+voit la carte.
+
 ### Option A — une commande (le plus rapide)
 
 Dans **Unraid → Terminal**, collez :
@@ -113,6 +120,7 @@ Dans Unraid : **Docker → Add Container**
 | Port (HTTP) | `3012` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Variable d'environnement | `NVIDIA_VISIBLE_DEVICES` = `all` |
+| Variable d'environnement (plusieurs cartes) | `CUDA_VISIBLE_DEVICES` = `0` (numéro `nvidia-smi` de la carte à utiliser) |
 | Extra Parameters (vue avancée) | `--runtime=nvidia` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
@@ -160,6 +168,8 @@ services:
     environment:
       TZ: Europe/Paris
       NVIDIA_VISIBLE_DEVICES: all
+      # Carte utilisée (numéro `nvidia-smi`), s'il y en a plusieurs.
+      CUDA_VISIBLE_DEVICES: '0'
     volumes:
       - /mnt/user/appdata/basketland:/data
 ```
@@ -539,6 +549,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
+| `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper, Parakeet, voix, Fish S2 Pro), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
 | `WHISPER_BEAM_SIZE` | `5` | Largeur du faisceau de Whisper (1 à 10). `5` : plus juste quand le public couvre les commentateurs ; `1` (décodage glouton) : 1,5 à 2 fois plus rapide, moins juste sur l'audio bruité. |

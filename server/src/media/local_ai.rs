@@ -16,7 +16,8 @@
 use super::abort::{is_aborted, wait_aborted, AbortSignal};
 use super::commentary_cues::{parse_verbose_json, Transcript};
 use super::proc::{
-    keep_tail, last_two_lines, lower_priority, spawn_error_text, JsonWorker, Supervised, WorkerSpec,
+    exit_text, keep_tail, last_two_lines, lower_priority, spawn_error_text, JsonWorker, Supervised,
+    WorkerSpec,
 };
 use crate::js::{self, jsre};
 use crate::jsval::{js_number_string, js_string};
@@ -549,6 +550,45 @@ async fn ollama_up(base: &str) -> bool {
         .is_ok_and(|r| r.status().is_success())
 }
 
+/// Raison d'un démarrage raté d'Ollama : arrêt (avec son code) ou délai
+/// dépassé, puis les dernières lignes d'erreur ou d'avertissement du journal
+/// (les dernières lignes tout court sont souvent de simples `level=INFO`), et
+/// si Ollama n'a vu aucune carte NVIDIA, laquelle lui était demandée.
+fn ollama_start_failure(tail: &str, exited: Option<&str>, waited_s: u64) -> String {
+    let why = match exited {
+        Some(code) => format!("arrêté au démarrage ({code})"),
+        None => format!("pas prêt après {waited_s} s"),
+    };
+    let errors: Vec<&str> = tail
+        .split('\n')
+        .map(str::trim)
+        .filter(|l| jsre!(r"level=(ERROR|WARN)|^error\b|\berror:|panic|fatal", "i").is_match(l))
+        .collect();
+    let lines = if errors.is_empty() {
+        last_two_lines(tail)
+    } else {
+        errors[errors.len().saturating_sub(2)..].join(" | ")
+    };
+    let cpu_only =
+        jsre!(r"library=cpu").is_match(tail) && !jsre!(r"library=(cuda|rocm)", "i").is_match(tail);
+    let gpu = if cpu_only {
+        format!(
+            " ; aucune carte NVIDIA vue par Ollama (CUDA_VISIBLE_DEVICES={})",
+            std::env::var("CUDA_VISIBLE_DEVICES")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "toutes".into())
+        )
+    } else {
+        String::new()
+    };
+    if lines.is_empty() {
+        format!("Ollama ne démarre pas : {why}{gpu}")
+    } else {
+        format!("Ollama ne démarre pas : {why}{gpu} — {lines}")
+    }
+}
+
 /// Ollama embarqué pour la durée de la traduction. Si un Ollama répond déjà
 /// sur le port (lancé ailleurs), il est utilisé tel quel et n'est pas arrêté.
 pub struct OllamaSession {
@@ -664,16 +704,14 @@ impl OllamaSession {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        let exited = if sup.has_exited() {
+            Some(exit_text(sup.wait().await.as_ref()))
+        } else {
+            None
+        };
         s.close().await;
-        let t = last_two_lines(&tail.lock().unwrap_or_else(|e| e.into_inner()));
-        Err(format!(
-            "Ollama ne démarre pas{}",
-            if t.is_empty() {
-                String::new()
-            } else {
-                format!(" : {t}")
-            }
-        ))
+        let t = tail.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        Err(ollama_start_failure(&t, exited.as_deref(), limit.as_secs()))
     }
 
     /// `ensureModel` : télécharge le modèle s'il manque (premier usage), avec
@@ -809,6 +847,29 @@ impl Drop for OllamaSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn echec_d_ollama_explique() {
+        let tail = "time=… level=INFO msg=\"Listening on 127.0.0.1:11434\"\nERROR: driverInitFileInfo 599 result=11\ntime=… level=INFO source=types.go:50 msg=\"inference compute\" id=cpu library=cpu compute=\"\"\n";
+        let m = ollama_start_failure(tail, None, 90);
+        assert!(
+            m.starts_with(
+                "Ollama ne démarre pas : pas prêt après 90 s ; aucune carte NVIDIA vue par Ollama"
+            ),
+            "{m}"
+        );
+        assert!(
+            m.ends_with("— ERROR: driverInitFileInfo 599 result=11"),
+            "{m}"
+        );
+        let m = ollama_start_failure("a\nb\nc\n", Some("code 1"), 90);
+        assert_eq!(
+            m,
+            "Ollama ne démarre pas : arrêté au démarrage (code 1) — b | c"
+        );
+        let gpu = "msg=\"inference compute\" id=GPU-1 library=CUDA compute=12.0\n";
+        assert!(!ollama_start_failure(gpu, None, 90).contains("aucune carte"));
+    }
 
     #[test]
     fn bibliotheques_cuda_du_seul_whisper() {

@@ -50,6 +50,13 @@ ENV PORT=3012
 # GPU NVIDIA visible du conteneur (avec --runtime=nvidia côté hôte).
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# Plusieurs cartes (p. ex. RTX 5060 Ti + RTX 3060) : numérotées dans l'ordre
+# du bus PCI, comme `nvidia-smi` (CUDA met sinon « la plus rapide » en 0, et
+# vLLM avertit d'un ordre ambigu), et TOUT le travail (Ollama, Whisper,
+# Parakeet, voix, Fish S2 Pro) sur la carte 0 seulement. `CUDA_VISIBLE_DEVICES=1`
+# choisit l'autre carte ; vide, toutes les cartes sont visibles.
+ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
+ENV CUDA_VISIBLE_DEVICES=0
 # Mémoire : deux zones d'allocation au plus par processus (serveur et
 # workers Python) au lieu d'une par cœur et par fil — la glibc gardait sinon
 # des centaines de Mo réservés et jamais rendus.
