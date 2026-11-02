@@ -29,6 +29,9 @@ pub fn lower_priority(pid: Option<u32>) {
     let Some(pid) = pid.filter(|p| *p > 0) else {
         return;
     };
+    // Processus lourds (Whisper, Ollama, voix, ffmpeg) tués en premier par le
+    // noyau si la mémoire du NAS manque, avant les services du NAS.
+    super::mem_guard::protect_host(pid, 1000);
     if nice == 0 {
         return;
     }

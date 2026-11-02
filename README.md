@@ -60,7 +60,6 @@ docker run -d \
   --name basketland \
   --restart unless-stopped \
   --runtime=nvidia \
-  --memory=6g \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 \
   -e TZ=Europe/Paris \
@@ -68,10 +67,12 @@ docker run -d \
   ghcr.io/r0m1k3/basketland:latest
 ```
 
-> `--memory=6g` plafonne la mémoire du conteneur : s'il en demande plus, c'est
-> un de ses processus (Whisper, Ollama…) qui est arrêté — le travail en cours
-> est repris plus tard — et non le NAS qui plante. Adaptez la valeur à la RAM
-> du NAS (laissez au moins 2 Go au système).
+> **Mémoire du NAS protégée sans réglage** : une traduction ou un doublage ne
+> démarre que s'il reste au moins 1,5 Go (ou 12 % de la RAM) de libre sur le
+> NAS, et s'interrompt sous 400 Mo (ou 4 %) — ses processus s'arrêtent, il
+> reprend plus tard (`[mémoire] …` dans le journal). Si la mémoire manque
+> malgré tout, le noyau arrête d'abord Whisper, Ollama ou les voix, jamais
+> les services du NAS. `MEM_GUARD=0` désactive l'attente et l'interruption.
 
 > `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
 > conteneur. Whisper et Ollama sont **dans l'image** : rien d'autre à
@@ -112,7 +113,7 @@ Dans Unraid : **Docker → Add Container**
 | Port (HTTP) | `3012` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Variable d'environnement | `NVIDIA_VISIBLE_DEVICES` = `all` |
-| Extra Parameters (vue avancée) | `--runtime=nvidia --memory=6g` |
+| Extra Parameters (vue avancée) | `--runtime=nvidia` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
 Puis **Apply**.
@@ -156,8 +157,6 @@ services:
     runtime: nvidia
     ports:
       - '3012:3012'
-    # Plafond de mémoire : protège le NAS (voir plus haut).
-    mem_limit: 6g
     environment:
       TZ: Europe/Paris
       NVIDIA_VISIBLE_DEVICES: all
@@ -174,7 +173,7 @@ push sur `main`. Pour reprendre la nouvelle version sur le NAS :
 docker pull ghcr.io/r0m1k3/basketland:latest && \
 docker stop basketland && docker rm basketland && \
 docker run -d --name basketland --restart unless-stopped \
-  --runtime=nvidia --memory=6g -e NVIDIA_VISIBLE_DEVICES=all \
+  --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest

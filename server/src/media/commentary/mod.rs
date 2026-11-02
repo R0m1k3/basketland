@@ -1472,12 +1472,25 @@ impl Commentary {
             .gpu_gate
             .clone();
         let gpu_wait = gate.and_then(|g| g());
+        // Avant de travailler : assez de mémoire libre sur le NAS pour Whisper
+        // et Ollama (le travail est créé tout de suite, il attend pour tourner).
+        let room = {
+            let signal = signal.clone();
+            async move { crate::media::mem_guard::wait_for_room("traduction", &signal).await }
+        };
         let work: BoxFut<Result<CommentaryOutcome, CommentaryError>> = match gpu_wait {
-            None => runner(job.clone(), progress, signal.clone(), ctl),
+            None => {
+                let run = runner(job.clone(), progress, signal.clone(), ctl);
+                Box::pin(async move {
+                    room.await;
+                    run.await
+                })
+            }
             Some(wait) => {
                 let (job, signal) = (job.clone(), signal.clone());
                 Box::pin(async move {
                     wait.await;
+                    room.await;
                     runner(job, progress, signal, ctl).await
                 })
             }
@@ -1490,6 +1503,13 @@ impl Commentary {
             let mut handle = tokio::spawn(work);
             let res = tokio::select! {
                 r = &mut handle => r.unwrap_or_else(|e| Err(CommentaryError::Other(e.to_string()))),
+                // RAM du NAS presque pleine : arrêt (processus fermés), reprise
+                // automatique rapide comme après une panne de service.
+                why = crate::media::mem_guard::watch() => {
+                    signal.abort();
+                    println!("[mémoire] match {match_id} : {why}");
+                    Ok(CommentaryOutcome::failed(FailureKind::Service, format!("Traduction suspendue : {why}")))
+                }
                 _ = tokio::time::sleep(Duration::from_millis(timeout as u64)) => {
                     signal.abort();
                     Err(CommentaryError::Other(format!(
