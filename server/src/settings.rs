@@ -36,10 +36,8 @@ pub mod keys {
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
     pub const VOICE_QUALITY: &str = "voice_quality";
     pub const VOICE_ENGINE: &str = "voice_engine";
-    pub const VOXTRAL_URL: &str = "voxtral_url";
     pub const TRANSLATE_ENGINE: &str = "translate_engine";
     pub const TRANSLATE_LOCAL_MODEL: &str = "translate_local_model";
-    pub const VOXTRAL_VOICES: &str = "voxtral_voices";
     /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
     pub const FETCH_PARALLEL: &str = "fetch_parallel";
     /// Noms à respecter dans les sous-titres (commentateurs, surnoms…), un par ligne.
@@ -269,14 +267,15 @@ pub fn voice_engine_choice(s: &Settings) -> Option<&'static str> {
     match s.get(keys::VOICE_ENGINE) {
         Some("local") => Some("local"),
         Some("minimax") => Some("minimax"),
-        Some("voxtral") => Some("voxtral"),
+        // « voxtral » : moteur remplacé par Fish S2 Pro.
+        Some("fish" | "voxtral") => Some("fish"),
         _ => None,
     }
 }
 
 /// Valeur acceptée pour `voiceEngine`.
 pub fn is_voice_engine(v: Option<&Value>) -> bool {
-    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax" || s == "voxtral")
+    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax" || s == "fish")
 }
 
 /// « Moteur de traduction » : moteur réellement utilisé, modèle embarqué,
@@ -308,23 +307,6 @@ pub fn translate_settings_view(s: &Settings) -> Value {
             "La traduction passe par un serveur externe (TRANSLATE_URL = {}) : le modèle choisi ici doit y être installé.",
             c.translate_url
         )),
-    })
-}
-
-/// Réglages Voxtral affichés dans la page (adresse, voix de chaque rôle, voix proposées).
-pub fn voxtral_settings_view(s: &Settings) -> Value {
-    let c = crate::media::voice_voxtral::voxtral_config(s);
-    let voices: Map<String, Value> = c
-        .voices
-        .iter()
-        .map(|(r, v)| (r.clone(), Value::from(v.clone())))
-        .collect();
-    json!({
-        "url": c.url,
-        "envUrl": env_trim("VOXTRAL_URL").is_some(),
-        "model": c.model,
-        "voices": voices,
-        "catalog": crate::media::voice_voxtral::VOXTRAL_VOICES,
     })
 }
 
@@ -643,7 +625,6 @@ pub fn settings_view(s: &Settings) -> Value {
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
         "voiceQuality": voice_quality(s),
         "voiceEngine": crate::media::voice_ai::voice_engine_name(s).as_str(),
-        "voxtral": voxtral_settings_view(s),
         "translate": translate_settings_view(s),
         "voiceQualityOverride": crate::media::voice_ai::voice_quality_override(s),
         "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),

@@ -82,18 +82,20 @@ RUN python3 -m venv /opt/parakeet \
  && ln -s "$WSP/nvidia/cudnn" "$SP/nvidia/cudnn" \
  && /opt/parakeet/bin/python -c "import ctypes, os, onnxruntime as rt, onnx_asr; rt.preload_dlls(directory=''); ctypes.CDLL(os.path.join(os.path.dirname(rt.__file__), 'capi', 'libonnxruntime_providers_cuda.so')); p = rt.get_available_providers(); print('onnxruntime', rt.__version__, p); assert 'CUDAExecutionProvider' in p"
 
-# ---------------------------------------------------------------- Voxtral (Mistral)
-# Voix au choix dans les Paramètres (« Voix du doublage » › Voxtral) : Voxtral
-# TTS 4B de Mistral, servi par vLLM-Omni (`vllm serve … --omni`), démarré par
-# le doublage sur la carte graphique puis arrêté. Environnement séparé : vLLM
-# impose ses propres torch et bibliothèques CUDA. Versions figées (0.22 :
-# corrige un plantage de 0.18 sous requêtes de synthèse simultanées). Poids
-# (~8 Go, licence CC BY-NC 4.0) téléchargés au premier usage dans /data/models/hf.
-FROM whisper AS voxtral
-RUN python3 -m venv /opt/voxtral \
- && /opt/voxtral/bin/pip install --no-cache-dir vllm==0.22.0 vllm-omni==0.22.0 \
- && test -x /opt/voxtral/bin/vllm \
- && /opt/voxtral/bin/python -c "import importlib.metadata as m; print('vllm', m.version('vllm'), 'vllm-omni', m.version('vllm-omni'), 'torch', m.version('torch'))"
+# ---------------------------------------------------------------- Fish Audio S2 Pro
+# Voix au choix dans les Paramètres (« Voix du doublage » › Fish S2 Pro) :
+# Fish Audio S2 Pro (5 milliards de paramètres) servi par vLLM-Omni
+# (`vllm serve fishaudio/s2-pro --omni`), démarré par le doublage sur la carte
+# graphique puis arrêté ; il clone les voix figées de assets/voices.
+# Environnement séparé : vLLM impose ses propres torch et bibliothèques CUDA.
+# Versions figées (vLLM-Omni 0.22 : moteur Fish S2 Pro avec clonage). Poids
+# (~11 Go, Fish Audio Research License : usage non commercial) téléchargés au
+# premier usage dans /data/models/hf.
+FROM whisper AS omni
+RUN python3 -m venv /opt/omni \
+ && /opt/omni/bin/pip install --no-cache-dir vllm==0.22.0 vllm-omni==0.22.0 \
+ && test -x /opt/omni/bin/vllm \
+ && /opt/omni/bin/python -c "import importlib.metadata as m; print('vllm', m.version('vllm'), 'vllm-omni', m.version('vllm-omni'), 'torch', m.version('torch'))"
 
 # ---------------------------------------------------------------- Voix
 # Doublage en français : Qwen3-TTS (clonage des voix figées de assets/voices),
@@ -145,11 +147,16 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # privilèges root après avoir rendu /data à l'utilisateur `node`. Sans ce
 # paquet, l'entrypoint échoue et le conteneur ne démarre pas.
 #
+# `gcc`, `libc6-dev`, `python3-dev` : Fish S2 Pro (vLLM) compile au démarrage
+# ses noyaux GPU avec Triton, qui a besoin d'un compilateur C et des en-têtes
+# de Python (« Failed to find C compiler » sinon).
+#
 # `libtesseract5` : OCR natif du serveur Rust (analyse vidéo), avec le MÊME
 # modèle de langue que tesseract.js (`eng.traineddata` 4.0.0_best_int de
 # @tesseract.js-data/eng, copié plus bas) : pas de paquet tesseract-ocr-eng.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux python3 libtesseract5 tzdata \
+      gcc libc6-dev python3-dev \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1000 node \
  && useradd --uid 1000 --gid node --create-home --home-dir /home/node --shell /bin/sh node
@@ -170,7 +177,7 @@ COPY --from=ollama /ollama/lib /usr/lib/ollama
 COPY --from=whisper /opt/whisper /opt/whisper
 COPY --from=tts /opt/tts /opt/tts
 COPY --from=parakeet /opt/parakeet /opt/parakeet
-COPY --from=voxtral /opt/voxtral /opt/voxtral
+COPY --from=omni /opt/omni /opt/omni
 COPY --from=rust /basketland-server /usr/local/bin/basketland-server
 
 # Interface : export statique de Next, servi par le serveur Rust.

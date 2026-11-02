@@ -221,16 +221,18 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   sans les consignes basket du prompt. Le choix l'emporte sur
   `TRANSLATE_MODEL` ; un serveur externe (`TRANSLATE_URL`) doit avoir le
   modèle installé.
-- **Voxtral (Mistral)** : 4ᵉ choix de « Voix du doublage ». Voxtral TTS 4B
-  (`mistralai/Voxtral-4B-TTS-2603`, licence CC BY-NC 4.0 : usage non
-  commercial) tourne dans le conteneur via vLLM-Omni (`/opt/voxtral`),
-  démarré par le doublage sur la carte graphique (16 Go conseillés) puis
-  arrêté ; poids (~8 Go) téléchargés au premier usage. Pas de clonage :
-  chaque rôle prend une des 20 voix toutes faites (Paramètres › Voxtral ;
-  seules `fr_male` et `fr_female` sont françaises). Un serveur externe est
-  possible (`VOXTRAL_URL`). Variables : `VOXTRAL_GPU_UTIL` (0.75),
-  `VOXTRAL_MAX_MODEL_LEN` (8192), `VOXTRAL_PORT` (8091),
-  `VOXTRAL_LOAD_TIMEOUT_MS` (45 min), `VOXTRAL_EXTRA_ARGS`.
+- **Fish Audio S2 Pro** : 4ᵉ choix de « Voix du doublage ». Fish S2 Pro
+  (`fishaudio/s2-pro`, 5 milliards de paramètres, Fish Audio Research
+  License : usage non commercial) tourne dans le conteneur via vLLM-Omni
+  (`/opt/omni`), démarré par le doublage sur la carte graphique (16 Go,
+  `--gpu-memory-utilization 0.9`) puis arrêté ; poids (~11 Go) téléchargés
+  au premier usage. Il CLONE les voix figées (`assets/voices/<rôle>/`
+  `reference.wav` + `reference.txt`) et reçoit une balise d'émotion sur les
+  moments forts (`[excited]`, `[enthusiastic]` quand la voix monte).
+  Variables : `FISH_GPU_UTIL` (0.9), `FISH_MAX_MODEL_LEN` (8192),
+  `FISH_PORT` (8091), `FISH_LOAD_TIMEOUT_MS` (45 min), `FISH_TIMEOUT_MS`
+  (180 s), `FISH_TAG_STRONG`, `FISH_TAG_RISE`, `FISH_TAG_CALM` (balises ;
+  vide : aucune), `FISH_EXTRA_ARGS`, `FISH_URL` (serveur externe).
 - **Doublage demandé prioritaire** : pendant un doublage lancé par « Doubler
   ce match » (voix embarquées), la pré-traduction de fond et les analyses
   vidéo de fond des AUTRES matchs attendent ; une pré-traduction déjà lancée

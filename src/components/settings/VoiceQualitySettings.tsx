@@ -6,7 +6,7 @@ import type { VoiceQuality } from '@/components/page/types';
 
 type Msg = { ok: boolean; text: string } | null;
 /** Choix affiché : voix embarquées (standard ou HD) ou MiniMax. */
-type VoiceChoice = VoiceQuality | 'minimax' | 'voxtral';
+type VoiceChoice = VoiceQuality | 'minimax' | 'fish';
 
 const OPTIONS: { value: VoiceChoice; title: string; text: string }[] = [
   {
@@ -20,9 +20,9 @@ const OPTIONS: { value: VoiceChoice; title: string; text: string }[] = [
     text: 'Qwen3-TTS 1.7B : gratuit, mêmes voix, intonation et timbre plus naturels. Environ 2 fois plus lent, ~4 Go de carte graphique.',
   },
   {
-    value: 'voxtral',
-    title: 'Voxtral',
-    text: 'Voxtral TTS de Mistral, dans le conteneur : gratuit, très bon en français. Voix toutes faites (réglées plus bas), ~8 Go téléchargés au premier doublage, carte de 16 Go.',
+    value: 'fish',
+    title: 'Fish S2 Pro',
+    text: 'Fish Audio S2 Pro dans le conteneur : gratuit, clone nos voix de commentateurs, s’emballe sur les moments forts. ~11 Go téléchargés au premier doublage, presque toute la carte de 16 Go pendant le doublage.',
   },
   {
     value: 'minimax',
@@ -31,7 +31,7 @@ const OPTIONS: { value: VoiceChoice; title: string; text: string }[] = [
   },
 ];
 
-type Reply = { voiceQuality: VoiceQuality; voiceEngine: 'local' | 'minimax' | 'voxtral'; voiceQualityOverride?: string | null };
+type Reply = { voiceQuality: VoiceQuality; voiceEngine: 'local' | 'minimax' | 'fish'; voiceQualityOverride?: string | null };
 
 /**
  * « Voix du doublage » (administrateurs) : qui dit les commentaires — voix
@@ -60,7 +60,7 @@ export default function VoiceQualitySettings({
     setBusy(true);
     setMsg(null);
     setChoice(next);
-    const body = next === 'minimax' || next === 'voxtral' ? { voiceEngine: next } : { voiceEngine: 'local', voiceQuality: next };
+    const body = next === 'minimax' || next === 'fish' ? { voiceEngine: next } : { voiceEngine: 'local', voiceQuality: next };
     const r = await postJson<Reply>('/api/admin/settings', body);
     setBusy(false);
     if (!r.ok) {
@@ -72,8 +72,8 @@ export default function VoiceQualitySettings({
     setMsg({
       ok: true,
       text:
-        next === 'voxtral'
-          ? 'Voxtral choisi pour les prochains doublages. Le modèle (~8 Go) est téléchargé au début du premier doublage.'
+        next === 'fish'
+          ? 'Fish S2 Pro choisi pour les prochains doublages. Le modèle (~11 Go) est téléchargé au début du premier doublage.'
           : next === 'minimax'
           ? minimaxKeySet
             ? 'Voix MiniMax choisies pour les prochains doublages.'

@@ -49,8 +49,8 @@ pub mod tesseract;
 pub mod video_scan;
 pub mod viewers;
 pub mod voice_ai;
+pub mod voice_fish;
 pub mod voice_minimax;
-pub mod voice_voxtral;
 
 pub use abort::AbortSignal;
 

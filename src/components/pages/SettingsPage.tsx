@@ -10,7 +10,6 @@ import TranscribeEngineSettings from '@/components/settings/TranscribeEngineSett
 import FetchParallelSettings from '@/components/settings/FetchParallelSettings';
 import ExtraNamesSettings from '@/components/settings/ExtraNamesSettings';
 import VoiceQualitySettings from '@/components/settings/VoiceQualitySettings';
-import VoxtralSettings from '@/components/settings/VoxtralSettings';
 import TranslationEngineSettings from '@/components/settings/TranslationEngineSettings';
 import VfModeSettings from '@/components/settings/VfModeSettings';
 import { PageData } from '@/components/page/pageData';
@@ -82,11 +81,10 @@ function Settings({ d }: { d: SettingsData }) {
           {a.translate && <TranslationEngineSettings initial={a.translate} />}
           <TranscribeEngineSettings initial={a.transcribe_engine} override={a.transcribe_engine_override} />
           <VoiceQualitySettings
-            initial={a.voice_engine === 'minimax' || a.voice_engine === 'voxtral' ? a.voice_engine : (a.voice_quality ?? 'standard')}
+            initial={a.voice_engine === 'minimax' || a.voice_engine === 'fish' ? a.voice_engine : (a.voice_quality ?? 'standard')}
             minimaxKeySet={!!a.minimax_key_set}
             override={a.voice_quality_override ?? null}
           />
-          {a.voxtral && <VoxtralSettings initial={a.voxtral} />}
           <ExtraNamesSettings initial={a.extra_names} />
           <FetchParallelSettings initial={a.fetch_parallel} />
           <MiniMaxSettings initial={a.minimax} initialRepair={a.translate_repair_model} />
