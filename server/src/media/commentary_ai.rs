@@ -196,7 +196,7 @@ pub fn transcribe_engine_override(s: &Settings) -> Option<String> {
     }
     if settings::transcribe_engine(s) == "nvidia" && !embedded_parakeet_available() {
         return Some(
-            "Parakeet est absent de cette image (environnement /opt/parakeet introuvable) : mettez l'image à jour.".into(),
+            "Parakeet est absent de cette image (environnement /opt/parakeet introuvable) : il n'est que dans l'image complète ghcr.io/r0m1k3/basketland:full.".into(),
         );
     }
     None

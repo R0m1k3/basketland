@@ -526,6 +526,20 @@ pub fn ai_client() -> &'static reqwest::Client {
 /// Corps d'un `fetch(url, { body: chaîne })` sans en-tête : Node l'envoie en `text/plain`.
 const TEXT_PLAIN: &str = "text/plain;charset=UTF-8";
 
+/// Lignes d'Ollama qui disent où va le modèle (« offloaded 35/35 layers to
+/// GPU ») : un modèle qui ne tient pas sur la carte déborde dans la RAM du
+/// NAS, et c'est la première chose à vérifier quand la mémoire sature.
+fn log_ollama_memory(text: &str) {
+    for line in text.lines() {
+        let l = line.to_ascii_lowercase();
+        if l.contains("offloaded") || l.contains("insufficient") || l.contains("out of memory") {
+            let line = line.trim();
+            let short: String = line.chars().take(300).collect();
+            println!("[ollama] {short}");
+        }
+    }
+}
+
 async fn ollama_up(base: &str) -> bool {
     ai_client()
         .get(format!("{base}/api/version"))
@@ -576,6 +590,22 @@ impl OllamaSession {
                 env_or("OLLAMA_CONTEXT_LENGTH", || "4096".into()),
             )
             .env("OLLAMA_KEEP_ALIVE", "10m")
+            // Mémoire : un seul modèle chargé, attention « flash » et cache
+            // des clés/valeurs en 8 bits (moitié moins de mémoire du contexte,
+            // donc moins de risque que le modèle déborde de la carte vers la
+            // RAM du NAS). Chaque réglage reste modifiable par l'environnement.
+            .env(
+                "OLLAMA_MAX_LOADED_MODELS",
+                env_or("OLLAMA_MAX_LOADED_MODELS", || "1".into()),
+            )
+            .env(
+                "OLLAMA_FLASH_ATTENTION",
+                env_or("OLLAMA_FLASH_ATTENTION", || "1".into()),
+            )
+            .env(
+                "OLLAMA_KV_CACHE_TYPE",
+                env_or("OLLAMA_KV_CACHE_TYPE", || "q8_0".into()),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -604,9 +634,11 @@ impl OllamaSession {
                     if n == 0 {
                         break;
                     }
+                    let text = String::from_utf8_lossy(&buf[..n]);
+                    log_ollama_memory(&text);
                     keep_tail(
                         &mut tail.lock().unwrap_or_else(|e| e.into_inner()),
-                        &String::from_utf8_lossy(&buf[..n]),
+                        &text,
                         2000,
                     );
                 }
@@ -759,6 +791,17 @@ impl OllamaSession {
         let c = self.child.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(c) = c {
             c.stop(Duration::from_secs(10)).await;
+        }
+    }
+}
+
+/// Session lâchée sans `close()` (travail annulé, panique) : `ollama serve`
+/// et son modèle (plusieurs Go) ne restent pas en mémoire, et le travail
+/// suivant n'adopte pas un serveur orphelin.
+impl Drop for OllamaSession {
+    fn drop(&mut self) {
+        if let Some(c) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            c.signal(libc::SIGTERM);
         }
     }
 }

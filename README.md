@@ -60,12 +60,18 @@ docker run -d \
   --name basketland \
   --restart unless-stopped \
   --runtime=nvidia \
+  --memory=6g \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 \
   -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
 ```
+
+> `--memory=6g` plafonne la mémoire du conteneur : s'il en demande plus, c'est
+> un de ses processus (Whisper, Ollama…) qui est arrêté — le travail en cours
+> est repris plus tard — et non le NAS qui plante. Adaptez la valeur à la RAM
+> du NAS (laissez au moins 2 Go au système).
 
 > `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
 > conteneur. Whisper et Ollama sont **dans l'image** : rien d'autre à
@@ -106,7 +112,7 @@ Dans Unraid : **Docker → Add Container**
 | Port (HTTP) | `3012` |
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Variable d'environnement | `NVIDIA_VISIBLE_DEVICES` = `all` |
-| Extra Parameters (vue avancée) | `--runtime=nvidia` |
+| Extra Parameters (vue avancée) | `--runtime=nvidia --memory=6g` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
 Puis **Apply**.
@@ -118,6 +124,22 @@ L'image est construite automatiquement par GitHub Actions à chaque push sur `ma
 ```
 ghcr.io/r0m1k3/basketland:latest
 ```
+
+Deux variantes (avant cette séparation : une seule image de 13,4 Go compressés, ≈ 25 Go sur le disque) :
+
+| Image | Contenu | Taille (compressée) |
+|---|---|---|
+| `ghcr.io/r0m1k3/basketland:latest` | Application, Ollama (CUDA 12), Whisper, Qwen3-TTS ; voix MiniMax en ligne | ≈ 5,5 Go (≈ 10 Go sur le disque) |
+| `ghcr.io/r0m1k3/basketland:full` | En plus Fish Audio S2 Pro (vLLM) et NVIDIA Parakeet | ≈ 11 Go (≈ 21 Go sur le disque) |
+
+`full` n'est construite qu'à la demande (Actions → *Build and Push Docker
+Image* → *Run workflow*, case « full ») ou pour une version étiquetée.
+
+**Mises à jour légères** : les couches lourdes (système, Ollama, Python et
+CUDA) sont dans une image de base (`Dockerfile.base`) reconstruite seulement
+quand elle change. Une nouvelle version de l'application ne change que les
+dernières couches (serveur, interface : ~100 Mo) : le NAS garde le reste. Le
+tout premier tirage après ce changement télécharge encore la base une fois.
 
 L'image est **publique** : aucun jeton n'est nécessaire sur le NAS, Unraid la
 tire directement. (Le dépôt GitHub et le paquet GHCR sont publics, comme les
@@ -134,6 +156,8 @@ services:
     runtime: nvidia
     ports:
       - '3012:3012'
+    # Plafond de mémoire : protège le NAS (voir plus haut).
+    mem_limit: 6g
     environment:
       TZ: Europe/Paris
       NVIDIA_VISIBLE_DEVICES: all
@@ -150,7 +174,7 @@ push sur `main`. Pour reprendre la nouvelle version sur le NAS :
 docker pull ghcr.io/r0m1k3/basketland:latest && \
 docker stop basketland && docker rm basketland && \
 docker run -d --name basketland --restart unless-stopped \
-  --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
+  --runtime=nvidia --memory=6g -e NVIDIA_VISIBLE_DEVICES=all \
   -p 3012:3012 -e TZ=Europe/Paris \
   -v /mnt/user/appdata/basketland:/data \
   ghcr.io/r0m1k3/basketland:latest
@@ -158,6 +182,9 @@ docker run -d --name basketland --restart unless-stopped \
 
 Le volume `/data` (base SQLite, jeton, cache, modèles de traduction) est conservé : `docker rm`
 sans `-v` ne touche pas au dossier hôte.
+
+Après une mise à jour, `docker image prune -f` supprime les anciennes
+versions de l'image (sinon chacune reste sur le disque du NAS).
 
 > Si tu as installé le conteneur via l'interface Unraid, un **Update** dans
 > l'onglet Docker fait la même chose (téléchargement de la nouvelle image
@@ -316,13 +343,14 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `ANALYSIS_TIMEOUT_MS` | `5400000` (90 min) | Durée maximale d'une analyse : au-delà, elle passe en échec et la file continue. |
 | `OCR_DISABLED` | — | `1` désactive la phase OCR. |
 | `OCR_STEP_SEC` | `105` | Pas du balayage grossier du chrono à l'écran (un affinage suit là où les ancres manquent). |
-| `SEGMENT_CACHE_MB` | `512` | Cache mémoire des segments vidéo (0 le désactive). Les segments **à venir** de chaque lecture sont gardés en priorité, les segments déjà lus partent les premiers. 90 s de 1080p pèsent ~70 Mo. |
+| `SEGMENT_CACHE_MB` | `192` | Cache mémoire des segments vidéo (0 le désactive). Les segments **à venir** de chaque lecture sont gardés en priorité, les segments déjà lus partent les premiers. 90 s de 1080p pèsent ~70 Mo. |
 | `PREFETCH_AHEAD_SEC` | `90` | Avance du préchargement côté serveur, en secondes de vidéo au-delà du dernier segment demandé par le lecteur (lui-même garde 90 à 180 s d'avance). Bornée à 30 segments et à 60 % du cache. Le préchargement suit la qualité réellement lue. 0 le désactive. |
 | `PREFETCH_CONCURRENCY` | `3` | Segments préchargés en parallèle depuis ok.ru (1 à 8), en plus de ceux que le lecteur demande. |
 | `SEGMENT_STALL_MS` | `5000` | Un téléchargement ok.ru qui ne reçoit plus un octet pendant ce délai (ou dont les en-têtes tardent 1,6 fois plus) est coupé et repris là où il s'était arrêté, sur une connexion neuve, sans que le lecteur voie la coupure. Avant, une connexion bloquée gelait la lecture jusqu'à 60 s. |
 | `SEGMENT_RETRIES` | `4` | Reprises au plus par segment (blocage, coupure, erreur réseau ou 5xx ; une signature expirée déclenche en plus une nouvelle résolution du flux). |
 | `MP4_PROXY_CACHE` | `1` | Replays encore en MP4 seul (pas de HLS) : fichier servi par blocs de 2 Mo, avec cache et lecture anticipée sur plusieurs connexions (un seul flux bridé par ok.ru hachait la lecture). `0` : ancien relais direct. |
-| `MP4_CACHE_MB` | `384` | Cache mémoire des blocs MP4 (32 à 8192). |
+| `MP4_CACHE_MB` | `128` | Cache mémoire des blocs MP4 (32 à 8192). |
+| `VIDEO_CACHE_IDLE_MIN` | `5` | Sans lecture depuis ce nombre de minutes, les caches vidéo (segments et blocs MP4) sont vidés et leur mémoire rendue au système. `0` : jamais. |
 | `MP4_PARALLEL` | `6` | Blocs MP4 téléchargés en même temps pour la lecture anticipée (1 à 32) ; le bloc attendu par le lecteur passe toujours devant. |
 | `MP4_READAHEAD_BLOCKS` | `12` | Blocs de 2 Mo lus d'avance (12 ≈ 50 s pour un match de 4 Go). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
@@ -402,7 +430,7 @@ pendant 5 s, `SEGMENT_STALL_MS`) est coupée et le segment reprend où il en
 jusqu'à `SEGMENT_RETRIES` reprises) ; le serveur précharge ~90 s devant la
 position de chaque spectateur, dans la qualité réellement lue
 (`PREFETCH_AHEAD_SEC`, 3 téléchargements en parallèle), et son cache
-(`SEGMENT_CACHE_MB`, 512 Mo) garde en priorité les segments à venir. Si
+(`SEGMENT_CACHE_MB`, 192 Mo) garde en priorité les segments à venir. Si
 `[vidéo] le lecteur rattrape le préchargement` revient souvent, ok.ru est
 trop lent pour la qualité choisie (ou le cache trop petit).
 
@@ -516,6 +544,9 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_MODEL` | `translategemma:12b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **TranslateGemma 12B** (Q4_K_M, ≈ 8,1 Go), le modèle de traduction de Google (voir plus bas). Alternatives : `gemma4:e4b` (1er du banc d'essai, plus léger), `gemma4:12b`, `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
 | `TRANSLATE_PARALLEL` | `2` (`8` en ligne) | Lots (ou phrases en mode `mt`) traduits en même temps : 2 avec Ollama (embarqué ou externe), 8 avec une API en ligne (MiniMax, OpenAI ; 1 à 16). L'Ollama embarqué règle `OLLAMA_NUM_PARALLEL` pareil ; pour un Ollama externe, le régler soi-même. Avec Ollama, c'est aussi le nombre de lots en cours **tous tronçons confondus** (les autres attendent leur tour dans Basketland, pas dans la file d'Ollama où l'attente comptait dans `TRANSLATE_TIMEOUT_MS`). Sur une carte de 12 Go ou plus avec `gemma4:e4b`, `4` accélère encore nettement. La réflexion des modèles (Gemma 4, Qwen 3) est coupée (`think: false`) : inutile pour traduire, elle ajoutait des centaines de jetons cachés à chaque lot et pouvait tronquer la réponse (`num_predict`). |
+| `OLLAMA_FLASH_ATTENTION` | `1` | Ollama embarqué : attention « flash » (moins de mémoire pour le contexte). |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Ollama embarqué : cache du contexte en 8 bits, moitié moins de mémoire qu'en `f16` ; le modèle a moins de risque de déborder de la carte vers la RAM du NAS. Le journal `[ollama] … offloaded N/M layers to GPU` dit où il est chargé (N < M : une partie tourne sur le processeur, en RAM). |
+| `OLLAMA_MAX_LOADED_MODELS` | `1` | Ollama embarqué : un seul modèle en mémoire à la fois. |
 | `TRANSLATE_BATCH` | `14` | Sous-titres par lot (1 à 60). 12 à 15 recommandé : au-delà, les modèles fusionnent ou décalent plus souvent des lignes. |
 | `TRANSLATE_JSON_SCHEMA` | auto | `1` / `0` : impose ou non le schéma JSON de sortie (Ollama embarqué). Auto : oui pour Gemma 4 E2B/E4B, non sinon (Gemma 4 12B décale des lignes sous schéma imposé ; TranslateGemma passe par son gabarit brut, sans schéma). |
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |

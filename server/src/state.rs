@@ -53,10 +53,16 @@ impl Media {
             }
         })));
         // Par référence faible : le doublage tient déjà l'analyse (pas de cycle d'Arc).
+        // Les analyses de fond attendent aussi la fin d'une traduction : ffmpeg
+        // et Tesseract à côté de Whisper et d'Ollama, c'est la mémoire du NAS
+        // qui sature.
         let d = Arc::downgrade(&dub.0);
+        let c = Arc::downgrade(&commentary.0);
         analysis.set_gpu_reserved(Some(Arc::new(move || {
             d.upgrade()
                 .is_some_and(|i| !dub::Dub(i).gpu_reservations().is_empty())
+                || c.upgrade()
+                    .is_some_and(|i| Commentary(i).running_match_id().is_some())
         })));
         Media {
             commentary,

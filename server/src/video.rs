@@ -92,7 +92,14 @@ const STREAMS_PURGE_AT: usize = 200;
 
 const PLAYLIST_CACHE_MAX: usize = 100;
 /// Budget par défaut du cache de segments (Mo).
-pub const DEFAULT_SEGMENT_CACHE_MB: f64 = 512.0;
+/// 192 Mo : ~4 min de 1080p, dont 60 % de segments à venir (préchargement).
+/// Ancien défaut : 512 Mo, gardés pour toujours après une lecture.
+pub const DEFAULT_SEGMENT_CACHE_MB: f64 = 192.0;
+/// Budget par défaut du cache des blocs MP4 (Mo).
+pub const DEFAULT_MP4_CACHE_MB: u64 = 128;
+/// Sans lecture depuis ce délai, les caches du proxy sont vidés et la
+/// mémoire rendue au système (`VIDEO_CACHE_IDLE_MIN`, 0 : jamais).
+const DEFAULT_CACHE_IDLE_MIN: u64 = 5;
 /// Plafond de la fenêtre de préchargement, quelle que soit la durée des segments.
 pub const PREFETCH_MAX_SEGMENTS: i64 = 30;
 /// Part du cache que les segments à venir peuvent occuper.
@@ -544,6 +551,8 @@ struct Inner {
     env: Option<Mutex<HashMap<String, String>>>,
     clock_offset: AtomicI64,
     t0: Instant,
+    /// Dernière requête de segment ou de MP4 (ms depuis `t0`, horloge réelle).
+    last_use_ms: AtomicU64,
     ids: AtomicU64,
     st: Mutex<State>,
     logs: Mutex<Logs>,
@@ -753,9 +762,72 @@ pub fn m3u8_response(text: String) -> Response {
     r
 }
 
+/// Rend au système la mémoire libérée par l'allocateur (glibc la garde sinon
+/// pour la réutiliser : le processus restait à sa taille maximale).
+pub fn release_free_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim ne fait que rendre des pages libres au noyau.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 impl Video {
     pub fn new() -> Self {
-        Self::build(None)
+        let v = Self::build(None);
+        v.spawn_idle_purge();
+        v
+    }
+
+    /// Caches vidés après `VIDEO_CACHE_IDLE_MIN` minutes sans lecture : ils
+    /// restaient pleins (jusqu'à ~900 Mo avec les anciens défauts) jusqu'au
+    /// redémarrage du conteneur.
+    fn spawn_idle_purge(&self) {
+        let idle_min = std::env::var("VIDEO_CACHE_IDLE_MIN")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_CACHE_IDLE_MIN);
+        if idle_min == 0 || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let weak = Arc::downgrade(&self.0);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let Some(inner) = weak.upgrade() else { break };
+                let v = Video(inner);
+                if v.idle_ms() >= idle_min * 60_000 && v.purge_caches() {
+                    println!("[vidéo] aucune lecture depuis {idle_min} min : caches vidés");
+                }
+            }
+        });
+    }
+
+    fn touch(&self) {
+        let now = self.0.t0.elapsed().as_millis() as u64;
+        self.0.last_use_ms.store(now, Ordering::Relaxed);
+    }
+
+    fn idle_ms(&self) -> u64 {
+        let now = self.0.t0.elapsed().as_millis() as u64;
+        now.saturating_sub(self.0.last_use_ms.load(Ordering::Relaxed))
+    }
+
+    /// Vide les caches de segments et de blocs MP4 s'ils contiennent quelque
+    /// chose, puis rend la mémoire libérée au système. Rend `true` si vidé.
+    fn purge_caches(&self) -> bool {
+        let had = {
+            let st = self.0.state();
+            st.seg_cache.bytes() > 0
+        } || self.0.mp4_blocks.cached_bytes() > 0;
+        if !had {
+            return false;
+        }
+        self.clear_proxy_caches();
+        self.0.mp4_blocks.clear();
+        release_free_memory();
+        true
     }
 
     /// Proxy de test : amont simulé, environnement isolé, logs capturés.
@@ -788,7 +860,10 @@ impl Video {
             .and_then(|v| v.trim().parse::<u64>().ok())
         };
         let mp4_blocks = crate::mp4_proxy::Mp4Cache::new(
-            env_get("MP4_CACHE_MB").unwrap_or(384).clamp(32, 8192) << 20,
+            env_get("MP4_CACHE_MB")
+                .unwrap_or(DEFAULT_MP4_CACHE_MB)
+                .clamp(32, 8192)
+                << 20,
             env_get("MP4_PARALLEL").unwrap_or(6).clamp(1, 32) as usize,
             env_get("MP4_READAHEAD_BLOCKS").unwrap_or(12).min(128),
         );
@@ -799,6 +874,7 @@ impl Video {
             env,
             clock_offset: AtomicI64::new(0),
             t0: Instant::now(),
+            last_use_ms: AtomicU64::new(0),
             ids: AtomicU64::new(1),
             st: Mutex::new(State {
                 streams: HashMap::new(),
@@ -1082,6 +1158,7 @@ impl Video {
         range: Option<&str>,
     ) -> VResult<Response> {
         self.assert_known(db, ok_id).await?;
+        self.touch();
         let Some(s) = s.filter(|s| !s.is_empty()) else {
             return Err(VErr::proxy(400, "paramètre s manquant"));
         };
@@ -1253,6 +1330,7 @@ impl Video {
     /// client s'en va (le corps relayé est abandonné avec la réponse).
     pub async fn mp4(&self, db: &Db, ok_id: &str, range_in: Option<&str>) -> VResult<Response> {
         self.assert_known(db, ok_id).await?;
+        self.touch();
         let i = &self.0;
         let range = sanitize_range(range_in);
         // Par blocs, avec cache et lecture anticipée sur plusieurs connexions
@@ -2852,14 +2930,30 @@ mod tests {
     }
 
     #[test]
+    fn caches_vides_apres_inactivite() {
+        let v = Video::for_tests(TestConfig::default());
+        // Rien en cache : rien à vider.
+        assert!(!v.purge_caches());
+        v.touch();
+        assert!(v.idle_ms() < 60_000);
+        v.0.state()
+            .seg_cache
+            .set("seg", Bytes::from_static(b"0123456789"), 10);
+        assert_eq!(v.segment_cache_stats().0, 10);
+        assert!(v.purge_caches());
+        assert_eq!(v.segment_cache_stats().0, 0);
+        assert!(!v.purge_caches());
+    }
+
+    #[test]
     fn reglages_par_defaut_et_environnement() {
         let v = Video::for_tests(TestConfig::default());
         assert_eq!(v.prefetch_settings(), (90.0, 3));
         assert_eq!(v.prefetch_window(6.0), 15);
         assert_eq!(v.prefetch_window(6.006), 15);
         assert_eq!(v.prefetch_window(2.0), PREFETCH_MAX_SEGMENTS);
-        assert_eq!(DEFAULT_SEGMENT_CACHE_MB, 512.0);
-        assert_eq!(v.segment_cache_stats().1, 512 * 1024 * 1024);
+        assert_eq!(DEFAULT_SEGMENT_CACHE_MB, 192.0);
+        assert_eq!(v.segment_cache_stats().1, 192 * 1024 * 1024);
         assert_eq!(v.download_settings(), (5000.0, 8000, 4));
         v.set_env("PREFETCH_AHEAD_SEC", Some("60"));
         v.set_env("PREFETCH_CONCURRENCY", Some("2"));

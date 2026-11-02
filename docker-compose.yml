@@ -8,6 +8,10 @@ services:
     runtime: nvidia
     ports:
       - '3012:3012'
+    # Plafond de mémoire du conteneur : au-delà, un de ses processus (Whisper,
+    # Ollama…) est arrêté et le travail repris plus tard, au lieu de faire
+    # planter le NAS. À adapter à la RAM du NAS (laisser 2 Go au système).
+    mem_limit: 6g
     environment:
       TZ: Europe/Paris
       NVIDIA_VISIBLE_DEVICES: all

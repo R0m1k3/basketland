@@ -124,6 +124,11 @@ impl Mp4Cache {
         }))
     }
 
+    /// Vide le cache des blocs (les téléchargements en cours se terminent).
+    pub fn clear(&self) {
+        self.st().cache.clear();
+    }
+
     fn st(&self) -> std::sync::MutexGuard<'_, State> {
         self.0.st.lock().unwrap_or_else(|e| e.into_inner())
     }
