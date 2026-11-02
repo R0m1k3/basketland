@@ -172,13 +172,14 @@ pub(crate) fn short(e: &str) -> String {
 
 // ---------------------------------------------------------------- Whisper
 
-/// `WHISPER_BEAM_SIZE` : largeur du faisceau de Whisper (1 à 10, 1 par défaut : glouton).
+/// `WHISPER_BEAM_SIZE` : largeur du faisceau de Whisper (1 à 10, 5 par défaut ;
+/// 1 : décodage glouton, plus rapide mais moins juste sur l'audio bruité).
 pub fn whisper_beam_size() -> u32 {
     std::env::var("WHISPER_BEAM_SIZE")
         .ok()
         .and_then(|v| js::trim(&v).parse::<u32>().ok())
         .filter(|n| (1..=10).contains(n))
-        .unwrap_or(1)
+        .unwrap_or(5)
 }
 
 /// Une session de transcription : un processus Python, un modèle chargé.
@@ -352,8 +353,9 @@ impl WhisperSession {
             models.join("whisper").to_string_lossy().into_owned(),
         ];
         if !parakeet {
-            // Décodage glouton par défaut (`WHISPER_BEAM_SIZE`, 1) : 1,5 à 2 fois
-            // plus rapide que la recherche en faisceau (5), presque aussi juste.
+            // Recherche en faisceau (`WHISPER_BEAM_SIZE`, 5) : plus juste que le
+            // décodage glouton (1) quand le public couvre les commentateurs,
+            // 1,5 à 2 fois plus lent (la carte a la marge).
             args.push("--beam-size".into());
             args.push(whisper_beam_size().to_string());
         }

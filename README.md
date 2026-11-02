@@ -499,13 +499,16 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSCRIBE_MODEL` | `deepdml/faster-whisper-large-v3-turbo-ct2` | Modèle Whisper (embarqué ou speaches). |
 | `WHISPER_PROMPT` | — | `1` : donne à Whisper les équipes et les effectifs. Désactivé par défaut : mesuré, cela corrige quelques noms mais produit des segments de 30 s. |
 | `WHISPER_HOTWORDS` | activé | Donne l'effectif du match à Whisper embarqué (`hotwords`) : banc d'essai sur 11 min de vrais commentaires, noms justes 61 % → 79 % et WER 8,0 → 6,0 % (avec la correction par l'effectif : 85 % et 5,5 %). Les sous-titres étant recoupés sur les mots, les segments plus longs ne gênent pas. `0` désactive. |
-| `WHISPER_COMPUTE_TYPE` | auto | Précision de Whisper. Auto : `int8_float16` sur carte NVIDIA (~1,2-1,5 Go de VRAM au lieu de ~2-2,5 Go), `int8` sur processeur. |
+| `WHISPER_COMPUTE_TYPE` | auto | Précision de Whisper. Auto : `float16` sur carte NVIDIA (pleine précision, ~1,6 Go pour turbo, ~3 Go pour large-v3), `int8` sur processeur. `int8_float16` : moitié moins de mémoire, un peu moins juste. |
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
-| `WHISPER_BEAM_SIZE` | `1` | Largeur du faisceau de Whisper (1 à 10). `1` (décodage glouton) : 1,5 à 2 fois plus rapide que `5`, presque aussi juste. |
+| `WHISPER_BEAM_SIZE` | `5` | Largeur du faisceau de Whisper (1 à 10). `5` : plus juste quand le public couvre les commentateurs ; `1` (décodage glouton) : 1,5 à 2 fois plus rapide, moins juste sur l'audio bruité. |
+| `WHISPER_VAD_THRESHOLD` | `0.35` | Seuil de détection de la parole (Silero VAD, 0,5 par défaut chez faster-whisper) : plus bas, moins de passages couverts par le public écartés comme « pas de parole ». |
+| `WHISPER_VAD_MIN_SILENCE_MS` | `1000` | Silence (ms) qui sépare deux passages de parole. |
+| `WHISPER_VAD_PAD_MS` | `400` | Marge (ms) gardée autour de chaque passage de parole. |
 | `PARAKEET_PYTHON` | `/opt/parakeet/bin/python` | Python du moteur « NVIDIA Parakeet » (Paramètres › Transcription des commentateurs). |
 | `PARAKEET_QUANTIZATION` | `auto` | Précision de Parakeet : `auto` (modèle d'origine sur carte NVIDIA, `int8` sur processeur), `int8` ou `fp32`. |
 | `PARAKEET_BATCH_SIZE` | `8` | Passages de parole transcrits ensemble par Parakeet. |
