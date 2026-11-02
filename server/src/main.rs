@@ -4,6 +4,8 @@ use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 
 /// `GET /api/health` sur le port local (`PORT`, 3012) : 0 si 200, sinon 1.
+/// La raison est écrite sur la sortie : Docker la garde dans le journal du
+/// contrôle (`docker inspect --format '{{json .State.Health}}' basketland`).
 fn health_check() -> i32 {
     use std::io::{Read, Write};
     let port: u16 = std::env::var("PORT")
@@ -11,19 +13,27 @@ fn health_check() -> i32 {
         .and_then(|p| p.parse().ok())
         .unwrap_or(3012);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let ok = (|| -> std::io::Result<bool> {
+    let res = (|| -> std::io::Result<String> {
         let mut s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
         s.set_read_timeout(Some(Duration::from_secs(5)))?;
         s.write_all(b"GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")?;
         let mut head = [0u8; 12];
         s.read_exact(&mut head)?;
-        Ok(head.starts_with(b"HTTP/1.") && &head[9..12] == b"200")
-    })()
-    .unwrap_or(false);
-    if ok {
-        0
-    } else {
-        1
+        Ok(String::from_utf8_lossy(&head).into_owned())
+    })();
+    match res {
+        Ok(head) if head.starts_with("HTTP/1.") && head.get(9..12) == Some("200") => {
+            println!("ok");
+            0
+        }
+        Ok(head) => {
+            println!("/api/health sur {addr} : réponse « {} »", head.trim());
+            1
+        }
+        Err(e) => {
+            println!("/api/health sur {addr} : {e}");
+            1
+        }
     }
 }
 
