@@ -421,50 +421,6 @@ async fn quota_epuise_la_file_attend_puis_reprend() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn un_doublage_demande_passe_avant_la_pre_traduction() {
-    let _g = LOCK.lock().await;
-    let t = setup(&[A, B, C]);
-    set_env("COMMENTARY_NIGHT_WINDOW", "always");
-    set_env("COMMENTARY_REPUMP_MS", "20");
-    let gated = Gated::default();
-    t.svc.set_runner(Some(gated.runner(true, None)));
-    // Pré-traduction de fond de A en cours.
-    t.svc.enqueue(A, EnqueueOptions::default());
-    assert_eq!(gated.started(), vec![A]);
-    // « Doubler ce match » sur C : la pré-traduction de A cède la place…
-    let reserved: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![C]));
-    let r2 = reserved.clone();
-    t.svc
-        .set_dub_gpu_reservations(Some(Arc::new(move || r2.lock().unwrap().clone())));
-    t.svc.yield_to_dub(C);
-    for _ in 0..100 {
-        if t.svc.running_match_id().is_none() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    // … et la pré-traduction (A, B) attend tant que le doublage tient la carte.
-    t.svc.enqueue(B, EnqueueOptions::default());
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(gated.started(), vec![A]);
-    assert!(t.svc.queue_position(A).is_some() && t.svc.queue_position(B).is_some());
-    // La traduction demandée pour le match doublé lui-même n'attend pas.
-    t.svc.enqueue(C, opts(true, false, true));
-    assert_eq!(gated.started(), vec![A, C]);
-    gated.resolve(C, ok("fait"));
-    // Doublage terminé : la pré-traduction reprend.
-    reserved.lock().unwrap().clear();
-    for _ in 0..100 {
-        if gated.started().len() >= 3 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(gated.started(), vec![A, C, A]);
-    unset_env("COMMENTARY_REPUMP_MS");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn job_periodique_matchs_recents_sans_piste_a_jour() {
     let _g = LOCK.lock().await;
     let t = setup(&[A, B, C]);
@@ -1371,7 +1327,6 @@ async fn son_complet_reel_pendant_un_travail() {
     });
     deps.extract_full = real.extract_full.clone();
     deps.cut = real.cut.clone();
-    t.svc.set_dub_wants_audio(Some(Arc::new(|_| true)));
     let (r, _) = run(&t.svc, D, false, &deps, CommentaryControl::run_to_end()).await;
     assert!(r.unwrap().ok);
     assert!(calls.lock().unwrap().extract.is_empty()); // aucun tronçon lu dans le flux
@@ -1381,16 +1336,13 @@ async fn son_complet_reel_pendant_un_travail() {
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    assert!(files.contains(&"full.ogg".to_string())); // gardé pour le doublage
-    assert!(files
-        .iter()
-        .all(|f| f == "full.ogg" || f.ends_with(".json"))); // et les transcriptions
-    assert!((probe(&dir.join("full.ogg")) - 1300.0).abs() < 1.0);
+    // Son effacé à la fin ; seules les transcriptions restent.
+    assert!(files.iter().all(|f| f.ends_with(".json")), "{files:?}");
 }
 
 #[test]
 fn appels_attendus_des_routes() {
-    // Contrat public dont dépendent les routes et le doublage (compile seulement).
+    // Contrat public dont dépendent les routes (compile seulement).
     fn _api(c: &Commentary) {
         let _: cm::CommentaryStatus = c.status(1);
         let _: Vec<cdb::CommentaryCueRow> = c.served_cues(1);

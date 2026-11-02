@@ -658,8 +658,7 @@ async fn travaux_complets_comme_node() {
     scenario!("son-complet", |x| {
         set_env("COMMENTARY_FULL_AUDIO_POLL_MS", "5");
         let mut out = Vec::new();
-        for (label, wants, force) in [("sans-doublage", false, false), ("doublage", true, true)] {
-            x.svc.set_dub_wants_audio(Some(Arc::new(move |_| wants)));
+        for (label, force) in [("sans-doublage", false)] {
             let (mut d, c) = fake_deps(Fake::default());
             let full = Arc::new(Mutex::new(Vec::<String>::new()));
             let cuts = Arc::new(Mutex::new(Vec::<f64>::new()));

@@ -18,24 +18,10 @@ export interface CommentaryState {
   stopped?: boolean;
 }
 
-/** État du doublage, tiré du manifeste GET /api/matches/[id]/dub. */
-export interface DubBannerState {
-  status: 'none' | 'waiting' | 'running' | 'partial' | 'ready' | 'disabled' | 'failed';
-  reason?: string;
-  /** Pendant le travail : tronçons doublés sur tronçons traduits publiés. */
-  progress?: { done: number; total: number };
-  /** Étape en cours, ou téléchargement des voix qui avance pendant l'attente. */
-  step?: string;
-  /** Arrêté à la demande : « Reprendre le doublage » le relance. */
-  stopped?: boolean;
-  /** Tronçons déjà doublés (jouables). */
-  chunks: number;
-}
-
-/** Réponse d'une commande POST /commentary ou /dub, pour le retour affiché sous le bandeau. */
+/** Réponse d'une commande POST /commentary, pour le retour affiché sous le bandeau. */
 export interface CommandResult {
   ok: boolean;
-  /** La traduction (ou le doublage) est en file ou en cours après la commande. */
+  /** La traduction est en file ou en cours après la commande. */
   accepted: boolean;
   message: string | null;
 }
@@ -69,7 +55,7 @@ function rangeAt(covered: [number, number][] | undefined, t: number): [number, n
 /** Raison renvoyée par le serveur (en minuscule), en début de phrase. */
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** Une ligne d'état du bandeau (traduction ou doublage). */
+/** Une ligne d'état du bandeau. */
 interface Line {
   tone: string;
   dot: string;
@@ -95,57 +81,6 @@ function StatusLine({ line }: { line: Line }) {
       </span>
     </span>
   );
-}
-
-/** Ligne du doublage, ou null quand il n'y a rien à en dire (pas commencé, moteur de voix inactif). */
-function dubLine(dub: DubBannerState, canStart: boolean): Line | null {
-  const base = { tone: 'text-paper-dim', dot: 'bg-paper-faint', spinning: false };
-  switch (dub.status) {
-    case 'running': {
-      const p = dub.progress;
-      const listen = 'Les passages déjà doublés s’écoutent tout de suite : menu ⚙ du lecteur → Voix → « VF doublée ».';
-      return {
-        ...base,
-        tone: 'text-flame-hot',
-        spinning: true,
-        title: p ? `Doublage en voix françaises · ${p.done} / ${p.total} tronçon${p.total > 1 ? 's' : ''}` : 'Doublage en voix françaises : démarrage',
-        detail: dub.step ? cap(dub.step) : listen,
-        note: dub.step && dub.chunks > 0 ? listen : null,
-      };
-    }
-    case 'waiting':
-      return {
-        ...base,
-        tone: 'text-flame-hot',
-        dot: 'bg-flame',
-        title: 'Doublage en attente',
-        detail: dub.reason ? cap(dub.reason) : null,
-        note: dub.step ? `${cap(dub.step)} (continue pendant l’attente)` : null,
-      };
-    case 'partial':
-      if (dub.stopped) {
-        return {
-          ...base,
-          dot: 'bg-flame/50',
-          title: `Doublage arrêté (${dub.chunks} tronçon${dub.chunks > 1 ? 's' : ''} doublé${dub.chunks > 1 ? 's' : ''})`,
-          detail: canStart ? '« Reprendre le doublage » le relance là où il s’est arrêté.' : 'Les passages pas encore doublés restent en VO.',
-        };
-      }
-      return {
-        ...base,
-        dot: 'bg-flame/50',
-        title: `Doublé en partie (${dub.chunks} tronçon${dub.chunks > 1 ? 's' : ''})`,
-        detail: dub.reason ? cap(dub.reason) : canStart ? '« Doubler ce match » complète le doublage.' : 'Les passages pas encore doublés restent en VO.',
-      };
-    case 'ready':
-      return { ...base, tone: 'text-win', dot: 'bg-win', title: 'Voix françaises prêtes', detail: 'Menu ⚙ du lecteur → Voix → « VF doublée ».' };
-    case 'failed':
-      return { ...base, tone: 'text-loss', dot: 'bg-loss', title: 'Doublage impossible pour l’instant', detail: dub.reason ?? null };
-    case 'none':
-      return dub.stopped ? { ...base, title: 'Doublage arrêté', detail: canStart ? '« Reprendre le doublage » le relance.' : null } : null;
-    default:
-      return null;
-  }
 }
 
 const RELAUNCH_ICON = (
@@ -180,33 +115,20 @@ function Confirm({ text, busy, onConfirm, onCancel }: { text: string; busy: bool
 
 /**
  * Bandeau d'état sous le lecteur : ce que fait la chaîne
- * audio → transcription → traduction, en une ligne, puis le doublage en
- * voix françaises, sur une seconde ligne dès qu'il a commencé.
+ * audio → transcription → traduction, en une ligne.
  *
  * - Traduction automatique désactivée (Paramètres) : un match pas encore
  *   traduit affiche le bouton « Sous-titrer ce match ».
- * - « Doubler ce match » (tout utilisateur ; moteur de voix actif, match pas
- *   entièrement doublé ni déjà en file), dans les deux modes : seul ce
- *   bouton lance le doublage (et la traduction s'il le faut) ; une
- *   traduction ne le lance jamais. Mis en avant en mode « doublage ».
- * - « Arrêter le doublage » (tout utilisateur) pendant que le match est
- *   doublé ou en file : ce qui est doublé reste, et « Reprendre le
- *   doublage » (le bouton « Doubler ce match ») le relance.
- * - Administrateurs : « Relancer la traduction » et « Relancer le doublage »
- *   (avec confirmation) — refont la piste même terminée ; inactifs pendant
- *   que ce match est traduit (ou doublé).
+ * - Administrateurs : « Relancer la traduction » (avec confirmation) —
+ *   refait la piste même terminée ; inactif pendant que ce match est
+ *   traduit.
  */
 export default function CommentaryStatus({
   state,
   hasReplay,
   autoTranslate,
-  vfMode = 'sous-titres',
-  dub = null,
   onStart,
   onRelaunch,
-  onDub,
-  onDubRelaunch,
-  onDubStop,
   onStop,
   position = 0,
 }: {
@@ -214,27 +136,17 @@ export default function CommentaryStatus({
   hasReplay: boolean;
   /** Réglage serveur « Traduction automatique ». */
   autoTranslate: boolean;
-  /** Réglage serveur « Version française ». */
-  vfMode?: 'sous-titres' | 'doublage';
-  /** État du doublage (manifeste), null tant qu'il n'est pas chargé. */
-  dub?: DubBannerState | null;
   /** Lancement explicite : « Sous-titrer ce match », « Réessayer ». */
   onStart: () => Promise<CommandResult>;
   /** Relance forcée (administrateurs seulement ; absent sinon). */
   onRelaunch?: () => Promise<CommandResult>;
-  /** Doublage explicite : « Doubler ce match ». */
-  onDub?: () => Promise<CommandResult>;
-  /** Doublage effacé puis refait (administrateurs seulement ; absent sinon). */
-  onDubRelaunch?: () => Promise<CommandResult>;
-  /** « Arrêter le doublage » : retiré de la file ou interrompu, sans rien effacer. */
-  onDubStop?: () => Promise<CommandResult>;
   /** « Arrêter la traduction » : retirée de la file ou interrompue, ce qui est traduit reste. */
   onStop?: () => Promise<CommandResult>;
   /** Position de lecture (s), lue à chaque mise à jour du statut. */
   position?: number;
 }) {
   const [busy, setBusy] = useState(false);
-  const [confirming, setConfirming] = useState<null | 'traduction' | 'doublage'>(null);
+  const [confirming, setConfirming] = useState<null | 'traduction'>(null);
   const [feedback, setFeedback] = useState<CommandResult | null>(null);
 
   // Le message du serveur s'efface de lui-même : le bandeau dit déjà l'état.
@@ -269,15 +181,8 @@ export default function CommentaryStatus({
   const manualStart = (!autoTranslate && status === 'none' && !state.reason) || stopped;
   /** « Arrêter la traduction » : pendant la traduction de ce match ou son attente. */
   const translationStop = !!onStop && (status === 'running' || status === 'queued');
-  /** Match sans replay exploitable (ou introuvable) : ni traduction ni doublage possibles. */
+  /** Match sans replay exploitable (ou introuvable) : traduction impossible. */
   const noReplay = status === 'none' && !!state.reason;
-  const dubStatus = dub?.status;
-  const dubEngineOn = !!dub && dubStatus !== 'disabled';
-  const dubStopped = !!dub?.stopped;
-  const dubStart =
-    !!onDub && dubEngineOn && status !== 'disabled' && !noReplay && (dubStatus === 'none' || dubStatus === 'partial' || dubStatus === 'failed');
-  /** « Arrêter le doublage » : pendant le doublage de ce match ou son attente. */
-  const dubStop = !!onDubStop && dubEngineOn && (dubStatus === 'running' || dubStatus === 'waiting');
 
   if (status === 'ready') {
     tone = 'text-win';
@@ -334,15 +239,9 @@ export default function CommentaryStatus({
   } else if (manualStart) {
     const partial = !!state.covered?.length;
     title = partial ? 'Commentaires traduits en partie' : 'Commentaires pas encore traduits';
-    if (dubStart) {
-      detail = partial
-        ? 'Complétez les sous-titres français (à partir de la position de lecture), ou doublez le match en voix françaises.'
-        : 'Sous-titres français au fil de la lecture, en quelques minutes ; ou voix françaises (après les sous-titres, plus long).';
-    } else {
-      detail = partial
-        ? 'Lancez la traduction pour compléter les sous-titres français (à partir de la position de lecture).'
-        : 'Lancez la traduction : les sous-titres français arrivent au fil de la lecture, en quelques minutes.';
-    }
+    detail = partial
+      ? 'Lancez la traduction pour compléter les sous-titres français (à partir de la position de lecture).'
+      : 'Lancez la traduction : les sous-titres français arrivent au fil de la lecture, en quelques minutes.';
   } else {
     title = 'Traduction des commentaires en préparation';
   }
@@ -352,23 +251,15 @@ export default function CommentaryStatus({
   // ce match est traduit (la file ne relance pas un travail en cours).
   const canRelaunch = !!onRelaunch && status !== 'disabled' && !noReplay;
   const relaunchBlocked = status === 'running';
-  // Relance du doublage (admin) : seulement s'il y a un doublage à refaire ; inactive pendant le doublage de ce match.
-  const canRelaunchDub = !!onDubRelaunch && dubEngineOn && !noReplay && (!!dub?.chunks || dubStatus === 'ready' || dubStatus === 'failed' || dubStatus === 'running');
-  const dubRelaunchBlocked = dubStatus === 'running';
 
   const translationLine: Line = { tone, dot, spinning, title, detail };
-  const dubInfo = dub && dubEngineOn ? dubLine(dub, dubStart) : null;
-  // Les deux boutons proposés : le mode « Version française » choisit celui qui est mis en avant.
-  const dubFirst = vfMode === 'doublage';
-  const showButtons =
-    manualStart || translationStop || status === 'failed' || dubStart || dubStop || (canRelaunch && confirming !== 'traduction') || (canRelaunchDub && confirming !== 'doublage');
+  const showButtons = manualStart || translationStop || status === 'failed' || (canRelaunch && confirming !== 'traduction');
 
   return (
     <div className="panel-soft px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="min-w-0 flex-1 basis-60 space-y-2">
           <StatusLine line={translationLine} />
-          {dubInfo && <StatusLine line={dubInfo} />}
         </div>
         {showButtons && (
           <span className="flex flex-wrap items-center gap-2">
@@ -377,7 +268,7 @@ export default function CommentaryStatus({
                 type="button"
                 onClick={() => void run(onStart, false)}
                 disabled={busy}
-                className={`${dubStart && dubFirst ? 'btn' : 'btn-primary'} !py-1.5 text-xs`}
+                className="btn-primary !py-1.5 text-xs"
                 title={stopped ? 'Terminer la traduction des commentaires de ce match' : 'Traduire les commentaires en sous-titres français'}
               >
                 {stopped ? 'Reprendre la traduction' : 'Sous-titrer ce match'}
@@ -400,33 +291,6 @@ export default function CommentaryStatus({
                 Réessayer
               </button>
             )}
-            {dubStart && onDub && (
-              <button
-                type="button"
-                onClick={() => void run(onDub, false)}
-                disabled={busy}
-                className={`${dubFirst ? 'btn-primary' : 'btn'} !py-1.5 text-xs`}
-                title="Traduire les commentaires (si besoin), puis les faire dire par des voix françaises"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="9" y="3" width="6" height="11" rx="3" />
-                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
-                </svg>
-                {dubStopped ? 'Reprendre le doublage' : 'Doubler ce match'}
-              </button>
-            )}
-            {dubStop && onDubStop && (
-              <button
-                type="button"
-                onClick={() => void run(onDubStop, true)}
-                disabled={busy}
-                className={RELAUNCH_CLASS}
-                title="Arrêter le doublage de ce match (les passages déjà doublés restent disponibles)"
-              >
-                {STOP_ICON}
-                Arrêter le doublage
-              </button>
-            )}
             {canRelaunch && confirming !== 'traduction' && (
               <button
                 type="button"
@@ -441,18 +305,6 @@ export default function CommentaryStatus({
               >
                 {RELAUNCH_ICON}
                 Relancer la traduction
-              </button>
-            )}
-            {canRelaunchDub && confirming !== 'doublage' && (
-              <button
-                type="button"
-                onClick={() => setConfirming('doublage')}
-                disabled={busy || dubRelaunchBlocked}
-                className={RELAUNCH_CLASS}
-                title={dubRelaunchBlocked ? 'Possible une fois le doublage en cours terminé' : 'Administrateurs : effacer le doublage de ce match et le refaire'}
-              >
-                {RELAUNCH_ICON}
-                Relancer le doublage
               </button>
             )}
           </span>
@@ -470,16 +322,6 @@ export default function CommentaryStatus({
               ? 'Relancer la traduction ? La traduction actuelle de ce match sera effacée puis refaite entièrement (plusieurs minutes de calcul).'
               : 'Relancer la traduction ? Ce match passe en tête de file, même après un échec ; ce qui est déjà traduit est repris.'
           }
-        />
-      )}
-
-      {/* Confirmation de la relance du doublage (administrateurs) : elle efface le doublage existant. */}
-      {canRelaunchDub && confirming === 'doublage' && !dubRelaunchBlocked && onDubRelaunch && (
-        <Confirm
-          busy={busy}
-          onConfirm={() => void run(onDubRelaunch, true)}
-          onCancel={() => setConfirming(null)}
-          text="Relancer le doublage ? Les voix françaises de ce match seront effacées puis refaites entièrement (long calcul pour le serveur ; les sous-titres ne sont pas refaits)."
         />
       )}
 

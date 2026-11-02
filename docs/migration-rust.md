@@ -1,5 +1,10 @@
 # Migration du serveur en Rust
 
+> **Note (novembre 2026)** : le doublage français (voix de synthèse) a
+> depuis été retiré de l'application ; seuls les sous-titres traduits
+> restent. Les mentions du doublage ci-dessous décrivent l'historique de la
+> migration.
+
 Objectif : tout le **serveur** en Rust (API, files de traduction et de
 doublage, proxy vidéo, cron, OCR) ; l'**interface React reste telle
 quelle**, compilée en fichiers statiques servis par le binaire Rust. À la

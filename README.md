@@ -51,7 +51,7 @@ Sans carte NVIDIA, tout fonctionne aussi, mais la traduction tourne sur le
 processeur (bien plus lente : plusieurs heures par match).
 
 **Plusieurs cartes** (p. ex. RTX 5060 Ti + RTX 3060) : tout le travail
-(Ollama, Whisper, Parakeet, voix, Fish S2 Pro) tourne sur **la carte 0**, au
+(Ollama, Whisper, Parakeet) tourne sur **la carte 0**, au
 sens de `nvidia-smi` (ordre du bus PCI). Variable `CUDA_VISIBLE_DEVICES` :
 `0` par défaut, `1` pour l'autre carte, vide pour les laisser toutes visibles.
 Le journal `[commentaires] Ollama embarqué prêt (GPU)` confirme qu'Ollama
@@ -74,11 +74,11 @@ docker run -d \
   ghcr.io/r0m1k3/basketland:latest
 ```
 
-> **Mémoire du NAS protégée sans réglage** : une traduction ou un doublage ne
+> **Mémoire du NAS protégée sans réglage** : une traduction ne
 > démarre que s'il reste au moins 1,5 Go (ou 12 % de la RAM) de libre sur le
 > NAS, et s'interrompt sous 400 Mo (ou 4 %) — ses processus s'arrêtent, il
 > reprend plus tard (`[mémoire] …` dans le journal). Si la mémoire manque
-> malgré tout, le noyau arrête d'abord Whisper, Ollama ou les voix, jamais
+> malgré tout, le noyau arrête d'abord Whisper ou Ollama, jamais
 > les services du NAS. `MEM_GUARD=0` désactive l'attente et l'interruption.
 
 > `--runtime=nvidia` et `NVIDIA_VISIBLE_DEVICES=all` donnent la carte au
@@ -138,8 +138,8 @@ Deux variantes (avant cette séparation : une seule image de 13,4 Go compressés
 
 | Image | Contenu | Taille (compressée) |
 |---|---|---|
-| `ghcr.io/r0m1k3/basketland:latest` | Application, Ollama (CUDA 12), Whisper, Qwen3-TTS ; voix MiniMax en ligne | ≈ 5,5 Go (≈ 10 Go sur le disque) |
-| `ghcr.io/r0m1k3/basketland:full` | En plus Fish Audio S2 Pro (vLLM) et NVIDIA Parakeet | ≈ 11 Go (≈ 21 Go sur le disque) |
+| `ghcr.io/r0m1k3/basketland:latest` | Application, Ollama (CUDA 12), Whisper | plus légère qu'avant (voix retirées) |
+| `ghcr.io/r0m1k3/basketland:full` | En plus NVIDIA Parakeet (≈ 1,5 Go) | un peu plus grande que `latest` |
 
 `full` n'est construite qu'à la demande (Actions → *Build and Push Docker
 Image* → *Run workflow*, case « full ») ou pour une version étiquetée.
@@ -251,12 +251,6 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   prend plus d'avance sur la lecture ; les noms sont corrigés après coup).
   Modèle téléchargé au premier usage dans `/data/models`. Vaut pour les
   prochaines traductions (« Relancer la traduction » refait une piste).
-- **Voix du doublage** : dans Paramètres › « Voix du doublage », un
-  administrateur choisit les voix embarquées Standard (Qwen3-TTS 0.6B), HD
-  (Qwen3-TTS 1.7B : mêmes voix clonées, intonation plus naturelle, ~4 Go de
-  carte, 2 fois plus lent) ou MiniMax, même si une clé MiniMax est
-  enregistrée (sans choix : MiniMax dès qu'une clé existe). `TTS_ENGINE` et
-  `TTS_MODEL` l'emportent.
 - **Moteur de traduction** : dans Paramètres › « Moteur de traduction »,
   Embarqué (Ollama), MiniMax ou OpenAI, et le modèle embarqué :
   TranslateGemma 12B (défaut), Gemma 4 E4B, Hunyuan-MT 7B de Tencent
@@ -266,25 +260,8 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
   sans les consignes basket du prompt. Le choix l'emporte sur
   `TRANSLATE_MODEL` ; un serveur externe (`TRANSLATE_URL`) doit avoir le
   modèle installé.
-- **Fish Audio S2 Pro** : 4ᵉ choix de « Voix du doublage ». Fish S2 Pro
-  (`fishaudio/s2-pro`, 5 milliards de paramètres, Fish Audio Research
-  License : usage non commercial) tourne dans le conteneur via vLLM-Omni
-  (`/opt/omni`), démarré par le doublage sur la carte graphique (16 Go,
-  `--gpu-memory-utilization 0.9`) puis arrêté ; poids (~11 Go) téléchargés
-  au premier usage. Il CLONE les voix figées (`assets/voices/<rôle>/`
-  `reference.wav` + `reference.txt`) et reçoit une balise d'émotion sur les
-  moments forts (`[excited]`, `[enthusiastic]` quand la voix monte).
-  Variables : `FISH_GPU_UTIL` (0.9), `FISH_MAX_MODEL_LEN` (8192),
-  `FISH_PORT` (8091), `FISH_LOAD_TIMEOUT_MS` (45 min), `FISH_TIMEOUT_MS`
-  (180 s), `FISH_TAG_STRONG`, `FISH_TAG_RISE`, `FISH_TAG_CALM` (balises ;
-  vide : aucune), `FISH_EXTRA_ARGS`, `FISH_URL` (serveur externe).
-- **Doublage demandé prioritaire** : pendant un doublage lancé par « Doubler
-  ce match » (voix embarquées), la pré-traduction de fond et les analyses
-  vidéo de fond des AUTRES matchs attendent ; une pré-traduction déjà lancée
-  est mise en pause et reprend après. La traduction du match doublé, et
-  celle d'un match regardé, passent toujours.
-- **Quota épuisé** (MiniMax, OpenAI) : la file de traduction (ou de
-  doublage) se met en pause `QUOTA_PAUSE_MIN` minutes (60) au lieu
+- **Quota épuisé** (MiniMax, OpenAI) : la file de traduction se met en
+  pause `QUOTA_PAUSE_MIN` minutes (60) au lieu
   d'enchaîner les matchs ; la fiche l'indique, et un changement de clé, de
   modèle ou de moteur lève la pause.
 - **Mot de passe perdu** : depuis le NAS,
@@ -482,25 +459,9 @@ lecture ») et la file d'attente, ainsi que l'état de chaque replay : « VF »
 **Traduction automatique** (Paramètres, administrateurs ; activée par
 défaut) : désactivée, plus rien ne part tout seul — ni travail de fond (ceux
 déjà en file sont abandonnés), ni lancement à l'ouverture d'un match. La
-fiche affiche alors les boutons **« Sous-titrer ce match »** et **« Doubler
-ce match »** (pour tout utilisateur connecté). Moins de charge pour le
+fiche affiche alors le bouton **« Sous-titrer ce match »** (pour tout
+utilisateur connecté). Moins de charge pour le
 serveur.
-
-**Version française** (Paramètres, administrateurs) : **Sous-titres** (par
-défaut) ou **Doublage voix**. Le doublage part des sous-titres : la
-traduction est faite dans les deux modes. **Une traduction ne lance jamais
-le doublage** (ni la traduction automatique, ni « Sous-titrer ce match », ni
-« Relancer la traduction ») : un match n'est doublé que sur **« Doubler ce
-match »** (tout utilisateur connecté), qui lance aussi la traduction s'il le
-faut. Le mode Doublage voix met ce bouton en avant et fait partir le lecteur
-en « VF doublée » tant que l'utilisateur n'a rien choisi. Un doublage demandé
-va jusqu'au bout même si l'on quitte la fiche (en pause pendant la lecture
-d'un autre match et pendant une traduction). **« Arrêter le doublage »**
-(tout utilisateur, pendant le doublage ou son attente) le retire de la file
-ou l'interrompt, par exemple pour passer à une autre vidéo : les passages
-déjà doublés restent, la traduction continue, et « Reprendre le doublage »
-le relance. Les administrateurs ont en plus « Relancer le doublage » (efface
-le doublage et le refait).
 
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
 et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
@@ -526,7 +487,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
   utilisateur). Une ligne que le LLM ne
   sait pas traduire est gardée en anglais en base (marquée `untranslated`)
   sans bloquer le match, mais **jamais affichée** (ni sous-titre, ni export
-  WebVTT, ni doublage) : pas d'anglais au milieu de la VF. Elle est retentée
+  WebVTT) : pas d'anglais au milieu de la VF. Elle est retentée
   à la fin du travail suivant sur ce match, et une piste complète qui en
   contient encore (publiée avant ce rattrapage) reçoit un **travail court de
   rattrapage** — sans flux vidéo ni Whisper, les lignes retraduites une à
@@ -549,7 +510,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
-| `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper, Parakeet, voix, Fish S2 Pro), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
+| `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper, Parakeet), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
 | `WHISPER_BEAM_SIZE` | `5` | Largeur du faisceau de Whisper (1 à 10). `5` : plus juste quand le public couvre les commentateurs ; `1` (décodage glouton) : 1,5 à 2 fois plus rapide, moins juste sur l'audio bruité. |
@@ -559,7 +520,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `PARAKEET_PYTHON` | `/opt/parakeet/bin/python` | Python du moteur « NVIDIA Parakeet » (Paramètres › Transcription des commentateurs). |
 | `PARAKEET_QUANTIZATION` | `auto` | Précision de Parakeet : `auto` (modèle d'origine sur carte NVIDIA, `int8` sur processeur), `int8` ou `fp32`. |
 | `PARAKEET_BATCH_SIZE` | `8` | Passages de parole transcrits ensemble par Parakeet. |
-| `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama (et des voix du doublage, cache Hugging Face `hf/`). |
+| `MODELS_DIR` | `/data/models` | Dossier des modèles Whisper et Ollama (et de Parakeet, cache Hugging Face `hf/`). |
 | `TRANSLATE_MODEL` | `translategemma:12b` | Modèle Ollama de traduction (téléchargé au premier usage par l'Ollama embarqué). Par défaut **TranslateGemma 12B** (Q4_K_M, ≈ 8,1 Go), le modèle de traduction de Google (voir plus bas). Alternatives : `gemma4:e4b` (1er du banc d'essai, plus léger), `gemma4:12b`, `mistral-nemo:12b` ; `hf.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF:Q8_0` reste possible (moteur `mt`). |
 | `TRANSLATE_ENGINE` | auto | `mt` (modèle de traduction pur : gabarit officiel, une phrase à la fois) ou `chat` (LLM généraliste : lots JSON + prompt système). Auto : `mt` si le nom du modèle contient « milmmt », sinon `chat`. |
 | `TRANSLATE_PARALLEL` | `2` (`8` en ligne) | Lots (ou phrases en mode `mt`) traduits en même temps : 2 avec Ollama (embarqué ou externe), 8 avec une API en ligne (MiniMax, OpenAI ; 1 à 16). L'Ollama embarqué règle `OLLAMA_NUM_PARALLEL` pareil ; pour un Ollama externe, le régler soi-même. Avec Ollama, c'est aussi le nombre de lots en cours **tous tronçons confondus** (les autres attendent leur tour dans Basketland, pas dans la file d'Ollama où l'attente comptait dans `TRANSLATE_TIMEOUT_MS`). Sur une carte de 12 Go ou plus avec `gemma4:e4b`, `4` accélère encore nettement. La réflexion des modèles (Gemma 4, Qwen 3) est coupée (`think: false`) : inutile pour traduire, elle ajoutait des centaines de jetons cachés à chaque lot et pouvait tronquer la réponse (`num_predict`). |
@@ -573,7 +534,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
 | `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
 | `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
-| `COMMENTARY_MAX_LEAD_SEC` | `0` | Avance maximale de la traduction sur la lecture (s). `0` (défaut) : aucune, la traduction va au bout du match d'une traite (utile pour doubler ensuite). Une valeur, p. ex. `300` : pendant la lecture, la traduction attend quand elle a cette avance. |
+| `COMMENTARY_MAX_LEAD_SEC` | `0` | Avance maximale de la traduction sur la lecture (s). `0` (défaut) : aucune, la traduction va au bout du match d'une traite. Une valeur, p. ex. `300` : pendant la lecture, la traduction attend quand elle a cette avance. |
 | `COMMENTARY_OVERLAP` | `1` | Le tronçon suivant est transcrit pendant que le courant se traduit (la transcription n'attend plus le traducteur). `0` : l'un après l'autre. |
 | `TRANSLATE_REPAIR_MODEL` | `MiniMax-M3` (MiniMax) | Modèle qui reprend une à une les lignes que le modèle de traduction a laissées en anglais, avec des caractères chinois ou des mots collés (réglable dans Paramètres › MiniMax › « Reprise des lignes douteuses » ; `aucun` : le modèle de traduction reprend lui-même). Pour OpenAI, seulement par cette variable. |
 | `COMMENTARY_TRANSLATE_AHEAD` | `3` | Tronçons traduits en même temps (1 à 8) pendant que les suivants se transcrivent. Un traducteur en ligne (MiniMax-M3 : 1 à 4 min par tronçon) est bien plus lent que la transcription sur GPU (1 s) : un seul à la fois la faisait attendre. Chaque tronçon est publié dès qu'il est traduit ; un échec arrête le travail. |
@@ -581,7 +542,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | — | — | Son de chaque tronçon pris d'abord dans le **son seul** d'ok.ru (manifeste DASH `metadataUrl`, piste AAC ≥ 48 kb/s : 5 à 7 fois moins de données que la vidéo HLS, horodatage juste à 20 ms près), fragments téléchargés en parallèle par plages d'octets ; flux vidéo HLS en secours (abandonné pour le travail après deux échecs du son seul). |
 | `COMMENTARY_FETCH_PARALLEL` | `16` | Connexions simultanées vers ok.ru par tronçon (1 à 32), quand rien n'est choisi dans Paramètres › Téléchargement de l'audio (le choix de la page l'emporte). |
 | `COMMENTARY_FETCH_STALL_MS` | `6000` | Sans un octet pendant ce délai, un segment est repris sur une connexion neuve. |
-| `COMMENTARY_FULL_AUDIO` | `1` | Sans le téléchargement parallèle seulement (`COMMENTARY_PARALLEL_FETCH=0`) : le son de tout le match est extrait en une seule passe dès le début de la traduction ; traduction et doublage en découpent leurs tronçons sur place. `0` : extraction tronçon par tronçon. |
+| `COMMENTARY_FULL_AUDIO` | `1` | Sans le téléchargement parallèle seulement (`COMMENTARY_PARALLEL_FETCH=0`) : le son de tout le match est extrait en une seule passe dès le début de la traduction ; la traduction en découpe ses tronçons sur place. `0` : extraction tronçon par tronçon. |
 | `COMMENTARY_AUDIO_READRATE` | — | Vitesse maximale de cette extraction, en multiple du temps réel (ffmpeg `-readrate`), si elle gêne la lecture. |
 | `BACKGROUND_NICE` | `10` | Priorité processeur des tâches lourdes (ffmpeg, Whisper, Ollama, OCR) : 0 à 19, plus haut = plus discret. La lecture vidéo garde la main. |
 | `COMMENTARY_VIEWER_IDLE_MS` | `180000` (3 min) | Sans signe de vie de la fiche pendant ce délai, la traduction se met en pause et décharge les modèles. |
@@ -626,182 +587,6 @@ phrase au prorata de l'anglais. Le prompt système ne s'applique pas.
 **Temps estimé** par match (2 h) sur une carte 12 Go : Whisper turbo
 ~3-6 min + TranslateGemma 12B ~12-20 min avec 2 lots en parallèle, soit
 **≈ 20-30 min** (estimation calculée, pas mesurée : à confirmer sur le NAS).
-
-## Doublage (voix françaises)
-
-Le doublage fait dire les sous-titres traduits par des **voix françaises
-synthétisées dans le conteneur**, sur la carte NVIDIA : Qwen3-TTS
-(Apache-2.0, modèle `Qwen/Qwen3-TTS-12Hz-0.6B-Base`) **clone** l'une des
-voix figées livrées dans `assets/voices/` (un enregistrement de référence de
-7-8 s à 24 kHz, `reference.wav`, et sa transcription, `reference.txt`) :
-
-| Voix | Rôle |
-|---|---|
-| `A` | Commentateur (play-by-play) |
-| `B4` | Consultant principal |
-| `B1` | Troisième voix (2e consultant, bord du terrain, interview) |
-| `F` | Voix féminine (reporter au bord du terrain, consultante) |
-
-Ces voix ont été **créées** par Qwen3-TTS VoiceDesign à partir d'une
-description (aucune voix réelle n'est imitée) puis validées à l'écoute ;
-`voice.json` garde leur fiche de création. Pour attribuer chaque ligne au bon
-commentateur, le même moteur calcule l'**empreinte vocale** des passages
-(SpeechBrain ECAPA, `speechbrain/spkrec-ecapa-voxceleb`), la hauteur
-médiane de la voix (F0) et la **probabilité que ce soit une voix de femme**
-(classifieur `JaesungHuh/voice-gender-classifier`, licence MIT : un
-ECAPA-TDNN affiné sur VoxCeleb2, 62 Mo ; architecture dans
-`scripts/voice_gender.py`).
-
-Le moteur (`scripts/voice_worker.py`, environnement Python `/opt/tts` de
-l'image, piloté par `src/lib/voiceAi.ts`) est démarré à la demande puis
-arrêté à la fin, comme Whisper. Modèles téléchargés au premier usage dans
-`/data/models/hf` (≈ 2,5 Go pour Qwen3-TTS, ≈ 85 Mo pour ECAPA, 62 Mo pour
-le classifieur homme/femme), jamais dans l'image. Ce téléchargement se fait
-à part (`voice_worker.py --download-only`), sans la carte graphique : il
-commence dès qu'un doublage est mis en file, continue pendant que le doublage
-attend le GPU (traduction ou analyse en cours) et n'est jamais interrompu
-quand le doublage cède la place ; la fiche du match affiche sa progression,
-puis l'étape en cours (extraction, chargement du moteur, reconnaissance des
-voix, synthèse des répliques n / N, montage). Qwen3-TTS peut parfois ne
-pas finir sa phrase : chaque synthèse est plafonnée en longueur
-(proportionnelle au texte) et en temps, une prise ratée (plafond atteint,
-délai dépassé, durée absurde) est refaite une fois, puis signalée en erreur.
-
-**Mémoire GPU** : Qwen3-TTS 0.6B en bf16 ≈ **3 à 4 Go** (estimation, pas
-mesurée sur carte : 1,8 Go de poids et 0,7 Go de codec, plus le cache et les
-activations ; ECAPA et le classifieur homme/femme ≈ 0,2 Go de plus). Le
-doublage passe **après** la traduction : Whisper et TranslateGemma sont déchargés avant, ils ne tournent
-jamais en même temps. bf16 à partir des RTX 30xx, float16 sur les RTX 20xx
-(les builds CUDA 12.8 de torch exigent une carte Turing ou plus récente).
-Sans carte, le moteur tourne sur le processeur en float32, environ 8 fois
-plus lentement que le temps réel (mesuré sur 4 cœurs libres, bien plus
-lent sur un processeur occupé) : bon pour un essai, pas pour un match entier. L'environnement `/opt/tts` (torch 2.8 CUDA 12.8)
-ajoute ≈ 2,6 Go compressés à l'image ; cuBLAS et cuDNN sont partagés avec
-Whisper.
-
-**Déroulement** (`src/lib/dub.ts`) : un match est doublé **tronçon par
-tronçon** dès que ses sous-titres français existent (piste en cours ou
-complète), dans une file à part, un match à la fois. Pour chaque tronçon :
-l'audio est réextrait, chaque réplique reçoit son locuteur (empreintes ECAPA
-regroupées sur tout le match, seuil `DUB_SPEAKER_SIM`), puis sa voix — une
-locutrice prend **F** (voir ci-dessous), les autres par temps de parole : le
-1er locuteur prend **A**, le 2e **B4**, les suivants **B1** ; une voix
-attribuée ne change plus de tout le match (sauf la bascule unique vers F).
-**Une phrase garde sa voix du début à la fin** : ses morceaux prennent tous
-le locuteur qui en dit la plus grande part (l'empreinte d'un morceau court
-est peu fiable). Les **noms des joueurs** sont dits comme un commentateur
-français les prononce : à chaque doublage, les joueurs et entraîneurs des
-deux équipes pas encore connus sont demandés une fois au modèle de
-traduction (« Jalen » → « Djaleune ») et gardés dans une mémoire commune à
-tous les matchs (`kv_cache`, `dub-name-spellings`) ; les sous-titres gardent
-la vraie orthographe (`DUB_NAME_SPELLING=0` désactive).
-Chaque réplique est dite (« ! » ajouté sur les moments forts : l'intonation
-suit la ponctuation ; avec MiniMax, débit, volume et hauteur montent aussi), accélérée si elle déborde de sa place (×1,35 au plus, sinon la
-suivante est repoussée : deux voix ne parlent jamais en même temps), puis le
-tronçon est monté en AAC (`/data/dub/<match>/chunk-N.m4a`). Le doublage **ne
-tourne jamais en même temps qu'une traduction ou une analyse** (la carte
-graphique est partagée) : il s'arrête à la réplique suivante et reprend
-après. Il ne part que sur un clic « Doubler ce match » (`POST
-/api/matches/[id]/dub`), jamais après une traduction ni en tâche de fond.
-Comme la traduction, il s'efface pendant la lecture d'un autre match, et le
-doublage demandé du match regardé passe devant (`GET /api/matches/[id]/dub` :
-manifeste des tronçons ; `/dub/<n>` : l'audio). Il suit la traduction en
-cours tronçon par tronçon jusqu'au doublage complet.
-
-**Voix féminine automatique** : une locutrice (reporter au bord du terrain,
-consultante) prend la voix **F**. Pour chaque réplique d'au moins 1 s, le
-classifieur donne la probabilité d'une voix de femme ; un locuteur prend F
-quand au moins **10 s** de ses répliques ont été classées et que leur
-probabilité moyenne (pondérée par la durée) atteint `DUB_FEMALE_PROB`
-(**0,85**). Seules ses **30 premières secondes** de parole comptent : un
-locuteur vu d'abord trop brièvement reçoit une voix d'homme provisoire, puis
-bascule **une seule fois** vers F si les preuves arrivent dans ces 30 s
-(journal : « locuteur #n reconnu comme une femme ») ; ensuite son genre est
-figé, jamais de changement de voix en plein match. La hauteur de voix ne
-décide pas : sur le son diffusé, un commentateur qui s'emballe parle à
-230-250 Hz, autant qu'une femme.
-
-Mesures (CPU, petit échantillon, octobre 2026) :
-
-- **commentateurs NBA réels** (5 extraits de 3,5 min, 292 répliques, dont
-  60 emballées à 200-380 Hz) : P(femme) médiane 0,005, une seule réplique
-  au-dessus de 0,5 (1,1 s à 0,52), moyenne ≤ 0,09 sur toute fenêtre de 6 s ;
-- **reporter réelle** (bord du terrain, dans l'un de ces extraits,
-  38 s) : 0,995 à 0,997 sur chacune de ses 10 répliques ;
-- **voix de synthèse** : A, B4, B1 ≤ 0,003 ; F et les candidates F2, F3
-  ≥ 0,99 ;
-- **livres audio français** (MLS, CC BY 4.0 : 7 lectrices, 9 lecteurs,
-  découpés en répliques de 3 s, aussi mêlés au bruit de salle à 10 et 5 dB) :
-  sur n'importe quelles 30 s, moyenne ≥ 0,87 pour 6 lectrices sur 7 ;
-  ≤ 0,3 pour les lecteurs sans bruit, jusqu'à 0,57 pour l'un d'eux noyé dans
-  le bruit. Mais sur 6 s, un lecteur qui **imite une voix de femme**
-  (fausset) monte à 0,97, le lecteur noyé dans le bruit à 0,93 : d'où
-  10 s minimum et 0,85 (pire homme 0,83 sur 10 s, bruit à 5 dB). En
-  contrepartie, une lectrice à la voix grave (0,65 à 0,89 sur 30 s selon le
-  passage) n'est pas toujours reconnue.
-
-Une femme qui ne parle que par bribes (moins de 10 s de répliques d'au moins
-1 s dans ses 30 premières secondes) garde une voix d'homme. Sans réseau au
-premier usage, le classifieur manque : pas de voix F automatique pendant ce
-doublage, le reste continue.
-
-**Dans le lecteur** : menu ⚙ → « Voix » : « Originale (VO) » / « VF
-doublée » (mémorisé ; par défaut, VF doublée en mode Doublage voix). La voix française est calée sur l'image (saut, pause,
-gel, reprise) ; pendant qu'elle parle, le son d'origine est baissé à 20 % —
-la foule reste audible entre les phrases. Les passages pas encore doublés
-restent en VO (« bientôt disponible ici »). À une vitesse autre que ×1, la
-VF doublée se tait (elle serait déformée). Les sous-titres restent
-indépendants.
-
-**Limites connues** : la répartition des répliques entre commentateurs est
-juste pour ~85-90 % des lignes sur l'extrait testé ; la voix féminine
-automatique est validée sur peu de voix (une seule reporter réelle en son
-diffusé) et un commentateur qui imiterait une femme en fausset plus de 10 s
-d'affilée dès ses premières répliques la prendrait ; certains noms (Shai,
-Jokic) gagneraient à un lexique de prononciation.
-
-**Voix MiniMax (en ligne, facultatif)** : avec une clé API MiniMax
-(page **Paramètres → MiniMax**, ou variable `MINIMAX_API_KEY` ; la page
-l'emporte, et y règle aussi le modèle et la voix de chaque rôle), les répliques sont dites par les **voix françaises du
-catalogue MiniMax** (`speech-2.8-hd` par défaut) au lieu de Qwen3-TTS :
-meilleure qualité, rien à télécharger (2,5 Go en moins) et surtout **plus de
-carte graphique** pour la synthèse. Le doublage tourne alors en même temps
-que les traductions au lieu de leur céder la place. L'analyse des voix
-(empreintes, genre), qui répartit les répliques entre les commentateurs,
-reste locale, sur le processeur (`voice_worker.py --embed-only`, ~150 Mo de
-modèles). Voix par défaut : `A` commentateur `French_Male_Speech_New`,
-`B4` consultant `French_MaleNarrator`, `B1` troisième voix
-`French_CasualMan`, `F` voix féminine `French_FemaleAnchor`. La
-consommation se compte en caractères (abonnement ou crédit MiniMax) : de
-l'ordre de 60 000 à 100 000 caractères par match doublé.
-
-| Variable | Défaut | Rôle |
-|---|---|---|
-| `DUB_DISABLED` | — | `1` désactive le doublage. |
-| `MINIMAX_API_KEY` | — | Clé API MiniMax : voix du doublage par MiniMax (voir plus haut). Sans clé (ni ici ni dans la page Paramètres), Qwen3-TTS embarqué. Clé, modèle et voix enregistrés dans la page Paramètres l'emportent sur les variables. |
-| `TTS_ENGINE` | auto | `minimax` ou `local` (Qwen3-TTS). Auto : MiniMax si `MINIMAX_API_KEY` est défini. |
-| `MINIMAX_TRANSLATE` | — | `1` : traduction des commentaires par MiniMax (même clé), comme l'interrupteur de la page Paramètres (qui l'emporte). Passe devant OpenAI et le modèle local ; Whisper reste local. |
-| `MINIMAX_TRANSLATE_MODEL` | `MiniMax-M3.1-Flash` | Modèle texte MiniMax de la traduction (`MiniMax-M3` : plus soigné, plus lent). |
-| `MINIMAX_TTS_MODEL` | `speech-2.8-hd` | Modèle de voix MiniMax (`speech-2.8-turbo` : plus rapide et moins cher). |
-| `MINIMAX_VOICE_A`, `MINIMAX_VOICE_B4`, `MINIMAX_VOICE_B1`, `MINIMAX_VOICE_F` | voix françaises ci-dessus | `voice_id` MiniMax de chaque rôle (liste « System Voice ID » de la documentation MiniMax) ; vide : rôle retiré (repli sur une autre voix). |
-| `MINIMAX_EMOTIONS` | `1` | Moments forts : ton imposé à MiniMax (emphase 2 → « surprised », plus vite ×1,12, volume 1,5, hauteur +1 ; 1 → « happy », ×1,06, volume 1,2). `0` : le modèle choisit seul, débit et volume constants. |
-| `TTS_EMBED_THREADS` | `2` | Avec MiniMax : cœurs du processeur pour l'analyse des voix. |
-| `MINIMAX_TTS_SPEED` | `1` | Débit de parole MiniMax (0,5 à 2). |
-| `MINIMAX_API_URL` | `https://api.minimax.io` | Serveur de l'API (p. ex. `https://api-uw.minimax.io`). |
-| `TTS_EMBED_DEVICE` | `cpu` | Avec MiniMax : appareil de l'analyse des voix (`cpu`, ou `cuda`, le doublage attend alors de nouveau le GPU). |
-| `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` (`…-1.7B-Base` avec les voix HD) | Modèle Qwen3-TTS (dépôt Hugging Face ou dossier local), de type « Base » (clonage de voix). L'emporte sur le choix « Voix du doublage » des Paramètres. |
-| `TTS_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
-| `VOICES_DIR` | `/app/assets/voices` | Dossier des voix : un sous-dossier par voix avec `reference.wav`, `reference.txt` et `voice.json`. |
-| `TTS_PYTHON` | `/opt/tts/bin/python` | Python du moteur de voix. Hors Docker : `python3`, avec torch 2.8, `qwen-tts==0.1.1`, `speechbrain==1.1.2` et `soundfile` (liste complète : `scripts/voice-requirements.txt`). |
-| `TTS_LOAD_TIMEOUT_MS` | `600000` (10 min) | Délai de démarrage du moteur **sans nouvelles** de sa part : chaque étape du téléchargement du modèle le relance. |
-| `TTS_SYNTH_TIMEOUT_SEC` | auto | Délai max d'une prise (s). Auto : 20 s + 3 × la durée plausible maximale de la ligne sur GPU, 60 s + 60 × sur processeur. |
-| `DUB_SPEAKER_SIM` | `0.6` | Similarité (cosinus) minimale pour rattacher une réplique à un locuteur déjà connu ; en dessous, nouveau locuteur. |
-| `DUB_MIN_NEW_SPEAKER_SEC` | `2` | Une réplique plus courte ne crée jamais de nouveau locuteur (empreinte peu fiable). |
-| `DUB_MAX_SPEAKERS` | `4` | Locuteurs au plus par match ; au-delà, une réplique rejoint le locuteur le plus proche. |
-| `DUB_FEMALE_PROB` | `0.85` | Probabilité moyenne « voix de femme » (classifieur, sur au moins 10 s de répliques dans les 30 premières secondes du locuteur) à partir de laquelle un locuteur prend la voix féminine `F`. Une valeur > 1 désactive la voix F automatique. |
-| `DUB_FEMALE_F0` | — (désactivé) | Repli si le classifieur manque (ou n'a pas assez entendu un nouveau locuteur) : hauteur de voix médiane (Hz) à partir de laquelle il prend `F`. Jamais contre le classifieur. |
-| `DUB_NAME_SPELLING` | `1` | Prononciation automatique des noms des joueurs (mémoire commune à tous les matchs). `0` : noms lus tels quels. |
-| `DUB_TIMEOUT_MS` | `21600000` (6 h) | Durée max d'un travail de doublage. |
 
 ## Développement local
 

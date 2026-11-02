@@ -114,7 +114,7 @@ describe('désactivation : les traductions de fond déjà en file sont abandonn�
     await vi.waitFor(() => expect(ctl).toBeDefined());
     vi.setSystemTime(Date.now() + 10 * 60_000); // le spectateur est parti
     expect(ctl!.keepGoing()).toBe(false);
-    enqueueCommentary(7, { priority: true, explicit: true }); // clic « Doubler ce match »
+    enqueueCommentary(7, { priority: true, explicit: true }); // clic « Sous-titrer ce match »
     expect(ctl!.keepGoing()).toBe(true);
     vi.useRealTimers();
     finish.get(7)!();

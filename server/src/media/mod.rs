@@ -1,5 +1,5 @@
 //! Traitement des médias (étapes 6a, 6b et 7 de la migration) : modules
-//! portés de Node, et les files de traduction, de doublage et d'analyse
+//! portés de Node, et les files de traduction et d'analyse
 //! vidéo qui les utilisent (construites ensemble par `state::Media`, servies
 //! par `routes_media`).
 //!
@@ -16,9 +16,6 @@
 //! | [`local_ai`] | `localAi.ts` (Whisper et Ollama embarqués) |
 //! | [`commentary_ai`] | `commentaryAi.ts` (transcription, traduction) |
 //! | [`commentary`] | `commentary.ts` (file de traduction, étape 6b) |
-//! | [`dub`] | `dub.ts` (file de doublage, étape 6b) |
-//! | [`voice_minimax`] | `voiceMinimax.ts` |
-//! | [`voice_ai`] | `voiceAi.ts` (Qwen3-TTS embarqué) |
 //! | [`video_scan`] | `videoScan.ts` |
 //! | [`ocr`] | `ocr.ts` (étape 7) |
 //! | [`scoreboard`] | `scoreboard.ts` (étape 7) |
@@ -35,7 +32,6 @@ pub mod commentary;
 pub mod commentary_ai;
 pub mod commentary_cues;
 pub mod dash_audio;
-pub mod dub;
 pub mod hls_fetch;
 pub mod local_ai;
 pub mod mem_guard;
@@ -49,9 +45,6 @@ pub mod scoreboard;
 pub mod tesseract;
 pub mod video_scan;
 pub mod viewers;
-pub mod voice_ai;
-pub mod voice_fish;
-pub mod voice_minimax;
 
 pub use abort::AbortSignal;
 

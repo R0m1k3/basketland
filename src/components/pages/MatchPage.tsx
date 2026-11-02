@@ -36,9 +36,8 @@ function Match({ d }: { d: MatchData }) {
   const hasVideo = d.has_video;
   const away = teamInfo(match.away.abbr);
   const home = teamInfo(match.home.abbr);
-  // Traduction automatique et version française (Paramètres), droits : boutons du bandeau de traduction.
+  // Traduction automatique (Paramètres), droits : boutons du bandeau de traduction.
   const autoTranslate = d.auto_translate;
-  const vf = d.vf_mode;
   const isAdmin = d.is_admin;
 
   return (
@@ -74,7 +73,6 @@ function Match({ d }: { d: MatchData }) {
             plays={d.lite}
             positions={d.positions}
             autoTranslate={autoTranslate}
-            vfMode={vf}
             isAdmin={isAdmin}
           />
         )}
@@ -87,7 +85,7 @@ function Match({ d }: { d: MatchData }) {
             title="Replay pas encore trouvé"
             text={`Les replays apparaissent en général quelques heures après la fin du match. Cette page se met à jour toute seule dès qu’il est en ligne ; ${
               autoTranslate
-                ? `les commentaires sont ensuite ${vf === 'doublage' ? 'traduits et doublés' : 'traduits'} en français automatiquement.`
+                ? 'les commentaires sont ensuite traduits en français automatiquement.'
                 : 'la traduction des commentaires se lance ensuite d’un clic.'
             }`}
           >

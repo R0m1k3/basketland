@@ -9,7 +9,7 @@ import type { StandingRow } from '@/lib/espn';
 import type { Linescore } from '@/lib/linescore';
 import type { MatchDto } from '@/lib/present';
 import type { DayCount, GameView, TeamRecord } from '@/lib/queries';
-import type { MinimaxSettingsView, OpenAiSettingsView, VfMode } from '@/lib/settings';
+import type { MinimaxSettingsView, OpenAiSettingsView } from '@/lib/settings';
 import type { TeamInfo } from '@/lib/teams';
 import type { SpoilerMode } from '@/components/ui/spoiler-keys';
 import type { PlayItem } from '@/components/match/PlayByPlay';
@@ -77,7 +77,6 @@ export interface MatchPage {
   has_video: boolean;
   positions: PlayPosition[];
   auto_translate: boolean;
-  vf_mode: VfMode;
   is_admin: boolean;
 }
 
@@ -128,8 +127,6 @@ export interface StandingsPage {
 
 /** Moteur de transcription embarqué (Paramètres). */
 export type TranscribeEngine = 'whisper' | 'whisper-large' | 'nvidia';
-/** Qualité des voix embarquées du doublage (Paramètres). */
-export type VoiceQuality = 'standard' | 'hd';
 /** « Moteur de traduction » (Paramètres). */
 export type TranslateSettingsView = {
   /** Moteur réellement utilisé. */
@@ -152,25 +149,18 @@ export interface SettingsPage {
   admin_data: {
     users: PublicUser[];
     auto_translate: boolean;
-    vf_mode: VfMode;
     transcribe_engine: TranscribeEngine;
     /** Pourquoi ce choix n'est pas appliqué (TRANSCRIBE_URL, TRANSCRIBE_MODEL…), sinon null. */
     transcribe_engine_override: string | null;
-    voice_quality: VoiceQuality;
-    /** Moteur des voix effectivement utilisé. */
-    voice_engine: 'local' | 'minimax' | 'fish';
     translate: TranslateSettingsView;
     /** Une clé MiniMax est-elle enregistrée ? */
     minimax_key_set: boolean;
-    /** Pourquoi ce choix n'est pas appliqué (TTS_MODEL, voix MiniMax), sinon null. */
-    voice_quality_override: string | null;
     /** « Noms à respecter » (un par ligne). */
     extra_names: string;
     /** Modèle MiniMax de reprise des lignes mal traduites ; null : aucun. */
     translate_repair_model: string | null;
     /** Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32). */
     fetch_parallel: number;
-    voice_disabled_reason: string | null;
     minimax: MinimaxSettingsView;
     openai: OpenAiSettingsView;
     openai_model_placeholder: string;

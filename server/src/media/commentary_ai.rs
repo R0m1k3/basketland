@@ -268,10 +268,9 @@ pub fn minimax_translate_config(s: &Settings) -> Option<OnlineTranslator> {
     if !s.is_readable() || !settings::minimax_translate_wanted(s) {
         return None;
     }
-    let mm = super::voice_minimax::minimax_config(s);
-    (!mm.key.is_empty()).then(|| OnlineTranslator {
-        url: format!("{}/v1", mm.url),
-        key: mm.key,
+    settings::minimax_api_key(s).map(|key| OnlineTranslator {
+        url: format!("{}/v1", settings::minimax_api_url()),
+        key,
         model: settings::minimax_translate_model(s),
     })
 }
@@ -409,7 +408,7 @@ pub fn is_quota_error(msg: &str) -> bool {
     .any(|k| m.contains(k))
 }
 
-/// Pause d'une file (traduction ou doublage) après un quota épuisé
+/// Pause de la file de traduction après un quota épuisé
 /// (`QUOTA_PAUSE_MIN`, 60 min par défaut), en ms.
 pub fn quota_pause_ms() -> f64 {
     int_env("QUOTA_PAUSE_MIN", 60.0, 1.0, 1440.0) * 60_000.0

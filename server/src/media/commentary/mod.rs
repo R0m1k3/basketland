@@ -24,28 +24,15 @@
 //! travaux sont lancés par `tokio::spawn`). Ses méthodes de file sont
 //! synchrones, comme celles de Node (base SQLite locale lue directement).
 //!
-//! # Points de branchement du doublage
+//! # Point de branchement
 //!
-//! Le doublage ([`crate::media::dub`]) se branche par deux crochets posés
-//! APRÈS la construction, par `Dub::new` / `Dub::with_options` (le doublage
-//! tient lui-même un `Commentary`) :
-//! - [`Commentary::set_gpu_gate`] (`__commentaryGpuGate`) : appelé de façon
-//!   synchrone au démarrage de chaque travail de traduction ; rend `None`
-//!   s'il n'y a rien à libérer (la traduction part aussitôt), sinon une
-//!   attente (le doublage en cours a été interrompu et ferme sa session de
-//!   voix ; Node attend au plus 20 s) ;
-//! - [`Commentary::set_dub_wants_audio`] (`__dubWantsAudio`) : le doublage
-//!   veut-il le son complet de ce match (doublage en cours ou en file) ? Si
-//!   oui, la fin d'une traduction garde `full.ogg` dans le dossier de travail.
+//! [`Commentary::set_gpu_gate`] (`__commentaryGpuGate`) : appelé de façon
+//! synchrone au démarrage de chaque travail de traduction ; rend `None` s'il
+//! n'y a rien à libérer (la traduction part aussitôt), sinon une attente.
 //!
-//! Les crochets doivent capturer le doublage par référence faible (`Weak`)
-//! pour ne pas créer de cycle d'`Arc`. Le doublage appelle en retour
-//! [`Commentary::slice_full_audio`], [`Commentary::drop_full_audio`],
-//! [`audio_sources`], [`Commentary::activity`],
-//! [`Commentary::queue_position`], [`Commentary::ready`],
-//! [`Commentary::running_match_id`] et [`Commentary::enqueue`], et partage la
-//! table des spectateurs et l'horloge du service ([`Commentary::viewers`],
-//! [`Commentary::now`]). Les routes appelleront [`Commentary::status`],
+//! Le service partage la table des spectateurs et l'horloge
+//! ([`Commentary::viewers`], [`Commentary::now`]). Les routes appellent
+//! [`Commentary::status`],
 //! [`Commentary::served_cues`], [`Commentary::touch_viewer`],
 //! [`Commentary::nudge`], [`Commentary::prioritize_on_view`] ; le cron
 //! [`Commentary::enqueue_recent`].
@@ -530,11 +517,6 @@ pub type Runner = Arc<
 
 /// Crochet `__commentaryGpuGate` (voir la documentation du module).
 pub type GpuGate = Arc<dyn Fn() -> Option<BoxFut<()>> + Send + Sync>;
-/// Crochet `__dubWantsAudio` (voir la documentation du module).
-pub type DubWantsAudio = Arc<dyn Fn(i64) -> bool + Send + Sync>;
-/// Matchs dont le doublage DEMANDÉ (« Doubler ce match ») tient ou attend la
-/// carte graphique : la traduction de fond des autres matchs attend.
-pub type DubGpuReservations = Arc<dyn Fn() -> Vec<i64> + Send + Sync>;
 
 /// Options d'une mise en file (`enqueueCommentary`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -663,8 +645,6 @@ pub(crate) struct QuotaPause {
 #[derive(Default)]
 struct Hooks {
     gpu_gate: Option<GpuGate>,
-    dub_wants_audio: Option<DubWantsAudio>,
-    dub_gpu: Option<DubGpuReservations>,
 }
 
 pub(crate) struct Inner {
@@ -744,88 +724,20 @@ impl Commentary {
         (self.0.opts.clock)()
     }
 
-    /// Table des spectateurs du service (le doublage doit utiliser la même).
+    /// Table des spectateurs du service (partagée avec l'analyse vidéo).
     pub fn viewers(&self) -> &'static Viewers {
         self.0.opts.viewers
     }
 
     // ------------------------------------------------------------ crochets
 
-    /// Pose le crochet `__commentaryGpuGate` (doublage) ; `None` le retire.
+    /// Pose le crochet `__commentaryGpuGate` ; `None` le retire.
     pub fn set_gpu_gate(&self, gate: Option<GpuGate>) {
         self.0
             .hooks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .gpu_gate = gate;
-    }
-
-    /// Pose le crochet `__dubWantsAudio` (doublage) ; `None` le retire.
-    pub fn set_dub_wants_audio(&self, f: Option<DubWantsAudio>) {
-        self.0
-            .hooks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .dub_wants_audio = f;
-    }
-
-    /// Pose le crochet des doublages demandés qui tiennent la carte graphique.
-    pub fn set_dub_gpu_reservations(&self, f: Option<DubGpuReservations>) {
-        self.0
-            .hooks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .dub_gpu = f;
-    }
-
-    /// Matchs dont un doublage demandé tient ou attend la carte graphique
-    /// (lu AVANT de prendre le verrou de la file : le doublage a le sien).
-    fn dub_gpu_reservations(&self) -> Vec<i64> {
-        let f = self
-            .0
-            .hooks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .dub_gpu
-            .clone();
-        f.map(|f| f()).unwrap_or_default()
-    }
-
-    /// Travail de fond (pré-traduction) d'un autre match qu'un doublage demandé :
-    /// il attend que le doublage rende la carte graphique.
-    fn waits_for_dub(job: &Job, reserved: &[i64]) -> bool {
-        !job.viewer && !job.explicit() && reserved.iter().any(|m| *m != job.match_id)
-    }
-
-    /// Un doublage vient d'être demandé pour `dub_match` : une pré-traduction
-    /// de fond d'un autre match qui tourne est interrompue et remise en file
-    /// (sans compter d'échec) ; elle reprendra après le doublage.
-    pub fn yield_to_dub(&self, dub_match: i64) {
-        let mut st = self.st();
-        let Some(r) = st.running.as_mut() else { return };
-        if r.preempted || r.job.viewer || r.job.explicit() || r.job.match_id == dub_match {
-            return;
-        }
-        r.preempted = true;
-        println!(
-            "[commentaires] match {} mis en pause : le doublage demandé du match {dub_match} passe en premier",
-            r.job.match_id
-        );
-        r.signal.abort();
-    }
-
-    /// `dubWantsAudio` : faux sans crochet, ou si le crochet panique.
-    pub(crate) fn dub_wants_audio(&self, match_id: i64) -> bool {
-        let f = self
-            .0
-            .hooks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .dub_wants_audio
-            .clone();
-        f.is_some_and(|f| {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(match_id))).unwrap_or(false)
-        })
     }
 
     /// Remplace l'exécuteur des travaux (`__setCommentaryRunnerForTests`) ;
@@ -1305,7 +1217,6 @@ impl Commentary {
         {
             t.abort();
         }
-        let reserved = self.dub_gpu_reservations();
         let start = {
             let mut st = self.st();
             let mut start = None;
@@ -1326,12 +1237,7 @@ impl Commentary {
                     .filter(|j| !self.outside_window(j))
                     .collect();
                 // Ceux des spectateurs partent toujours ; ceux de fond quand personne ne regarde.
-                // Pendant un doublage demandé, la pré-traduction des autres matchs attend.
-                let Some(i) = st
-                    .queue
-                    .iter()
-                    .position(|j| !self.must_wait(j) && !Self::waits_for_dub(j, &reserved))
-                else {
+                let Some(i) = st.queue.iter().position(|j| !self.must_wait(j)) else {
                     if !st.queue.is_empty() {
                         self.schedule_repump();
                     }
@@ -1462,8 +1368,8 @@ impl Commentary {
         });
         let runner = self.runner();
         let ctl = self.control_for(&job);
-        // La carte graphique d'abord libérée par un doublage en cours (session de
-        // voix fermée) ; sans doublage en cours, le travail démarre aussitôt.
+        // La carte graphique d'abord libérée si un crochet le demande ; sinon
+        // le travail démarre aussitôt.
         let gate = self
             .0
             .hooks

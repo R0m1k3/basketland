@@ -272,13 +272,10 @@ describe('runCommentary à la demande', () => {
     expect(db.getCommentaryTrack(A)?.complete).toBe(1);
   });
 
-  it('son complet : le flux est lu une seule fois, dès le départ ; tronçons découpés sur place ; gardé seulement si le match va être doublé', async () => {
+  it('son complet : le flux est lu une seule fois, dès le départ ; tronçons découpés sur place ; effacé à la fin', async () => {
     process.env.COMMENTARY_FULL_AUDIO_POLL_MS = '5';
-    const g = globalThis as { __dubWantsAudio?: (id: number) => boolean };
-    const before = g.__dubWantsAudio;
     const okId = db.getMatch(A)!.video_ok_id!;
-    const run = async (wantsDub: boolean, force: boolean) => {
-      g.__dubWantsAudio = () => wantsDub;
+    const run = async (force: boolean) => {
       const { deps, calls } = fakeDeps();
       const full: string[] = [];
       const cuts: number[] = [];
@@ -298,17 +295,16 @@ describe('runCommentary à la demande', () => {
       return { res, calls, full, cuts };
     };
     try {
-      const a = await run(false, false);
+      const a = await run(false);
       expect(a.res).toMatchObject({ ok: true });
       expect(a.calls.extract).toEqual([]); // aucun tronçon lu dans le flux
       expect(a.full).toHaveLength(1);
       expect(a.cuts.sort((x, y) => x - y)).toEqual(PLANS.map((p) => p.start));
-      expect(fs.existsSync(workDir(okId))).toBe(false); // pas de doublage : tout est effacé
-      const b = await run(true, true);
+      expect(fs.existsSync(workDir(okId))).toBe(false); // tout est effacé
+      const b = await run(true);
       expect(b.full).toHaveLength(1);
-      expect(fs.readdirSync(workDir(okId))).toEqual(['full.ogg']); // gardé pour le doublage
+      expect(fs.existsSync(workDir(okId))).toBe(false);
     } finally {
-      g.__dubWantsAudio = before;
       delete process.env.COMMENTARY_FULL_AUDIO_POLL_MS;
     }
   });

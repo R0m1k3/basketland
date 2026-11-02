@@ -90,7 +90,6 @@ const version = await import(path.join(ROOT, 'src/lib/version.ts'));
 const nightWindow = await import(path.join(ROOT, 'src/lib/nightWindow.ts'));
 const commentary = await import(path.join(ROOT, 'src/lib/commentary.ts'));
 const activity = await import(path.join(ROOT, 'src/lib/activity.ts'));
-const dub = await import(path.join(ROOT, 'src/lib/dub.ts'));
 
 console.log = () => {};
 const log = (...a: unknown[]) => process.stderr.write(a.join(' ') + '\n');
@@ -109,12 +108,12 @@ type Session = { user: { id: number; username: string; role: string } } | null;
 let liveNode: { url: string; token: string } | null = null;
 let nodeOverride: Record<string, any> | null = null;
 
-async function nodeState(withDub: boolean) {
+async function nodeState() {
   if (liveNode) {
     const r = await fetch(liveNode.url + '/api/internal/page-state', {
       method: 'POST',
       headers: { authorization: `Bearer ${liveNode.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ dub: withDub }),
+      body: JSON.stringify({}),
     });
     nodeOverride = (await r.json()) as Record<string, any>;
     return nodeOverride;
@@ -123,7 +122,6 @@ async function nodeState(withDub: boolean) {
     running_match_id: commentary.commentaryRunningMatchId(),
     activity: activity.currentActivity(),
     commentary_disabled_reason: commentary.commentaryDisabledReason(),
-    dub_disabled_reason: withDub ? await dub.dubDisabledReason() : null,
   };
 }
 
@@ -299,7 +297,6 @@ function matchPage(spoilers: string, session: Session, raw: string): [number, un
   const hasVideo = isFinal && match.video.available && !!match.video.src;
   const positions = hasVideo ? db.getSubtitles(match.id).map((s: any) => [s.seq, s.video_ts]) : [];
   const autoTranslate = settings.autoTranslateEnabled();
-  const vfMode = settings.vfMode();
   const isAdmin = session?.user.role === 'admin';
   return [
     200,
@@ -314,7 +311,6 @@ function matchPage(spoilers: string, session: Session, raw: string): [number, un
       has_video: hasVideo,
       positions,
       auto_translate: autoTranslate,
-      vf_mode: vfMode,
       is_admin: isAdmin,
     },
   ];
@@ -464,15 +460,13 @@ function versionText(): string {
   return `Version ${commit}${builtAt ? ` · image construite le ${dateFmt.format(new Date(builtAt))}` : ''}.`;
 }
 
-async function parametresPage(session: NonNullable<Session>, dubReason: () => Promise<string | null>) {
+async function parametresPage(session: NonNullable<Session>) {
   const { user } = session;
   const admin = user.role === 'admin';
   const adminData = admin
     ? {
         users: db.listUsers(),
         auto_translate: settings.autoTranslateEnabled(),
-        vf_mode: settings.vfMode(),
-        voice_disabled_reason: await dubReason(),
         minimax: settings.minimaxSettingsView(),
         openai: settings.openAiSettingsView(),
         openai_model_placeholder: settings.OPENAI_MODEL_PLACEHOLDER,
@@ -507,7 +501,7 @@ async function compute(s: Scenario): Promise<{ status: number; body: unknown; no
   const session: Session = s.token ? auth.validateSession(s.token, { renew: false }) : null;
   const params = s.params ?? {};
   const needsNode = ['home', 'matchs', 'equipes', 'equipe'].includes(s.page) || (s.page === 'parametres' && session?.user.role === 'admin');
-  const node = needsNode ? await nodeState(s.page === 'parametres') : { running_match_id: null, activity: null, commentary_disabled_reason: null, dub_disabled_reason: null };
+  const node = needsNode ? await nodeState() : { running_match_id: null, activity: null, commentary_disabled_reason: null };
   switch (s.page) {
     case 'session':
       return { status: 200, body: sessionPage(session, params.next), node };
@@ -529,7 +523,7 @@ async function compute(s: Scenario): Promise<{ status: number; body: unknown; no
       return { status: 200, body: await classementPage(), node };
     case 'parametres':
       if (!session) return { status: 401, body: { error: 'non connecté' }, node };
-      return { status: 200, body: await parametresPage(session, async () => (node as { dub_disabled_reason: string | null }).dub_disabled_reason), node };
+      return { status: 200, body: await parametresPage(session), node };
   }
 }
 
@@ -746,7 +740,6 @@ db.insertSession(auth.hashToken('jeton-admin'), admin, '2027-01-01T00:00:00.000Z
 db.insertSession(auth.hashToken('jeton-paul'), user, '2027-01-01T00:00:00.000Z');
 settings.setSetting('openai_api_key', 'sk-test-abcdefghijklmnop1234');
 settings.setSetting('minimax_api_key', 'mm-cle-de-test-0123456789abcdef');
-settings.setSetting('minimax_voices', JSON.stringify({ A: 'French_MaleNarrator', F: 'French_Female_News Anchor' }));
 
 // ------------------------------------------------------------------ scénarios
 

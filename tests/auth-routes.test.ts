@@ -171,7 +171,7 @@ describe('paramètres OpenAI (route)', () => {
 });
 
 describe('paramètres MiniMax (route)', () => {
-  it('clé masquée, modèle et voix enregistrés ; valeurs invalides refusées sans rien changer', async () => {
+  it('clé masquée et traduction enregistrées ; valeurs invalides refusées sans rien changer', async () => {
     const admin = await userWithSession('admin', 'admin');
     const c = cookie(admin.token);
     const before = (await (await settingsGet(get('/api/admin/settings', c))).json()).minimax;
@@ -179,8 +179,6 @@ describe('paramètres MiniMax (route)', () => {
       keySet: false,
       keyMasked: null,
       envKey: false,
-      model: 'speech-2.8-hd',
-      voices: { A: 'French_Male_Speech_New', B4: 'French_MaleNarrator', B1: 'French_CasualMan', F: 'French_FemaleAnchor' },
       translate: false,
       translateModel: 'MiniMax-M3.1-Flash',
     });
@@ -190,8 +188,6 @@ describe('paramètres MiniMax (route)', () => {
         '/api/admin/settings',
         {
           minimaxApiKey: ` ${key} `,
-          minimaxModel: 'speech-2.8-turbo',
-          minimaxVoices: { A: 'French_CasualMan', F: 'French_Female Journalist' },
           minimaxTranslate: true,
           minimaxTranslateModel: 'MiniMax-M3',
         },
@@ -201,31 +197,27 @@ describe('paramètres MiniMax (route)', () => {
     expect(saved.status).toBe(200);
     const text = await saved.text();
     expect(text).not.toContain('MINISECRET');
-    expect(JSON.parse(text).minimax).toMatchObject({
+    expect(JSON.parse(text).minimax).toEqual({
       keySet: true,
       keyMasked: 'sk-…wxyz',
-      model: 'speech-2.8-turbo',
-      voices: { A: 'French_CasualMan', B4: 'French_MaleNarrator', B1: 'French_CasualMan', F: 'French_Female Journalist' },
+      envKey: false,
       translate: true,
       translateModel: 'MiniMax-M3',
     });
     expect(db.settingGet('minimax_api_key')).toBe(key);
 
     for (const bad of [
-      { minimaxModel: 'speech-9' },
-      { minimaxVoices: { Z: 'French_CasualMan' } },
-      { minimaxVoices: { A: 'x"<>' } },
       { minimaxApiKey: 'court' },
       { minimaxTranslate: 'oui' },
       { minimaxTranslateModel: 'gpt-4' },
     ]) {
-      expect((await settingsPost(post('/api/admin/settings', { ...bad, minimaxModel: (bad as { minimaxModel?: string }).minimaxModel ?? 'speech-2.8-hd' }, c))).status).toBe(400);
+      expect((await settingsPost(post('/api/admin/settings', { minimaxTranslateModel: 'MiniMax-M3.1-Flash', ...bad }, c))).status).toBe(400);
     }
-    expect(db.settingGet('minimax_tts_model')).toBe('speech-2.8-turbo');
+    expect(db.settingGet('minimax_translate_model')).toBe('MiniMax-M3');
     expect(db.settingGet('minimax_translate')).toBe('1');
 
-    const del = await settingsPost(post('/api/admin/settings', { minimaxApiKey: null, minimaxVoices: null }, c));
-    expect((await del.json()).minimax).toMatchObject({ keySet: false, voices: { A: 'French_Male_Speech_New' } });
+    const del = await settingsPost(post('/api/admin/settings', { minimaxApiKey: null }, c));
+    expect((await del.json()).minimax).toMatchObject({ keySet: false, keyMasked: null, translate: true });
   });
 });
 

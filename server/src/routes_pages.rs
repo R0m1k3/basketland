@@ -4,7 +4,7 @@
 //! qu'une session existe.
 //!
 //! L'état des files médias (match en cours de traduction, activité, raisons
-//! de désactivation de la traduction et du doublage) est lu dans les services
+//! de désactivation de la traduction) est lu dans les services
 //! du processus ([`media_state`]).
 
 use crate::api::{error, json_response, ok, Query};
@@ -36,9 +36,8 @@ pub fn spoiler_mode(headers: &HeaderMap) -> &'static str {
     }
 }
 
-/// État des files médias pour les pages ; `dub` : aussi `dubDisabledReason()`
-/// (charge le moteur de voix : page Paramètres d'un administrateur seule).
-pub async fn media_state(st: &AppState, dub: bool) -> Result<MediaState, String> {
+/// État des files médias pour les pages.
+pub async fn media_state(st: &AppState) -> Result<MediaState, String> {
     let (db, media) = (st.db.clone(), st.media.clone());
     tokio::task::spawn_blocking(move || {
         let activity = db.with(|c| crate::activity::current_activity(c, &media))?;
@@ -46,11 +45,6 @@ pub async fn media_state(st: &AppState, dub: bool) -> Result<MediaState, String>
             running_match_id: media.commentary.running_match_id(),
             activity,
             commentary_disabled_reason: media.commentary.disabled_reason(),
-            dub_disabled_reason: if dub {
-                media.dub.disabled_reason()
-            } else {
-                None
-            },
         })
     })
     .await
@@ -76,7 +70,7 @@ where
     let spoilers = spoiler_mode(headers);
     guarded_session(st, uri, headers, |session| async move {
         let media = if needs_media {
-            match media_state(st, false).await {
+            match media_state(st).await {
                 Ok(n) => n,
                 Err(e) => return db_error(e),
             }
@@ -251,19 +245,7 @@ pub async fn parametres(
         let Some(session): Option<Session> = session else {
             return error(StatusCode::UNAUTHORIZED, "non connecté");
         };
-        let media = if session.role == "admin" {
-            match media_state(&st, true).await {
-                Ok(n) => n,
-                Err(e) => return db_error(e),
-            }
-        } else {
-            MediaState::default()
-        };
-        match st
-            .db
-            .run(move |c| pages::parametres(c, &session, &media))
-            .await
-        {
+        match st.db.run(move |c| pages::parametres(c, &session)).await {
             Ok(v) => ok(v),
             Err(e) => db_error(e),
         }

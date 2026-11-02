@@ -10,7 +10,6 @@ use basketland_server::media::analysis::{Analysis, AnalysisDeps, AnalysisOptions
 use basketland_server::media::commentary::{
     Commentary, CommentaryDeps, CommentaryError, CommentaryOptions,
 };
-use basketland_server::media::dub::Dub;
 use basketland_server::media::viewers::{now_ms, Viewers};
 use basketland_server::state::Media;
 use basketland_server::video::Video;
@@ -22,8 +21,6 @@ pub fn media_env() {
     ENV.call_once(|| {
         std::env::set_var("TRANSCRIBE_URL", "http://gpu.local:8000/v1");
         std::env::set_var("TRANSLATE_URL", "http://gpu.local:11434/v1");
-        // Moteur de voix jamais chargé (pas de processus Python).
-        std::env::set_var("DUB_DISABLED", "1");
     });
 }
 
@@ -52,6 +49,5 @@ pub fn test_media(db: &Db, video: &Video) -> Media {
         AnalysisOptions::shared_with(&commentary),
     );
     analysis.set_runner(Some(Arc::new(|_, _, _| Box::pin(std::future::pending()))));
-    let dub = Dub::new(commentary.clone(), video.clone());
-    Media::wire(commentary, dub, analysis)
+    Media::wire(commentary, analysis)
 }

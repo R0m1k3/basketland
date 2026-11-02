@@ -11,10 +11,9 @@
 //! [`minimax_settings_view`]) sont destinées au navigateur.
 
 use crate::db::{col_text, Db};
-use crate::js::{self, jsre};
-use crate::jsval::js_normalize;
+use crate::js;
 use rusqlite::Connection;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// Clés connues de la table `settings` (`SETTING_KEYS`).
@@ -23,19 +22,13 @@ pub mod keys {
     pub const OPENAI_MODEL: &str = "openai_model";
     /// « Traduction automatique » : '1' (activée) ou '0' (désactivée).
     pub const AUTO_TRANSLATE: &str = "auto_translate";
-    /// « Version française » : 'sous-titres' (défaut) ou 'doublage'.
-    pub const VF_MODE: &str = "vf_mode";
-    /// Voix du doublage par MiniMax : clé API, modèle, voix par rôle (JSON { A, B4, B1, F }).
+    /// Clé API MiniMax (traduction en ligne des commentaires).
     pub const MINIMAX_API_KEY: &str = "minimax_api_key";
-    pub const MINIMAX_MODEL: &str = "minimax_tts_model";
-    pub const MINIMAX_VOICES: &str = "minimax_voices";
     /// Traduction des commentaires par MiniMax : '1' (activée) ; modèle texte.
     pub const MINIMAX_TRANSLATE: &str = "minimax_translate";
     pub const MINIMAX_TRANSLATE_MODEL: &str = "minimax_translate_model";
     /// Moteur de transcription embarqué : 'whisper' (défaut) ou 'nvidia' (Parakeet).
     pub const TRANSCRIBE_ENGINE: &str = "transcribe_engine";
-    pub const VOICE_QUALITY: &str = "voice_quality";
-    pub const VOICE_ENGINE: &str = "voice_engine";
     pub const TRANSLATE_ENGINE: &str = "translate_engine";
     pub const TRANSLATE_LOCAL_MODEL: &str = "translate_local_model";
     /// Connexions simultanées vers ok.ru pour l'audio d'un tronçon (1 à 32).
@@ -51,30 +44,6 @@ pub const OPENAI_MODEL_PLACEHOLDER: &str = "gpt-5.4-mini";
 
 // ---------------------------------------------------------------- catalogue MiniMax
 
-/// Rôles des voix du doublage (dub.ts), dans l'ordre d'affichage.
-pub const MINIMAX_ROLES: [&str; 4] = ["A", "B4", "B1", "F"];
-
-/// Libellé d'un rôle (`MINIMAX_ROLE_LABELS`).
-pub fn minimax_role_label(role: &str) -> Option<&'static str> {
-    Some(match role {
-        "A" => "Commentateur",
-        "B4" => "Consultant",
-        "B1" => "Troisième voix",
-        "F" => "Voix féminine",
-        _ => return None,
-    })
-}
-
-/// Modèles de voix MiniMax proposés (id, libellé).
-pub const MINIMAX_MODELS: [(&str, &str); 2] = [
-    ("speech-2.8-hd", "Speech 2.8 HD — meilleure qualité"),
-    (
-        "speech-2.8-turbo",
-        "Speech 2.8 Turbo — plus rapide, moins de crédits",
-    ),
-];
-pub const MINIMAX_DEFAULT_MODEL: &str = "speech-2.8-hd";
-
 /// Modèles texte MiniMax proposés pour la traduction des commentaires.
 pub const MINIMAX_TEXT_MODELS: [(&str, &str); 2] = [
     ("MiniMax-M3.1-Flash", "MiniMax M3.1 Flash — rapide"),
@@ -82,26 +51,22 @@ pub const MINIMAX_TEXT_MODELS: [(&str, &str); 2] = [
 ];
 pub const MINIMAX_DEFAULT_TEXT_MODEL: &str = "MiniMax-M3.1-Flash";
 
-/// Voix françaises du catalogue MiniMax (l'espace dans certains identifiants est voulue).
-pub const MINIMAX_FRENCH_VOICES: [(&str, &str); 8] = [
-    ("French_Male_Speech_New", "Homme posé"),
-    ("French_MaleNarrator", "Narrateur"),
-    ("French_CasualMan", "Homme décontracté"),
-    ("French_FemaleAnchor", "Présentatrice"),
-    ("French_Female_News Anchor", "Présentatrice patiente"),
-    ("French_MovieLeadFemale", "Héroïne de cinéma"),
-    ("French_Female Journalist", "Journaliste"),
-    ("French_Female_Speech_New", "Oratrice assurée"),
-];
+/// Adresse de l'API MiniMax (`MINIMAX_API_URL`, sans « / » final).
+pub const MINIMAX_DEFAULT_URL: &str = "https://api.minimax.io";
 
-/// Voix par défaut d'un rôle (`MINIMAX_DEFAULT_VOICES`).
-pub fn minimax_default_voice(role: &str) -> &'static str {
-    match role {
-        "A" => "French_Male_Speech_New",
-        "B4" => "French_MaleNarrator",
-        "B1" => "French_CasualMan",
-        _ => "French_FemaleAnchor",
-    }
+pub fn minimax_api_url() -> String {
+    env_trim("MINIMAX_API_URL")
+        .unwrap_or_else(|| MINIMAX_DEFAULT_URL.into())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Clé MiniMax : réglage de la page (prioritaire), sinon `MINIMAX_API_KEY`.
+pub fn minimax_api_key(s: &Settings) -> Option<String> {
+    s.get(keys::MINIMAX_API_KEY)
+        .map(|v| js::trim(v).to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| env_trim("MINIMAX_API_KEY"))
 }
 
 // ---------------------------------------------------------------- lecture / écriture
@@ -215,22 +180,6 @@ pub fn auto_translate_enabled(s: &Settings) -> bool {
     s.get(keys::AUTO_TRANSLATE) != Some("0")
 }
 
-pub const VF_MODES: [&str; 2] = ["sous-titres", "doublage"];
-
-/// `isVfMode`.
-pub fn is_vf_mode(v: Option<&Value>) -> bool {
-    matches!(v, Some(Value::String(s)) if VF_MODES.contains(&s.as_str()))
-}
-
-/// « Version française » : 'doublage', sinon 'sous-titres' (défaut).
-pub fn vf_mode(s: &Settings) -> &'static str {
-    if s.get(keys::VF_MODE) == Some("doublage") {
-        "doublage"
-    } else {
-        "sous-titres"
-    }
-}
-
 /// Moteurs de transcription embarqués proposés dans les Paramètres :
 /// Whisper large-v3-turbo (défaut), Whisper large-v3 complet (plus précis),
 /// NVIDIA Parakeet.
@@ -249,33 +198,6 @@ pub fn transcribe_engine(s: &Settings) -> &'static str {
         Some("whisper-large") => "whisper-large",
         _ => "whisper",
     }
-}
-
-/// Qualités des voix embarquées du doublage : 'standard' (Qwen3-TTS 0.6B,
-/// défaut) ou 'hd' (Qwen3-TTS 1.7B, intonation plus naturelle, plus lent).
-pub const VOICE_QUALITIES: [&str; 2] = ["standard", "hd"];
-
-/// Valeur acceptée pour `voiceQuality`.
-pub fn is_voice_quality(v: Option<&Value>) -> bool {
-    matches!(v, Some(Value::String(s)) if VOICE_QUALITIES.contains(&s.as_str()))
-}
-
-/// Moteur des voix du doublage choisi dans les Paramètres : 'local' (voix
-/// embarquées) ou 'minimax' ; `None` : pas de choix (MiniMax dès qu'une clé
-/// MiniMax est donnée).
-pub fn voice_engine_choice(s: &Settings) -> Option<&'static str> {
-    match s.get(keys::VOICE_ENGINE) {
-        Some("local") => Some("local"),
-        Some("minimax") => Some("minimax"),
-        // « voxtral » : moteur remplacé par Fish S2 Pro.
-        Some("fish" | "voxtral") => Some("fish"),
-        _ => None,
-    }
-}
-
-/// Valeur acceptée pour `voiceEngine`.
-pub fn is_voice_engine(v: Option<&Value>) -> bool {
-    matches!(v, Some(Value::String(s)) if s == "local" || s == "minimax" || s == "fish")
 }
 
 /// « Moteur de traduction » : moteur réellement utilisé, modèle embarqué,
@@ -308,15 +230,6 @@ pub fn translate_settings_view(s: &Settings) -> Value {
             c.translate_url
         )),
     })
-}
-
-/// Qualité des voix embarquées : 'hd', sinon 'standard' (défaut).
-pub fn voice_quality(s: &Settings) -> &'static str {
-    if s.get(keys::VOICE_QUALITY) == Some("hd") {
-        "hd"
-    } else {
-        "standard"
-    }
 }
 
 /// « Noms à respecter » (Paramètres) : un nom par ligne (ou séparés par des
@@ -456,40 +369,6 @@ pub fn minimax_translate_model_error(model: &str) -> Option<&'static str> {
     }
 }
 
-pub fn minimax_model_error(model: &str) -> Option<&'static str> {
-    if MINIMAX_MODELS.iter().any(|(id, _)| *id == model) {
-        None
-    } else {
-        Some("Modèle MiniMax inconnu.")
-    }
-}
-
-/// `savedMinimaxVoices` : voix enregistrées (rôle → voix), dans l'ordre des rôles.
-pub fn saved_minimax_voices(s: &Settings) -> Vec<(&'static str, String)> {
-    let raw = s.get(keys::MINIMAX_VOICES).filter(|v| !v.is_empty());
-    let v = match raw {
-        Some(t) => match crate::jsval::js_parse(t) {
-            Some(v) => v,
-            None => return Vec::new(),
-        },
-        None => Value::Object(Map::new()),
-    };
-    let Value::Object(o) = v else {
-        return Vec::new();
-    };
-    MINIMAX_ROLES
-        .iter()
-        .filter_map(|r| match o.get(*r) {
-            Some(Value::String(s)) if !s.is_empty() => Some((*r, s.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Moteur de traduction choisi dans les Paramètres (« Moteur de traduction ») :
-/// 'local' (Ollama embarqué), 'minimax' ou 'openai' ; `None` : pas de choix
-/// (MiniMax si sa traduction est cochée, sinon OpenAI si une clé existe,
-/// sinon l'embarqué).
 pub fn translate_engine_choice(s: &Settings) -> Option<&'static str> {
     match s.get(keys::TRANSLATE_ENGINE) {
         Some("local") => Some("local"),
@@ -552,65 +431,12 @@ pub fn minimax_translate_model(s: &Settings) -> String {
 /// `minimaxSettingsView` : ce que l'interface peut afficher (jamais la clé complète).
 pub fn minimax_settings_view(s: &Settings) -> Value {
     let key = s.get(keys::MINIMAX_API_KEY).filter(|k| !k.is_empty());
-    let saved = saved_minimax_voices(s);
-    let mut voices = Map::new();
-    for r in MINIMAX_ROLES {
-        let v = saved
-            .iter()
-            .find(|(role, _)| *role == r)
-            .map(|(_, v)| v.clone())
-            .or_else(|| env_trim(&format!("MINIMAX_VOICE_{r}")))
-            .unwrap_or_else(|| minimax_default_voice(r).to_string());
-        voices.insert(r.to_string(), Value::from(v));
-    }
     json!({
         "keySet": key.is_some(),
         "keyMasked": key.map(mask_api_key),
         "envKey": env_trim("MINIMAX_API_KEY").is_some(),
-        "model": s.get(keys::MINIMAX_MODEL)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-            .or_else(|| env_trim("MINIMAX_TTS_MODEL"))
-            .unwrap_or_else(|| MINIMAX_DEFAULT_MODEL.into()),
-        "voices": voices,
         "translate": minimax_translate_wanted(s),
         "translateModel": minimax_translate_model(s),
-    })
-}
-
-/// `parseMinimaxVoices` : valeur à enregistrer (JSON, ou `None` pour supprimer), ou message d'erreur.
-pub fn parse_minimax_voices(raw: &Value) -> Result<Option<String>, String> {
-    if raw.is_null() {
-        return Ok(None);
-    }
-    if !js::truthy(Some(raw)) {
-        return Err("minimaxVoices invalide".into());
-    }
-    // Ordre de `Object.entries` (clés « index » d'abord, comme JavaScript).
-    let Value::Object(o) = js_normalize(raw.clone()) else {
-        return Err("minimaxVoices invalide".into());
-    };
-    let plausible = jsre!(r"^[A-Za-z0-9_ ().-]{1,100}$");
-    let mut out = Map::new();
-    for (role, id) in &o {
-        if !MINIMAX_ROLES.contains(&role.as_str()) {
-            return Err(format!("Rôle de voix inconnu : {role}"));
-        }
-        let ok = match id {
-            Value::String(s) => {
-                MINIMAX_FRENCH_VOICES.iter().any(|(v, _)| v == s) || plausible.is_match(s)
-            }
-            _ => false,
-        };
-        if !ok {
-            return Err(format!("Voix MiniMax invalide pour {role}"));
-        }
-        out.insert(role.clone(), id.clone());
-    }
-    Ok(if out.is_empty() {
-        None
-    } else {
-        Some(Value::Object(out).to_string())
     })
 }
 
@@ -620,13 +446,9 @@ pub fn settings_view(s: &Settings) -> Value {
         "openai": openai_settings_view(s),
         "minimax": minimax_settings_view(s),
         "autoTranslate": auto_translate_enabled(s),
-        "vfMode": vf_mode(s),
         "transcribeEngine": transcribe_engine(s),
         "transcribeEngineOverride": crate::media::commentary_ai::transcribe_engine_override(s),
-        "voiceQuality": voice_quality(s),
-        "voiceEngine": crate::media::voice_ai::voice_engine_name(s).as_str(),
         "translate": translate_settings_view(s),
-        "voiceQualityOverride": crate::media::voice_ai::voice_quality_override(s),
         "fetchParallel": fetch_parallel(s).unwrap_or_else(crate::media::hls_fetch::fetch_parallel_default),
         "translateRepairModel": translate_repair_model(s),
         "extraNames": s.get(keys::EXTRA_NAMES).unwrap_or_default(),
@@ -646,51 +468,14 @@ mod tests {
         assert!(api_key_error("x").is_some());
         assert!(model_error("gpt-5.4-mini").is_none());
         assert!(model_error("gpt 5").is_some());
-        assert!(minimax_model_error("speech-2.8-turbo").is_none());
         assert!(minimax_translate_model_error("MiniMax-M3").is_none());
         assert!(minimax_translate_model_error("x").is_some());
     }
 
     #[test]
-    fn voix_minimax() {
-        assert_eq!(parse_minimax_voices(&Value::Null), Ok(None));
-        assert_eq!(parse_minimax_voices(&json!({})), Ok(None));
-        assert_eq!(
-            parse_minimax_voices(&json!({"F": "French_Female_News Anchor", "A": "x(1)"})),
-            Ok(Some(
-                r#"{"F":"French_Female_News Anchor","A":"x(1)"}"#.into()
-            ))
-        );
-        assert_eq!(
-            parse_minimax_voices(&json!({"A": "ok", "1": 3})),
-            Err("Rôle de voix inconnu : 1".into())
-        );
-        assert_eq!(
-            parse_minimax_voices(&json!({"A": "é"})),
-            Err("Voix MiniMax invalide pour A".into())
-        );
-        assert_eq!(
-            parse_minimax_voices(&json!([])),
-            Err("minimaxVoices invalide".into())
-        );
-        assert_eq!(
-            parse_minimax_voices(&json!(0)),
-            Err("minimaxVoices invalide".into())
-        );
-        let s = Settings::from_pairs([(keys::MINIMAX_VOICES, r#"{"A":"x","B4":"","F":3}"#)]);
-        assert_eq!(saved_minimax_voices(&s), vec![("A", "x".to_string())]);
-        let s = Settings::from_pairs([(keys::MINIMAX_VOICES, "null")]);
-        assert!(saved_minimax_voices(&s).is_empty());
-    }
-
-    #[test]
     fn modes() {
-        let s = Settings::from_pairs([(keys::AUTO_TRANSLATE, "0"), (keys::VF_MODE, "doublage")]);
+        let s = Settings::from_pairs([(keys::AUTO_TRANSLATE, "0")]);
         assert!(!auto_translate_enabled(&s));
-        assert_eq!(vf_mode(&s), "doublage");
         assert!(auto_translate_enabled(&Settings::unreadable()));
-        assert_eq!(vf_mode(&Settings::unreadable()), "sous-titres");
-        assert!(is_vf_mode(Some(&json!("doublage"))));
-        assert!(!is_vf_mode(Some(&json!(1))));
     }
 }

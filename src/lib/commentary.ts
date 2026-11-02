@@ -219,7 +219,7 @@ export function extractAudioChunk(sourceUrl: string, start: number, length: numb
  * l'eau dans `outFile`. `onProgress(s)` : secondes déjà extraites. Le flux
  * ok.ru est ainsi lu une seule fois, vite, au lieu d'un tronçon de temps en
  * temps pendant la lecture (gels de la vidéo) ; tronçons de la traduction
- * et du doublage en sont ensuite découpés sur place (`cutAudio`).
+ * en sont ensuite découpés sur place (`cutAudio`).
  * `COMMENTARY_AUDIO_READRATE` (facultatif) : vitesse de lecture maximale du
  * flux, en multiple du temps réel (ffmpeg `-readrate`). Arrêtée sans
  * progression pendant `idleMs` (2 min).
@@ -258,7 +258,7 @@ export function extractFullAudio(
         '-application',
         'voip',
         // Chaque paquet écrit tout de suite sur le disque : le fichier est
-        // découpé PENDANT l'extraction (traduction, doublage) dès que
+        // découpé PENDANT l'extraction (traduction) dès que
         // `out_time` couvre le tronçon. Sans ça, ffmpeg n'écrit que par blocs
         // de 512 Ko (2 à 3 min de commentaire) et la découpe sortait
         // tronquée, sans erreur : sous-titres absents en fin de tronçon.
@@ -342,8 +342,7 @@ const fullAudioFile = (okId: string) => path.join(workDir(okId), 'full.ogg');
 const fullAudioWanted = () => process.env.COMMENTARY_FULL_AUDIO !== '0';
 
 /**
- * Extraction complète du son d'une vidéo, lancée une fois et partagée
- * (traduction, doublage) ; elle ne dépend d'aucun travail : interrompre la
+ * Extraction complète du son d'une vidéo, lancée une fois ; elle ne dépend d'aucun travail : interrompre la
  * traduction ne l'arrête pas, la reprise en profite. Déjà sur disque :
  * rien à faire. Échec : on retombe sur l'extraction tronçon par tronçon (un
  * prochain travail réessaie).
@@ -400,34 +399,6 @@ async function waitFullAudio(s: FullAudioState, endSec: number, signal?: AbortSi
   }
 }
 
-/**
- * Découpe `length` s du son complet d'une vidéo à partir de `start` (pour le
- * doublage) s'il est là et couvre la plage ; rend false sinon (l'appelant lit
- * alors le flux).
- */
-export async function sliceFullAudio(okId: string, start: number, length: number, outFile: string, signal?: AbortSignal): Promise<boolean> {
-  let s = fullAudios.get(okId);
-  if (!s && fs.existsSync(fullAudioFile(okId))) {
-    s = { path: fullAudioFile(okId), doneSec: Number.POSITIVE_INFINITY, complete: true, failed: null, running: false };
-    fullAudios.set(okId, s);
-  }
-  if (!s || !(s.complete || s.doneSec >= start + length + 2) || !fs.existsSync(s.path)) return false;
-  try {
-    await cutAudio(s.path, start, length, outFile, signal);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Le son complet d'une vidéo ne sert plus (traduction et doublage finis) : effacé. */
-export function dropFullAudio(okId: string): void {
-  const s = fullAudios.get(okId);
-  if (s?.running || st.running?.okId === okId) return;
-  fullAudios.delete(okId);
-  fs.rmSync(fullAudioFile(okId), { force: true });
-}
-
 /** Sources audio d'un flux, de la plus légère à la plus lourde (l'image ne sert à rien). */
 export function audioSources(stream: Pick<OkStream, 'variants'>): { url: string; label: string }[] {
   const out: { url: string; label: string }[] = [];
@@ -462,15 +433,6 @@ function writeJson(file: string, value: unknown): void {
 const chunkName = (p: ChunkPlan) => `chunk-${String(Math.round(p.start)).padStart(5, '0')}-${p.length}`;
 const chunkAudio = (dir: string, p: ChunkPlan) => path.join(dir, `${chunkName(p)}.ogg`);
 const chunkJson = (dir: string, p: ChunkPlan) => path.join(dir, `${chunkName(p)}.json`);
-
-/** Le doublage veut-il le son complet de ce match (branché par dub.ts, via globalThis : pas d'import circulaire) ? */
-function dubWantsAudio(matchId: number): boolean {
-  try {
-    return (globalThis as { __dubWantsAudio?: (id: number) => boolean }).__dubWantsAudio?.(matchId) ?? false;
-  } catch {
-    return false;
-  }
-}
 
 interface ChunkCache {
   model: string;
@@ -895,13 +857,7 @@ function start(job: Job): void {
     }, jobTimeoutMs());
     watchdog.unref?.();
   });
-  // La carte graphique d'abord libérée par un doublage en cours (session de
-  // voix fermée), pour que Whisper et le traducteur ne se chargent pas par-dessus.
-  // Sans doublage en cours, le travail démarre aussitôt (synchrone, comme avant).
-  const gpuGate = (globalThis as { __commentaryGpuGate?: () => Promise<void> | null }).__commentaryGpuGate;
-  const gpuWait = gpuGate?.() ?? null;
-  const run = () => runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job));
-  void Promise.race([gpuWait ? gpuWait.catch(() => undefined).then(run) : run(), timeout])
+  void Promise.race([runner(job, (p) => (state.progress = { ...p }), ctrl.signal, controlFor(job)), timeout])
     .then(
       (res) => res,
       (e: unknown): CommentaryOutcome =>
@@ -1263,7 +1219,7 @@ const RUN_TO_END: CommentaryControl = { keepGoing: () => true, target: () => 0 }
 /**
  * Avance maximale (s) de la traduction sur la lecture PENDANT la lecture
  * (5 min par défaut ; 0 : aucune). Lecture en pause, pas de plafond : sinon
- * le serveur restait à l'arrêt (traduction et doublage bloqués à quelques
+ * le serveur restait à l'arrêt (traduction bloquée à quelques
  * minutes) alors que le lecteur ne télécharge plus rien.
  */
 function maxLeadSec(): number {
@@ -1653,13 +1609,9 @@ export async function runCommentary(
   if (!t || !t.cues) {
     return { ok: false, kind: 'contenu', reason: 'Aucune parole détectée dans le replay (transcription vide après filtrage)' };
   }
-  // Dossier de travail effacé ; le son complet reste si ce match va être doublé (le doublage l'efface ensuite).
-  if (dubWantsAudio(job.matchId) && fs.existsSync(fullAudioFile(okId))) {
-    for (const f of fs.readdirSync(dir)) if (f !== 'full.ogg') fs.rmSync(path.join(dir, f), { recursive: true, force: true });
-  } else {
-    if (!fullAudios.get(okId)?.running) fullAudios.delete(okId);
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  // Dossier de travail effacé (son complet compris).
+  if (!fullAudios.get(okId)?.running) fullAudios.delete(okId);
+  fs.rmSync(dir, { recursive: true, force: true });
   return {
     ok: true,
     reason:

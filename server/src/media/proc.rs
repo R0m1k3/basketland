@@ -1,8 +1,8 @@
 //! Processus enfants des tâches lourdes : priorité CPU basse
 //! (`procPriority.ts`), arrêt propre (`stopChild` de `localAi.ts`), et
 //! processus de travail Python qui parlent JSON, une ligne par message, sur
-//! stdin/stdout (Whisper, voix) — protocole de `scripts/whisper_worker.py`
-//! et `scripts/voice_worker.py`.
+//! stdin/stdout (Whisper, Parakeet) — protocole de `scripts/whisper_worker.py`
+//! et `scripts/parakeet_worker.py`.
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ pub fn lower_priority(pid: Option<u32>) {
     let Some(pid) = pid.filter(|p| *p > 0) else {
         return;
     };
-    // Processus lourds (Whisper, Ollama, voix, ffmpeg) tués en premier par le
+    // Processus lourds (Whisper, Ollama, ffmpeg) tués en premier par le
     // noyau si la mémoire du NAS manque, avant les services du NAS.
     super::mem_guard::protect_host(pid, 1000);
     if nice == 0 {

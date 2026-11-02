@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 #
 # Image de l'application : serveur Rust, interface et scripts, posés sur
-# l'image de BASE (Dockerfile.base : système, Ollama, Whisper, Qwen3-TTS…,
+# l'image de BASE (Dockerfile.base : système, Ollama, Whisper…,
 # plusieurs Go, reconstruite seulement quand elle change). Une mise à jour
 # de l'application ne change que les dernières couches (~100 Mo).
-# `BASE_IMAGE` : `…/basketland-base:lite` (défaut) ou `…:full` (Fish S2 Pro
-# et Parakeet en plus) ; la CI passe l'étiquette exacte (empreinte).
+# `BASE_IMAGE` : `…/basketland-base:lite` (défaut) ou `…:full` (Parakeet
+# en plus) ; la CI passe l'étiquette exacte (empreinte).
 ARG BASE_IMAGE=ghcr.io/r0m1k3/basketland-base:lite
 
 # ---------------------------------------------------------------- interface
@@ -51,9 +51,9 @@ ENV PORT=3012
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # Plusieurs cartes (p. ex. RTX 5060 Ti + RTX 3060) : numérotées dans l'ordre
-# du bus PCI, comme `nvidia-smi` (CUDA met sinon « la plus rapide » en 0, et
-# vLLM avertit d'un ordre ambigu), et TOUT le travail (Ollama, Whisper,
-# Parakeet, voix, Fish S2 Pro) sur la carte 0 seulement. `CUDA_VISIBLE_DEVICES=1`
+# du bus PCI, comme `nvidia-smi` (CUDA met sinon « la plus rapide » en 0),
+# et TOUT le travail (Ollama, Whisper,
+# Parakeet) sur la carte 0 seulement. `CUDA_VISIBLE_DEVICES=1`
 # choisit l'autre carte ; vide, toutes les cartes sont visibles.
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
 ENV CUDA_VISIBLE_DEVICES=0
@@ -71,7 +71,7 @@ RUN gunzip /usr/share/basketland/tessdata/eng.traineddata.gz
 ENV TESSDATA_PREFIX=/usr/share/basketland/tessdata
 ENV OMP_THREAD_LIMIT=1
 
-# Services embarqués (Ollama, Whisper, voix) : dans l'image de base, démarrés
+# Services embarqués (Ollama, Whisper) : dans l'image de base, démarrés
 # à la demande, jamais exposés hors du conteneur. Modèles téléchargés au
 # premier usage dans /data/models (volume persistant), jamais dans l'image.
 COPY --from=rust /basketland-server /usr/local/bin/basketland-server
@@ -80,9 +80,6 @@ COPY --from=rust /basketland-server /usr/local/bin/basketland-server
 COPY --from=builder --chown=node:node /app/out ./out
 ENV BL_STATIC_DIR=/app/out
 COPY --chown=node:node scripts/whisper_worker.py scripts/parakeet_worker.py ./scripts/
-COPY --chown=node:node scripts/voice_worker.py scripts/voice_gender.py ./scripts/
-# Voix figées du doublage (WAV de référence + transcription + voice.json).
-COPY --chown=node:node assets/voices ./assets/voices
 # Récupération d'accès : docker exec -it basketland basketland-server reset-password <identifiant> <mot-de-passe>
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data && chown node:node /data

@@ -26,7 +26,6 @@ import fs from 'node:fs';
 import { parseVerboseJson, type Transcript } from './commentaryCues';
 import { embeddedOllamaAvailable, embeddedOllamaUrl, embeddedWhisperAvailable } from './localAi';
 import { getSetting, minimaxTranslateModel, minimaxTranslateWanted, SETTING_KEYS } from './settings';
-import { minimaxConfig } from './voiceMinimax';
 import { nameRendered, type RosterIndex } from './rosterNames';
 
 // ------------------------------------------------------------------ configuration
@@ -137,16 +136,19 @@ export function engineFor(model: string, forced?: string): TranslateEngine {
   return /milmmt/i.test(model) ? 'mt' : 'chat';
 }
 
+const MINIMAX_DEFAULT_URL = 'https://api.minimax.io';
+
 /**
  * Traduction par MiniMax (modèles texte, API compatible OpenAI) : demandée
  * dans la page Paramètres (ou `MINIMAX_TRANSLATE=1`) et une clé MiniMax
- * présente — la même que pour les voix du doublage. Null sinon.
+ * présente — page Paramètres (prioritaire) ou `MINIMAX_API_KEY`. Null sinon.
  */
 export function minimaxTranslateConfig(): { url: string; key: string; model: string } | null {
   try {
     if (!minimaxTranslateWanted()) return null;
-    const mm = minimaxConfig();
-    return mm.key ? { url: `${mm.url}/v1`, key: mm.key, model: minimaxTranslateModel() } : null;
+    const key = getSetting(SETTING_KEYS.minimaxApiKey)?.trim() || process.env.MINIMAX_API_KEY?.trim() || '';
+    const url = (process.env.MINIMAX_API_URL?.trim() || MINIMAX_DEFAULT_URL).replace(/\/+$/, '');
+    return key ? { url: `${url}/v1`, key, model: minimaxTranslateModel() } : null;
   } catch {
     return null; // réglages illisibles : pas de MiniMax
   }

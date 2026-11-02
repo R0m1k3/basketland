@@ -3,8 +3,8 @@
  * portées en Rust (étape 6a) : server/tests/fixtures/media.expected.json,
  * comparé par tests/media_node.rs. Sous-titres (commentaryCues.ts), noms des
  * joueurs (rosterNames.ts), prompts, messages et corps des requêtes de
- * traduction, transcription et voix (commentaryAi.ts, voiceMinimax.ts),
- * configuration (settings.ts, voiceAi.ts), audio (audio.ts, audioEnergy.ts),
+ * traduction et de transcription (commentaryAi.ts), configuration
+ * (settings.ts), audio (audio.ts, audioEnergy.ts),
  * fenêtre de nuit et planification du balayage vidéo (videoScan.ts). Les
  * entrées pseudo-aléatoires sont tirées d'un générateur à graine fixe et
  * écrites dans le fichier : Rust ne refait aucun tirage. À relancer après une
@@ -35,8 +35,6 @@ const cues = await import(join(ROOT, 'src/lib/commentaryCues.ts'));
 const roster = await import(join(ROOT, 'src/lib/rosterNames.ts'));
 const ai = await import(join(ROOT, 'src/lib/commentaryAi.ts'));
 const settings = await import(join(ROOT, 'src/lib/settings.ts'));
-const mm = await import(join(ROOT, 'src/lib/voiceMinimax.ts'));
-const voice = await import(join(ROOT, 'src/lib/voiceAi.ts'));
 const audio = await import(join(ROOT, 'src/lib/audio.ts'));
 const energy = await import(join(ROOT, 'src/lib/audioEnergy.ts'));
 const night = await import(join(ROOT, 'src/lib/nightWindow.ts'));
@@ -398,37 +396,6 @@ for (const [name, p] of [['chunk-000.ogg', 'NBA basketball game commentary.'], [
 }
 delete process.env.TRANSCRIBE_API_KEY;
 
-// MiniMax : get_voice puis t2a_v2.
-db.setDbForTests(db.openDatabase(':memory:'));
-process.env.MINIMAX_RETRY_MS = '0';
-const catalog = { base_resp: { status_code: 0 }, system_voice: Object.values(mm.MINIMAX_DEFAULT_VOICES).map((voice_id) => ({ voice_id })) };
-const speech = { base_resp: { status_code: 0 }, data: { audio: mm.toWav(Buffer.alloc(4800)).wav.toString('hex') }, extra_info: { audio_sample_rate: 24000 } };
-responder = (url) => new Response(JSON.stringify(url.endsWith('/v1/get_voice') ? catalog : speech));
-const origLog = console.log;
-console.log = () => undefined;
-for (const env of [{ MINIMAX_API_KEY: 'cle-secrete' }, { MINIMAX_API_KEY: 'k2', MINIMAX_TTS_SPEED: '1.1', MINIMAX_TTS_MODEL: 'speech-2.8-turbo', MINIMAX_API_URL: 'https://api-uw.minimax.io//', MINIMAX_VOICE_F: '' }, { MINIMAX_API_KEY: 'k3', MINIMAX_EMOTIONS: '0', MINIMAX_TTS_SPEED: '0.5' }] as Record<string, string>[]) {
-  Object.assign(process.env, env);
-  captured = [];
-  await addAsync('minimaxSynth', env, async () => {
-    const s = await mm.MinimaxVoiceSession.open(undefined, async () => Promise.reject(new Error('pas de Python')));
-    const out: unknown[] = [];
-    for (const [text, voice, emphasis] of [['  Quel contre   de Wembanyama !', 'B4', undefined], ['Quel dunk !', 'A', 2], ['Belle passe.', 'B1', 1], ['Remise en jeu.', 'A', 0.5]] as const) {
-      const r = await s.synth(text, voice, join(tmp, 'v.wav'), undefined, { emphasis });
-      out.push(r);
-    }
-    return { results: out, voices: s.voices, requests: captured };
-  });
-  for (const k of Object.keys(env)) delete process.env[k];
-}
-console.log = origLog;
-delete process.env.MINIMAX_RETRY_MS;
-for (const [label, buf] of [['pcm', Buffer.alloc(48000)], ['wav', mm.toWav(Buffer.alloc(12000)).wav], ['court', Buffer.from('RIFF')], ['riff-fmt8k', Buffer.concat([Buffer.from('RIFF\0\0\0\0WAVEfmt '), Buffer.from([16, 0, 0, 0, 1, 0, 2, 0, 0x40, 0x1f, 0, 0, 0, 0, 0, 0, 4, 0, 16, 0]), Buffer.from('LIST'), Buffer.from([3, 0, 0, 0, 1, 2, 3, 0]), Buffer.from('data'), Buffer.from([0xff, 0xff, 0, 0]), Buffer.alloc(100)])]] as const) {
-  add('toWav', { label, hex: buf.toString('hex') }, () => {
-    const w = mm.toWav(buf);
-    return { hex: w.wav.toString('hex'), duration: w.duration, sampleRate: w.sampleRate };
-  });
-}
-
 // ------------------------------------------------------------------ 5. réglages et configurations
 
 const settingsCases: { settings: Record<string, string>; env: Record<string, string> }[] = [
@@ -442,24 +409,19 @@ const settingsCases: { settings: Record<string, string>; env: Record<string, str
   { settings: {}, env: { TRANSCRIBE_URL: 'http://y', OLLAMA_PORT: '12345', TRANSLATE_PARALLEL: '7.8', TRANSCRIBE_MODEL: ' m ' } },
   { settings: { minimax_translate: '1' }, env: { OPENAI_API_KEY: 'sk', MINIMAX_VOICE_A: '', MINIMAX_VOICE_B4: '', MINIMAX_VOICE_B1: '', MINIMAX_VOICE_F: '', TTS_ENGINE: ' MiniMax ' } },
 ];
-// Chemins des services embarqués : absents (déterministe), sauf les voix et le moteur du dépôt.
-const fixedEnv = { WHISPER_PYTHON: '/nexiste/pas/python', OLLAMA_BIN: '/nexiste/pas/ollama', TTS_WORKER: join(ROOT, 'scripts', 'voice_worker.py'), VOICES_DIR: join(ROOT, 'assets', 'voices'), MODELS_DIR: '/tmp/bl-models', TTS_PYTHON: '/usr/bin/python3' };
+// Chemins des services embarqués : absents (déterministe).
+const fixedEnv = { WHISPER_PYTHON: '/nexiste/pas/python', OLLAMA_BIN: '/nexiste/pas/ollama', MODELS_DIR: '/tmp/bl-models' };
 for (const c of settingsCases) {
   db.setDbForTests(db.openDatabase(':memory:'));
   for (const [k, v] of Object.entries(c.settings)) db.settingSet(k, v);
   Object.assign(process.env, fixedEnv, c.env);
   add('settingsView', { ...c, fixedEnv }, () => {
     const cc = ai.commentaryConfig();
-    const vc = voice.voiceConfig();
     return {
       openai: settings.openAiSettingsView(),
       minimax: settings.minimaxSettingsView(),
       autoTranslate: settings.autoTranslateEnabled(),
-      vfMode: settings.vfMode(),
-      minimaxConfig: mm.minimaxConfig(),
       commentaryConfig: cc,
-      voiceConfig: vc,
-      voiceEngine: voice.voiceEngineName(),
       openAiConfig: ai.openAiConfig(),
       minimaxTranslateConfig: ai.minimaxTranslateConfig(),
     };
@@ -467,17 +429,12 @@ for (const c of settingsCases) {
   for (const k of [...Object.keys(c.env), ...Object.keys(fixedEnv)]) delete process.env[k];
 }
 db.setDbForTests(db.openDatabase(':memory:'));
-for (const raw of [null, {}, { F: 'French_Female_News Anchor', A: 'x(1)' }, { A: 'ok', 1: 3 }, { A: 'é' }, [], 0, 'A', true, { B4: 'x'.repeat(101) }, { B1: '' }, { Z: 'x' }]) {
-  add('parseMinimaxVoices', raw, () => settings.parseMinimaxVoices(raw));
-}
 for (const k of ['', 'x', 'sk-0123456789abcdefghij', 'sk-0123456789abcdefgh j', 'é'.repeat(25), 'k'.repeat(401), 'k'.repeat(1500), 'k'.repeat(2001)]) {
   add('keyErrors', k, () => [settings.apiKeyError(k), settings.minimaxKeyError(k), settings.maskApiKey(k)]);
 }
 for (const m of ['gpt-5.4-mini', 'gpt 5', 'a/b:c_d.e-f', 'x'.repeat(101), 'speech-2.8-turbo', 'MiniMax-M3', '']) {
-  add('modelErrors', m, () => [settings.modelError(m), settings.minimaxModelError(m), settings.minimaxTranslateModelError(m)]);
+  add('modelErrors', m, () => [settings.modelError(m), settings.minimaxTranslateModelError(m)]);
 }
-add('listVoices', join(ROOT, 'assets', 'voices'), () => voice.listVoices(join(ROOT, 'assets', 'voices')));
-for (const e of [undefined, 0, 0.99, 1, 1.5, 2, 3]) add('minimaxEmotion', e ?? null, () => mm.minimaxEmotion(e));
 
 // ------------------------------------------------------------------ 6. audio
 

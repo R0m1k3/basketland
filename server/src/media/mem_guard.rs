@@ -1,10 +1,10 @@
 //! Garde-fou de la mémoire du NAS, sans aucun réglage.
 //!
 //! Le conteneur n'a pas de plafond de mémoire (docker-compose tel quel) : si
-//! Whisper, Ollama ou les voix prennent toute la RAM, c'est le NAS entier qui
+//! Whisper ou Ollama prennent toute la RAM, c'est le NAS entier qui
 //! plante. Trois protections :
 //!
-//! - [`wait_for_room`] : un travail lourd (traduction, doublage) ne démarre
+//! - [`wait_for_room`] : un travail lourd (traduction) ne démarre
 //!   que s'il reste assez de mémoire libre sur le NAS ;
 //! - [`watch`] : pendant le travail, la mémoire libre est relue toutes les
 //!   2 s ; sous le seuil critique, le travail est interrompu (ses processus
@@ -88,7 +88,7 @@ pub fn snapshot() -> Option<Mem> {
 }
 
 /// Attend qu'il reste assez de mémoire pour démarrer un travail lourd
-/// (`what` : « traduction », « doublage », pour le journal). Rend tout de
+/// (`what` : « traduction », pour le journal). Rend tout de
 /// suite si le signal est levé.
 pub async fn wait_for_room(what: &str, signal: &AbortSignal) {
     let mut logged = false;

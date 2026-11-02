@@ -16,8 +16,7 @@ services:
       # Jeton d'accès à /api/ingest (les jobs de synchronisation).
       # À définir dans l'UI Unraid ; sinon un jeton est généré dans /data.
       INGEST_TOKEN: ${INGEST_TOKEN:-}
-      # Clé API MiniMax : voix françaises du doublage par MiniMax (sans GPU)
-      # au lieu de Qwen3-TTS embarqué. Vide : Qwen3-TTS.
+      # Clé API MiniMax : traduction des commentaires en ligne (facultatif).
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
     volumes:
       - /mnt/user/appdata/basketland:/data

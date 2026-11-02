@@ -10,7 +10,7 @@ mod media_kit;
 
 use axum::body::Body;
 use axum::http::{header, StatusCode};
-use basketland_server::routes_media::{byte_range, to_web_vtt, vtt_timestamp, VttCue};
+use basketland_server::routes_media::{to_web_vtt, vtt_timestamp, VttCue};
 use basketland_server::state::{AppState, Media};
 use basketland_server::{app, auth, db, proxy, scheduler, settings};
 use chrono::{Duration, Utc};
@@ -25,7 +25,6 @@ static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 struct T {
     _dir: tempfile::TempDir,
     path: std::path::PathBuf,
-    data: std::path::PathBuf,
     r: axum::Router,
     media: Media,
     /// Replay récent avec une piste complète (sous-titres et doublage écrits ici).
@@ -88,37 +87,6 @@ fn setup() -> T {
         )
         .unwrap();
     }
-    // Doublage : trois tronçons, fichiers dans DATA_DIR/dub/<id>/.
-    let ok: String = c
-        .query_row(
-            "SELECT video_ok_id FROM matches WHERE id = ?1",
-            [full],
-            |r| r.get(0),
-        )
-        .unwrap();
-    c.execute(
-        "INSERT INTO dub_tracks VALUES (?1, ?2, 'cle', '[\"A\"]', '{}', 0, '2026-10-30T10:00:00.000Z')",
-        rusqlite::params![full, ok],
-    )
-    .unwrap();
-    let dub_dir = data.join("dub").join(full.to_string());
-    std::fs::create_dir_all(&dub_dir).unwrap();
-    std::fs::write(
-        dub_dir.join("c000.m4a"),
-        (0..=255u8).cycle().take(1000).collect::<Vec<_>>(),
-    )
-    .unwrap();
-    c.execute(
-        "INSERT INTO dub_chunks VALUES (?1, 0, 0, 120, '/ailleurs/c000.m4a', '[[1,2]]', 'sig', '2026-10-30T10:00:00.000Z')",
-        [full],
-    )
-    .unwrap();
-    // Tronçon en base sans fichier.
-    c.execute(
-        "INSERT INTO dub_chunks VALUES (?1, 1, 120, 240, 'c001.m4a', '[]', 'sig', '2026-10-30T10:01:00.000Z')",
-        [full],
-    )
-    .unwrap();
     drop(c);
     let dbh = db::Db::new(path.clone());
     let video = basketland_server::video::Video::new();
@@ -132,7 +100,6 @@ fn setup() -> T {
     T {
         _dir: dir,
         path,
-        data,
         r,
         media,
         full,
@@ -242,28 +209,6 @@ fn horodatage_et_export_webvtt_comme_node() {
     assert_eq!(to_web_vtt(&[], ""), "WEBVTT\n");
 }
 
-#[test]
-fn plages_range_comme_node() {
-    let size = 1000;
-    for (r, want) in [
-        ("bytes=0-99", Some((0, 99))),
-        ("bytes=100-", Some((100, 999))),
-        ("bytes=-50", Some((950, 999))),
-        ("bytes=-5000", Some((0, 999))),
-        ("bytes=990-5000", Some((990, 999))),
-        (" bytes=1-2 ", Some((1, 2))),
-        ("bytes=0-0", Some((0, 0))),
-        ("bytes=-0", None),
-        ("bytes=1000-", None),
-        ("bytes=10-5", None),
-        ("bytes=-", None),
-        ("octets=0-1", None),
-        ("bytes=0-1,4-5", None),
-    ] {
-        assert_eq!(byte_range(r, size), want, "{r}");
-    }
-}
-
 // ---------------------------------------------------------------- routes
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -277,9 +222,6 @@ async fn session_exigee_partout() {
         ("GET", format!("/api/matches/{id}/commentary")),
         ("POST", format!("/api/matches/{id}/commentary")),
         ("POST", format!("/api/matches/{id}/watching")),
-        ("GET", format!("/api/matches/{id}/dub")),
-        ("POST", format!("/api/matches/{id}/dub")),
-        ("GET", format!("/api/matches/{id}/dub/0")),
         ("GET", format!("/api/matches/{id}/sync")),
         ("POST", format!("/api/matches/{id}/sync")),
         ("GET", "/api/activity".to_string()),
@@ -519,98 +461,6 @@ async fn lancement_de_la_traduction() {
     // GET : statut seul, sans effet de bord.
     let res = get(&t, &p, "paul").await;
     assert_eq!(res.json()["commentary"]["status"], "running");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn doublage_et_troncons() {
-    let _g = LOCK.lock().await;
-    let t = setup();
-    let p = format!("/api/matches/{}/dub", t.full);
-    let res = get(&t, &p, "paul").await;
-    assert_eq!(res.status, StatusCode::OK);
-    let v = res.json();
-    assert_eq!(v["status"], "disabled");
-    assert_eq!(v["reason"], "doublage désactivé (DUB_DISABLED=1)");
-    assert!(
-        !t.media.commentary.viewer_active(t.full),
-        "sans `t` : aucun effet de bord"
-    );
-    get(&t, &format!("{p}?t=30"), "paul").await;
-    assert_eq!(t.media.commentary.viewer_position(t.full), Some(30.0));
-    for (body, s) in [
-        (r#"{"action":"nope"}"#, 400),
-        (r#"{"action":"retry"}"#, 403),
-    ] {
-        assert_eq!(
-            post(&t, &p, "paul", body).await.status.as_u16(),
-            s,
-            "{body}"
-        );
-    }
-    let res = post(&t, &p, "paul", r#"{"action":"stop"}"#).await;
-    assert_eq!(res.status, StatusCode::OK);
-    let v = res.json();
-    let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["dub", "commentary", "message"]);
-    assert_eq!(v["commentary"]["status"], "ready");
-    let res = post(&t, &p, "paul", r#"{"action":"start"}"#).await;
-    assert_eq!(
-        res.status,
-        StatusCode::OK,
-        "doublage désactivé : rien en file"
-    );
-    assert!(t.media.dub.activity().queued.is_empty());
-
-    // Tronçons doublés.
-    let c0 = format!("/api/matches/{}/dub/0", t.full);
-    let res = get(&t, &c0, "paul").await;
-    assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(res.headers[header::CONTENT_TYPE], "audio/mp4");
-    assert_eq!(res.headers[header::ACCEPT_RANGES], "bytes");
-    assert_eq!(res.headers[header::CACHE_CONTROL], "private, max-age=86400");
-    assert_eq!(res.headers[header::CONTENT_LENGTH], "1000");
-    let file = std::fs::read(t.data.join("dub").join(t.full.to_string()).join("c000.m4a")).unwrap();
-    assert_eq!(res.bytes, file);
-    let res = send(
-        &t,
-        "GET",
-        &c0,
-        Some("paul"),
-        &[("range", "bytes=10-19")],
-        "",
-    )
-    .await;
-    assert_eq!(res.status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(res.headers[header::CONTENT_RANGE], "bytes 10-19/1000");
-    assert_eq!(res.headers[header::CONTENT_LENGTH], "10");
-    assert_eq!(res.bytes, file[10..20]);
-    let res = send(
-        &t,
-        "GET",
-        &c0,
-        Some("paul"),
-        &[("range", "bytes=2000-")],
-        "",
-    )
-    .await;
-    assert_eq!(res.status, StatusCode::RANGE_NOT_SATISFIABLE);
-    assert_eq!(res.headers[header::CONTENT_RANGE], "bytes */1000");
-    assert!(res.bytes.is_empty());
-    for (idx, s) in [
-        ("1", 404),
-        ("2", 404),
-        ("x", 400),
-        ("-1", 400),
-        ("1.0", 400),
-        ("99999999999999999999", 400),
-    ] {
-        let res = get(&t, &format!("/api/matches/{}/dub/{idx}", t.full), "paul").await;
-        assert_eq!(res.status.as_u16(), s, "{idx}");
-    }
-    assert_eq!(
-        get(&t, "/api/matches/abc/dub/0", "paul").await.status,
-        StatusCode::BAD_REQUEST
-    );
 }
 
 // ---------------------------------------------------------------- mises en file de fond

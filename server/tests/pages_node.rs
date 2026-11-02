@@ -23,7 +23,6 @@ fn media_state(v: &Value) -> pages::MediaState {
         running_match_id: v["running_match_id"].as_i64(),
         activity: v["activity"].clone(),
         commentary_disabled_reason: v["commentary_disabled_reason"].as_str().map(str::to_string),
-        dub_disabled_reason: v["dub_disabled_reason"].as_str().map(str::to_string),
     }
 }
 
@@ -113,7 +112,7 @@ async fn pages_comme_node() {
             }
             "parametres" => match &session {
                 Some(s) => {
-                    let mut v = pages::parametres(&c, s, &node).unwrap();
+                    let mut v = pages::parametres(&c, s).unwrap();
                     // Réglage ajouté après le retrait de Node (moteur de
                     // transcription) : absent de la référence TypeScript.
                     if let Some(a) = v.get_mut("admin_data").and_then(Value::as_object_mut) {
@@ -122,15 +121,8 @@ async fn pages_comme_node() {
                         a.shift_remove("fetch_parallel");
                         a.shift_remove("translate_repair_model");
                         a.shift_remove("extra_names");
-                        let q = a.shift_remove("voice_quality");
-                        a.shift_remove("voice_quality_override");
-                        a.shift_remove("voice_engine");
                         a.shift_remove("minimax_key_set");
                         a.shift_remove("translate");
-                        assert!(
-                            matches!(q.as_ref().and_then(Value::as_str), Some("standard" | "hd")),
-                            "{q:?}"
-                        );
                         assert!(
                             matches!(
                                 e.as_ref().and_then(Value::as_str),

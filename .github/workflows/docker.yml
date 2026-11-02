@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       full:
-        description: "Construire aussi l'image complète (:full, avec Fish S2 Pro et Parakeet)"
+        description: "Construire aussi l'image complète (:full, avec Parakeet)"
         type: boolean
         default: false
 
@@ -76,7 +76,7 @@ jobs:
       - name: Base image tag
         id: base
         run: |
-          hash=$(cat Dockerfile.base scripts/voice-requirements.txt | sha256sum | cut -c1-16)
+          hash=$(sha256sum Dockerfile.base | cut -c1-16)
           name="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')-base"
           echo "image=${name}:lite-${hash}" >> "$GITHUB_OUTPUT"
           echo "moving=${name}:lite" >> "$GITHUB_OUTPUT"
@@ -129,8 +129,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
 
-  # Image complète (:full) : Fish Audio S2 Pro (vLLM, ~10 Go) et NVIDIA
-  # Parakeet en plus. Construite à la demande (« Run workflow », case
+  # Image complète (:full) : NVIDIA Parakeet en plus. Construite à la demande (« Run workflow », case
   # « full ») ou pour une version étiquetée.
   full:
     needs: build
@@ -164,7 +163,7 @@ jobs:
       - name: Base image tag
         id: base
         run: |
-          hash=$(cat Dockerfile.base scripts/voice-requirements.txt | sha256sum | cut -c1-16)
+          hash=$(sha256sum Dockerfile.base | cut -c1-16)
           name="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')-base"
           echo "image=${name}:full-${hash}" >> "$GITHUB_OUTPUT"
           echo "moving=${name}:full" >> "$GITHUB_OUTPUT"

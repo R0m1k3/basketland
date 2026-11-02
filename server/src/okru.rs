@@ -22,7 +22,7 @@ pub const OK_REFERER: &str = "https://ok.ru/";
 pub const NOT_FOUND: &str = "notFound";
 
 /// Début du message d'erreur d'une vidéo supprimée sur ok.ru (reconnu par la
-/// traduction et le doublage : pas un problème réseau).
+/// traduction : pas un problème réseau).
 pub const DELETED_MSG: &str = "Vidéo supprimée ou introuvable sur ok.ru";
 
 /// En-têtes exigés par ok.ru (`OK_HEADERS`).

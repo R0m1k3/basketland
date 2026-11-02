@@ -15,7 +15,6 @@ pub mod commentary_db;
 pub mod cron;
 pub mod cup;
 pub mod db;
-pub mod dub_db;
 pub mod espn;
 pub mod espn_events;
 pub mod hls;
@@ -163,16 +162,6 @@ pub fn app(state: state::AppState) -> Router {
         .route(
             "/api/matches/{id}/watching",
             post(routes_media::watching).fallback(method_fallback),
-        )
-        .route(
-            "/api/matches/{id}/dub",
-            get(routes_media::dub_get)
-                .post(routes_media::dub_post)
-                .fallback(method_fallback),
-        )
-        .route(
-            "/api/matches/{id}/dub/{idx}",
-            get(routes_media::dub_chunk).fallback(method_fallback),
         )
         .route(
             "/api/matches/{id}/sync",

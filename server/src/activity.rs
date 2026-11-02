@@ -73,26 +73,8 @@ pub fn current_activity(c: &Connection, media: &Media) -> rusqlite::Result<Value
             "watched": false,
         }));
     }
-    // Doublage français (voix de synthèse), quand le GPU est libre.
-    let da = media.dub.activity();
-    if let Some(r) = &da.running {
-        if let Some(m) = match_of(c, r.match_id)? {
-            tasks.push(json!({
-                "kind": "doublage",
-                "match": m,
-                "label": "Doublage en français",
-                "pct": pct(r.done, r.total),
-                "paused": false,
-                "watched": r.watched,
-            }));
-        }
-    }
     let mut queued = Vec::new();
-    for (kind, ids) in [
-        ("traduction", &ca.queued),
-        ("analyse", &aa.queued),
-        ("doublage", &da.queued),
-    ] {
+    for (kind, ids) in [("traduction", &ca.queued), ("analyse", &aa.queued)] {
         for id in ids {
             if let Some(m) = match_of(c, *id)? {
                 queued.push(json!({ "kind": kind, "match": m }));

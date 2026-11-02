@@ -260,14 +260,20 @@ async fn etat_des_files_lu_dans_les_services() {
         .find(|g| g["id"] == running)
         .expect("replay récent");
     assert_eq!(g["vf"]["state"], "running");
-    // Paramètres : raison du doublage pour un administrateur seulement.
+    // Paramètres : réglages réservés à un administrateur, sans le doublage retiré.
     let res = get(&r, "/api/pages/parametres", cookie).await;
     assert_eq!(res.body["admin_data"], Value::Null);
     let res = get(&r, "/api/pages/parametres", Some("bl_session=admin-frais")).await;
-    assert_eq!(
-        res.body["admin_data"]["voice_disabled_reason"],
-        "doublage désactivé (DUB_DISABLED=1)"
-    );
+    let admin = res.body["admin_data"].as_object().unwrap();
+    for k in [
+        "vf_mode",
+        "voice_quality",
+        "voice_engine",
+        "voice_disabled_reason",
+    ] {
+        assert!(!admin.contains_key(k), "{k}");
+    }
+    assert!(admin.contains_key("minimax"));
     for p in [
         "/api/pages/matchs",
         "/api/pages/matchs/401909880",

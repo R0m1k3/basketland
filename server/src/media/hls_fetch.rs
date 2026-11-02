@@ -1,5 +1,5 @@
 //! Téléchargement PARALLÈLE d'une plage d'un flux HLS (audio des
-//! commentaires et du doublage).
+//! commentaires).
 //!
 //! ok.ru bride chaque connexion (quelques centaines de kb/s, avec des arrêts
 //! nets) : ffmpeg, qui lit les segments un par un sur une seule connexion,
