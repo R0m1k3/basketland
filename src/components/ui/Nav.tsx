@@ -16,12 +16,12 @@ const LINKS: { href: string; label: string; short: string; icon: IconName; match
 
 function Icon({ name }: { name: IconName }) {
   const common = {
-    width: 22,
-    height: 22,
+    width: 20,
+    height: 20,
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: 'currentColor',
-    strokeWidth: 1.8,
+    strokeWidth: 1.5,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
     'aria-hidden': true,
@@ -65,7 +65,7 @@ function Icon({ name }: { name: IconName }) {
   }
 }
 
-/** Navigation principale (≥ md) : onglets dans l'en-tête, actif souligné par l'accent. */
+/** Navigation principale (≥ md) : onglets dans l'en-tête, actif souligné par l'accent (posé sur le filet de l'en-tête). */
 export default function Nav() {
   const pathname = usePathname() ?? '/';
   return (
@@ -77,12 +77,12 @@ export default function Nav() {
             key={l.href}
             href={l.href}
             aria-current={active ? 'page' : undefined}
-            className={`relative whitespace-nowrap rounded-full px-3 py-1.5 font-display text-[15px] font-semibold uppercase tracking-wider transition ${
-              active ? 'bg-ink-800 text-paper' : 'text-paper-mute hover:text-paper'
+            className={`relative whitespace-nowrap rounded-md px-3 py-1.5 font-display text-base font-medium uppercase tracking-wide transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 ${
+              active ? 'text-paper' : 'text-paper-mute hover:text-paper'
             }`}
           >
             {l.label}
-            {active && <span className="absolute inset-x-3 -bottom-[13px] h-[2px] rounded-full bg-flame" />}
+            {active && <span className="absolute inset-x-3 -bottom-4 h-0.5 rounded-full bg-flame" />}
           </Link>
         );
       })}
@@ -113,13 +113,13 @@ export function BottomNav() {
               key={l.href}
               href={l.href}
               aria-current={active ? 'page' : undefined}
-              className={`relative flex min-w-0 flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold uppercase tracking-wide transition ${
+              className={`relative flex min-w-0 flex-col items-center gap-1 py-2 text-[11px] font-medium uppercase tracking-wide transition-colors ${
                 active ? 'text-flame' : 'text-paper-mute hover:text-paper'
               }`}
             >
-              {active && <span className="absolute inset-x-4 top-0 h-[2px] rounded-full bg-flame" />}
+              {active && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-flame" />}
               <Icon name={l.icon} />
-              <span className="max-w-full truncate px-0.5 font-display text-[11.5px]">{l.short}</span>
+              <span className="max-w-full truncate px-0.5 font-display text-xs">{l.short}</span>
             </Link>
           );
         })}

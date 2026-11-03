@@ -49,10 +49,7 @@ export default function SiteShell({ children }: { children: React.ReactNode }) {
           <div className="min-w-0 flex-1">{session && <Nav />}</div>
           {session && (
             <>
-              <span className="hidden shrink-0 items-center gap-1.5 text-xs text-paper-faint xl:flex">
-                <span className="h-1.5 w-1.5 rounded-full bg-win" />
-                Heures de Paris
-              </span>
+              <span className="hidden shrink-0 text-xs text-paper-faint xl:inline">Heures de Paris</span>
               <UserMenu username={user.username} />
             </>
           )}
@@ -61,8 +58,8 @@ export default function SiteShell({ children }: { children: React.ReactNode }) {
       <main className={`mx-auto max-w-7xl px-4 pt-6 sm:pt-8 ${session ? 'pb-28 md:pb-16' : 'pb-16'}`}>{children}</main>
       <footer className={`border-t border-ink-700/60 ${session ? 'pb-20 md:pb-0' : ''}`}>
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-6 text-xs text-paper-faint">
-          <span>BasketLand — replays NBA avec VF synchronisée.</span>
-          <span>Les vidéos proviennent de sources tierces ; BasketLand ne les héberge pas.</span>
+          <span>BasketLand — replays NBA avec VF synchronisée</span>
+          <span>Les vidéos proviennent de sources tierces, BasketLand ne les héberge pas</span>
         </div>
       </footer>
       {session && <BottomNav />}

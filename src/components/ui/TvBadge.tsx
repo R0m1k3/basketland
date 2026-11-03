@@ -3,7 +3,7 @@ import type { CupInfo, TvFr } from '@/lib/present';
 type Size = 'sm' | 'md';
 
 function pad(size: Size): string {
-  return size === 'sm' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-[11px]';
+  return size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs';
 }
 
 /** Petit écran stylisé (diffusion télé). */
@@ -35,13 +35,13 @@ export function TvBadges({ tv, size = 'md', short = false }: { tv?: TvFr[]; size
             key={t.name}
             title={title}
             aria-label={title}
-            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full font-bold uppercase tracking-wider text-white ${pad(size)} ${
+            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full font-semibold text-white ${pad(size)} ${
               t.kind === 'prime' ? 'bg-prime' : 'bg-bein'
             }`}
           >
             <IconTv size={size === 'sm' ? 10 : 11} />
             {label}
-            {!t.live && !short && <span className="font-semibold normal-case tracking-normal opacity-80">· différé</span>}
+            {!t.live && !short && <span className="font-medium opacity-80">· différé</span>}
           </span>
         );
       })}
@@ -54,7 +54,7 @@ export function CupBadge({ cup, size = 'md' }: { cup?: CupInfo; size?: Size }) {
   if (!cup) return null;
   return (
     <span
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-cup/60 bg-cup/15 font-bold uppercase tracking-wider text-cup-hot ${pad(size)}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-cup/50 bg-cup/10 font-semibold text-cup-hot ${pad(size)}`}
       title={`NBA Cup · ${cup.label}`}
     >
       <IconCup size={size === 'sm' ? 10 : 11} />
@@ -99,7 +99,7 @@ export function TvMini({ tv }: { tv?: TvFr[] }) {
       {tv.map((t) => (
         <span
           key={t.name}
-          className={`whitespace-nowrap rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide text-white ${
+          className={`whitespace-nowrap rounded px-1 py-px text-[10px] font-semibold text-white ${
             t.kind === 'prime' ? 'bg-prime' : 'bg-bein'
           }`}
         >

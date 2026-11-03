@@ -974,7 +974,7 @@ const Scrubber = memo(function Scrubber({ markers, onSeekStart }: { markers: Mar
         ))}
       <div
         ref={thumbRef}
-        className="pointer-events-none absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 scale-0 rounded-full bg-flame shadow-glow transition-transform group-hover/scrub:scale-100 group-focus-visible/scrub:scale-100"
+        className="pointer-events-none absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 scale-0 rounded-full bg-flame transition-transform group-hover/scrub:scale-100 group-focus-visible/scrub:scale-100"
       />
       <div
         ref={hoverRef}
@@ -1163,7 +1163,7 @@ function Poster({
         <TeamLogo abbr={homeAbbr} size={104} className="hidden sm:inline-flex" />
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2">
-        <button type="button" onClick={() => onPlay(resumeAt ? 0 : undefined)} className="btn-primary !px-5 !py-2.5 !text-[15px] shadow-glow">
+        <button type="button" onClick={() => onPlay(resumeAt ? 0 : undefined)} className="btn-primary !px-5 !py-2.5 !text-[15px]">
           <Icon name="play" size={18} />
           {resumeAt ? 'Depuis le début' : 'Lancer le replay'}
         </button>

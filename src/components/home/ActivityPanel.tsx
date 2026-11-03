@@ -62,7 +62,7 @@ function TaskRow({ task, watching }: { task: ActivityTask; watching: boolean }) 
   return (
     <Link
       href={`/matchs/${task.match.id}`}
-      className="group grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 px-4 py-3 transition hover:bg-ink-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-flame"
+      className="group grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 px-4 py-3 transition-colors hover:bg-ink-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-flame"
     >
       <span className="flex items-center" aria-hidden="true">
         <TeamLogo abbr={task.match.away} size={30} />
@@ -70,10 +70,10 @@ function TaskRow({ task, watching }: { task: ActivityTask; watching: boolean }) 
       </span>
       <span className="min-w-0">
         <span className="flex items-baseline justify-between gap-3">
-          <span className="truncate font-display text-[15px] font-bold uppercase tracking-wide text-paper group-hover:text-flame-hot sm:text-base">
+          <span className="truncate font-display text-base font-semibold uppercase tracking-wide text-paper">
             {nick(task.match.away, task.match.awayName)} <span className="text-paper-faint">@</span> {nick(task.match.home, task.match.homeName)}
           </span>
-          {pct !== null && <span className={`num shrink-0 text-sm font-bold ${paused ? 'text-paper-mute' : 'text-flame-hot'}`}>{pct} %</span>}
+          {pct !== null && <span className={`num shrink-0 text-sm font-medium ${paused ? 'text-paper-mute' : 'text-paper'}`}>{pct} %</span>}
         </span>
         <span className="block text-xs text-paper-mute">
           <span className="text-paper-dim">{KIND_LABEL[task.kind]}</span>
@@ -88,19 +88,22 @@ function TaskRow({ task, watching }: { task: ActivityTask; watching: boolean }) 
             aria-valuemax={100}
             aria-label={`${KIND_LABEL[task.kind]} : ${pct} %`}
           >
-            <span className={`block h-full rounded-full transition-[width] duration-700 ${paused ? 'bg-paper-faint' : 'bg-flame'}`} style={{ width: `${pct}%` }} />
+            <span
+              className={`block h-full w-full origin-left rounded-full transition-transform duration-500 ${paused ? 'bg-paper-faint' : 'bg-flame'}`}
+              style={{ transform: `scaleX(${pct / 100})` }}
+            />
           </span>
         )}
         {(task.watched || paused) && (
           <span className="mt-1.5 flex flex-wrap gap-1.5">
             {task.watched && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-live">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-live">
                 <span className="h-1.5 w-1.5 animate-pulse-live rounded-full bg-live" aria-hidden="true" />
                 en direct pour un spectateur
               </span>
             )}
             {paused && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-warn">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warn">
                 <PauseIcon />
                 en pause pendant la lecture
               </span>
@@ -178,13 +181,13 @@ export default function ActivityPanel({ initial, idleText }: { initial: Activity
   return (
     <section aria-labelledby="activity-title" className="panel-soft overflow-hidden">
       <div className="flex items-center justify-between gap-3 border-b border-ink-700/60 px-4 py-2.5">
-        <h2 id="activity-title" className="kicker flex items-center gap-2 !text-[12px]">
+        <h2 id="activity-title" className="kicker flex items-center gap-2">
           <span className={`h-2 w-2 shrink-0 rounded-full ${running ? 'animate-pulse bg-flame' : 'bg-ink-500'}`} aria-hidden="true" />
           En cours de traitement
         </h2>
         {waiting.length > 0 && (
           <span className="text-xs text-paper-faint">
-            <span className="num font-semibold text-paper-dim">{waiting.length}</span> en attente
+            <span className="num font-medium text-paper-dim">{waiting.length}</span> en attente
           </span>
         )}
       </div>
@@ -207,13 +210,13 @@ export default function ActivityPanel({ initial, idleText }: { initial: Activity
 
       {waiting.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-ink-700/60 px-4 py-2.5">
-          <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-faint">En attente</span>
+          <span className="mr-1 text-xs text-paper-faint">En attente</span>
           {shown.map(({ match, kinds }) => (
             <Link
               key={match.id}
               href={`/matchs/${match.id}`}
               title={`${matchTitle(match)} : ${kinds.map((k) => KIND_LABEL[k].toLowerCase()).join(' puis ')}`}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-ink-600 bg-ink-900/60 py-0.5 pl-1 pr-2.5 text-xs text-paper-dim transition hover:border-ink-500 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-ink-600 bg-ink-900/60 py-0.5 pl-1 pr-2.5 text-xs text-paper-dim transition-colors hover:border-ink-500 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60"
             >
               <span className="flex shrink-0 items-center" aria-hidden="true">
                 {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -26,9 +26,9 @@ function HeroTeam({ team, dim, align }: { team: TeamInfo; dim: boolean; align: '
       <TeamLogo abbr={team.abbr} size={120} className="hidden md:inline-flex" />
       {/* Conteneur de taille : la colonne entière (w-full), pour les unités cqi du nom. */}
       <div className="w-full min-w-0 [container-type:inline-size]">
-        <div className="truncate text-xs font-semibold uppercase tracking-[0.2em] text-paper-dim">{team.city}</div>
+        <div className="truncate text-sm font-medium text-paper-dim">{team.city}</div>
         <div
-          className={`font-display font-extrabold uppercase leading-[0.95] tracking-tight [overflow-wrap:anywhere] [text-wrap:balance] [--hero-name-max:1.5rem] sm:[--hero-name-max:2.25rem] lg:[--hero-name-max:3rem] ${dim ? 'tone-loss' : ''}`}
+          className={`font-display font-semibold uppercase leading-[0.95] [overflow-wrap:anywhere] [text-wrap:balance] [--hero-name-max:1.5rem] sm:[--hero-name-max:2.25rem] lg:[--hero-name-max:3rem] ${dim ? 'tone-loss' : ''}`}
           style={nameFit(team.nick)}
         >
           {team.nick}
@@ -51,7 +51,7 @@ export default function Hero({ game, kicker }: { game: GameView; kicker: string 
     <section
       data-scope={game.id}
       aria-labelledby="hero-title"
-      className="grain relative isolate overflow-hidden rounded-[28px] border border-ink-700/80 shadow-card"
+      className="relative isolate overflow-hidden rounded-[20px] border border-ink-700/80 shadow-card"
       style={
         {
           background: `linear-gradient(102deg, ${away.primary} 0%, ${away.primary}d9 30%, #16161C 50%, ${home.primary}d9 70%, ${home.primary} 100%)`,
@@ -72,13 +72,10 @@ export default function Hero({ game, kicker }: { game: GameView; kicker: string 
 
       <div className="relative flex flex-col gap-6 p-5 sm:p-8 lg:p-10">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-flame px-3 py-1 font-display text-[13px] font-bold uppercase tracking-[0.14em] text-ink-950">
-              <IconPlay size={11} />
-              Replay à la une
-            </span>
-            <span className="text-sm font-medium text-paper-dim">{kicker}</span>
-          </div>
+          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+            <span className="font-medium text-paper">Replay à la une</span>
+            <span className="text-paper-dim">{kicker}</span>
+          </p>
           <GameBadges game={{ ...game, hasReplay: false }} cup />
         </div>
 
@@ -90,17 +87,17 @@ export default function Hero({ game, kicker }: { game: GameView; kicker: string 
           <HeroTeam team={away} dim={homeWin} align="left" />
 
           <div className="col-span-2 row-start-2 flex flex-col items-center gap-2 md:col-span-1 md:col-start-2 md:row-start-1">
-            <div className="spoil-show flex items-center gap-2 font-display text-[76px] font-extrabold leading-none tabular-nums sm:gap-4 sm:text-[96px] lg:text-[112px]">
+            <div className="spoil-show flex items-center gap-2 font-display text-[76px] font-semibold leading-none tabular-nums sm:gap-4 sm:text-[96px] lg:text-[112px]">
               <span className={homeWin ? 'tone-loss' : ''}>{game.away.score}</span>
               <span className="text-[0.5em] text-paper-faint">–</span>
               <span className={awayWin ? 'tone-loss' : ''}>{game.home.score}</span>
             </div>
             <div className="spoil-only flex flex-col items-center gap-3 py-2">
-              <span className="font-display text-3xl font-extrabold uppercase tracking-tight text-paper-dim sm:text-5xl">? – ?</span>
+              <span className="font-display text-3xl font-semibold uppercase text-paper-dim sm:text-5xl">? – ?</span>
             </div>
             <RevealButton id={game.id} />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.3em] text-paper-mute">
-              Terminé{game.period > 4 ? ' · Prol.' : ''}
+            <span className="text-[13px] text-paper-mute">
+              Terminé{game.period > 4 ? ' après prolongation' : ''}
             </span>
           </div>
 
@@ -110,11 +107,11 @@ export default function Hero({ game, kicker }: { game: GameView; kicker: string 
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-3 md:justify-start">
-          <Link href={`/matchs/${game.id}`} className="btn-primary px-6 py-3 text-base shadow-glow">
+          <Link href={`/matchs/${game.id}`} className="btn-primary h-12 px-5 text-base">
             <IconPlay size={14} />
             {game.hasVf ? 'Regarder en VF' : 'Regarder le replay'}
           </Link>
-          <a href="#replays" className="btn bg-ink-950/60 px-5 py-3 backdrop-blur">
+          <a href="#replays" className="btn h-12 bg-ink-950/70 px-5">
             Autres replays
             <IconArrowRight className="rotate-90" />
           </a>

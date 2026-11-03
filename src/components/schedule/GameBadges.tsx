@@ -25,21 +25,21 @@ export default function GameBadges({
   className?: string;
 }) {
   if (!hasBadges(game, cup)) return null;
-  const pad = size === 'sm' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-[11px]';
+  const pad = size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs';
   const upcoming = game.status === 'scheduled' || game.status === 'live';
   return (
     <span className={`flex flex-wrap items-center gap-1.5 ${className}`}>
       {cup && <CupBadge cup={game.cup} size={size} />}
       <TvBadges tv={game.tv_fr} size={size} short={!upcoming} />
       {game.hasReplay && (
-        <span className={`inline-flex items-center gap-1 rounded-full bg-flame font-bold uppercase tracking-wider text-ink-950 ${pad}`}>
+        <span className={`inline-flex items-center gap-1 rounded-full bg-flame font-semibold text-ink-950 ${pad}`}>
           <IconPlay size={10} />
           Replay
         </span>
       )}
       <VfBadge vf={game.vf} size={size} />
       {game.hasStats && (
-        <span className={`inline-flex items-center gap-1 rounded-full border border-ink-600 font-bold uppercase tracking-wider text-paper-dim ${pad}`}>
+        <span className={`inline-flex items-center gap-1 rounded-full border border-ink-600 font-semibold text-paper-dim ${pad}`}>
           <IconChart size={11} />
           Stats
         </span>

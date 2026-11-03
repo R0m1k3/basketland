@@ -2,14 +2,14 @@ import type { VfState } from '@/lib/queries';
 import { IconSubtitles } from '@/components/ui/Icons';
 
 /**
- * État de la VF d'un replay : prête, en cours de traduction (pastille qui
- * pulse), ou en partie traduite (part du match). Rien si la traduction n'a
+ * État de la VF d'un replay : prête, en cours de traduction (pastille
+ * orange), ou en partie traduite (part du match). Rien si la traduction n'a
  * pas commencé.
  */
 export default function VfBadge({ vf, size = 'md' }: { vf: VfState; size?: 'sm' | 'md' }) {
   if (vf.state === 'none') return null;
-  const pad = size === 'sm' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-[11px]';
-  const base = `inline-flex items-center gap-1 whitespace-nowrap rounded-full font-bold uppercase tracking-wider ${pad}`;
+  const pad = size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs';
+  const base = `inline-flex items-center gap-1 whitespace-nowrap rounded-full font-semibold ${pad}`;
   if (vf.state === 'ready') {
     return (
       <span className={`${base} border border-flame/40 text-flame-hot`} title="Commentaires traduits en français : prêts">
@@ -21,10 +21,7 @@ export default function VfBadge({ vf, size = 'md' }: { vf: VfState; size?: 'sm' 
   if (vf.state === 'running') {
     return (
       <span className={`${base} border border-flame/30 bg-flame/10 text-flame-hot`} title="Traduction des commentaires en cours">
-        <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-flame opacity-70" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-flame" />
-        </span>
+        <span className="h-1.5 w-1.5 rounded-full bg-flame" aria-hidden="true" />
         VF en cours{vf.pct > 0 ? ` · ${vf.pct} %` : ''}
       </span>
     );

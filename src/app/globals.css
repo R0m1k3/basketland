@@ -13,9 +13,6 @@ body {
 
 body {
   @apply bg-ink-950 font-sans text-paper antialiased;
-  /* Halo discret en haut de page : rappelle l'éclairage d'une salle. */
-  background-image: radial-gradient(1200px 500px at 50% -200px, rgba(255, 90, 31, 0.08), transparent 70%);
-  background-repeat: no-repeat;
 }
 
 ::selection {
@@ -46,15 +43,17 @@ body {
     @apply rounded-2xl border border-ink-700/60 bg-ink-850/60;
   }
 
-  /* Petit titre en capitales au-dessus d'une section */
+  /* Petit titre au-dessus d'une section : texte courant, sans capitales.
+     Les capitales condensées restent réservées au tableau d'affichage
+     (titres de section, équipes, scores). */
   .kicker {
-    @apply font-display text-[13px] font-semibold uppercase tracking-[0.18em] text-paper-mute;
+    @apply font-sans text-[13px] font-medium text-paper-mute;
   }
   .title-xl {
-    @apply font-display text-4xl font-extrabold uppercase leading-[0.95] tracking-tight sm:text-6xl;
+    @apply font-display text-4xl font-semibold uppercase leading-[0.95] sm:text-6xl;
   }
   .title-lg {
-    @apply font-display text-2xl font-bold uppercase tracking-tight sm:text-3xl;
+    @apply font-display text-2xl font-semibold uppercase sm:text-3xl;
   }
 
   /* Chiffres de tableau d'affichage */
@@ -64,24 +63,24 @@ body {
 
   /* Boutons */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-full border border-ink-600 bg-ink-850 px-4 py-2 text-sm font-medium text-paper transition hover:border-ink-500 hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-ink-600 bg-ink-850 px-4 py-2 text-sm font-medium text-paper transition-[color,background-color,border-color,transform] hover:border-ink-500 active:scale-[0.98] hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-full bg-flame px-4 py-2 text-sm font-semibold text-ink-950 transition hover:bg-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-flame px-4 py-2 text-sm font-semibold text-ink-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] transition-[color,background-color,transform] hover:bg-flame-hot active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 rounded-full px-3 py-1.5 text-sm text-paper-dim transition hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm text-paper-dim transition-colors hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
   }
 
   /* Pastilles */
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-850 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-paper-dim;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-850 px-2.5 py-0.5 text-xs font-medium text-paper-dim;
   }
   .chip-flame {
-    @apply inline-flex items-center gap-1.5 rounded-full bg-flame/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-flame-hot;
+    @apply inline-flex items-center gap-1.5 rounded-full bg-flame/15 px-2.5 py-0.5 text-xs font-medium text-flame-hot;
   }
   .chip-live {
-    @apply inline-flex items-center gap-1.5 rounded-full bg-live/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-live;
+    @apply inline-flex items-center gap-1.5 rounded-full bg-live/15 px-2.5 py-0.5 text-xs font-medium text-live;
   }
 
   /* Tableaux de stats */
@@ -106,9 +105,10 @@ body {
     0 0 2px rgba(0, 0, 0, 1);
 }
 
-/* Liseré aux couleurs d'une équipe (variables posées par le composant) */
+/* Liseré aux couleurs des deux équipes, moitié-moitié comme deux maillots
+   (variables posées par le composant). */
 .team-stripe {
-  background: linear-gradient(90deg, var(--team-a, #ff5a1f), var(--team-b, #ff5a1f));
+  background: linear-gradient(90deg, var(--team-a, #4a4955) 0 50%, var(--team-b, #4a4955) 50% 100%);
 }
 
 /* Rangée défilante sans barre visible (sélecteur de jours) */
@@ -150,48 +150,35 @@ body {
   color: inherit;
 }
 .score-mask {
-  @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-ink-500 bg-ink-900/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper-mute transition hover:border-flame/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+  @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-ink-500 bg-ink-900/80 px-2.5 py-1 text-xs font-medium text-paper-mute transition-colors hover:border-flame/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
 }
 
-/* --- NBA Cup : fond doré des matchs du tournoi ----------------------- */
+/* --- NBA Cup : fond doré des matchs du tournoi -----------------------
+   Un or sourd et uni (léger dégradé de ton, jamais de motif) et un liseré
+   doré : reconnaissable dans une liste dense sans voler la vedette. */
 .cup-card {
-  border-color: rgba(217, 184, 100, 0.45);
-  background:
-    radial-gradient(120% 140% at 50% -40%, rgba(217, 184, 100, 0.2), transparent 60%),
-    repeating-linear-gradient(135deg, rgba(217, 184, 100, 0.05) 0 2px, transparent 2px 14px),
-    #15130f;
+  border-color: rgba(217, 184, 100, 0.35);
+  background: linear-gradient(180deg, #1b1811, #15130f);
+  transition:
+    border-color 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 150ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .cup-card:hover {
-  border-color: rgba(240, 212, 138, 0.7);
-  background:
-    radial-gradient(120% 140% at 50% -40%, rgba(217, 184, 100, 0.26), transparent 60%),
-    repeating-linear-gradient(135deg, rgba(217, 184, 100, 0.06) 0 2px, transparent 2px 14px),
-    #191610;
+  border-color: rgba(240, 212, 138, 0.6);
 }
 
 /* --- Titres de section ------------------------------------------------ */
 .section-title {
-  @apply font-display text-[26px] font-extrabold uppercase leading-none tracking-tight sm:text-[32px];
+  @apply font-display text-[28px] font-semibold uppercase leading-none sm:text-[32px];
 }
 .link-more {
-  @apply inline-flex items-center gap-1.5 rounded-full text-sm font-medium text-paper-mute transition hover:text-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
+  @apply inline-flex items-center gap-1.5 rounded-md text-sm font-medium text-paper-mute transition-colors hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60;
 }
 
 /* --- Filigrane de logo (bannières, tuiles) ---------------------------- */
 .watermark {
   @apply pointer-events-none absolute select-none opacity-[0.13] mix-blend-luminosity;
   filter: grayscale(0.2) contrast(1.1);
-}
-
-/* Grain léger sur les grandes surfaces colorées */
-.grain::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.06;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.6) 1px, transparent 1px);
-  background-size: 3px 3px;
 }
 
 /* ==========================================================================
@@ -376,7 +363,7 @@ body {
   background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 12px, transparent 12px 24px);
 }
 .upcoming-glow {
-  background: radial-gradient(60% 80% at 50% 0%, rgba(255, 90, 31, 0.12), transparent 70%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
 }
 .countdown-cell {
   @apply min-w-[2.2ch] rounded-xl border border-ink-700 bg-ink-950/70 px-2 py-1 text-center leading-none shadow-card sm:px-3 sm:py-2;
@@ -395,10 +382,10 @@ body {
    ========================================================================== */
 @layer components {
   .field-label {
-    @apply mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.14em] text-paper-mute;
+    @apply mb-1.5 block text-[13px] font-medium text-paper-dim;
   }
   .field {
-    @apply block w-full rounded-xl border border-ink-600 bg-ink-950/70 px-3.5 py-2.5 text-[15px] text-paper transition placeholder:text-paper-faint hover:border-ink-500 focus:border-flame/70 focus:outline-none focus:ring-2 focus:ring-flame/25 disabled:opacity-60;
+    @apply block w-full rounded-lg border border-ink-600 bg-ink-950/70 px-3.5 py-2.5 text-[15px] text-paper transition-colors placeholder:text-paper-faint hover:border-ink-500 focus:border-flame/70 focus:outline-none focus:ring-2 focus:ring-flame/25 disabled:opacity-60;
   }
   .field-hint {
     @apply mt-1.5 text-xs text-paper-faint;
@@ -410,6 +397,6 @@ body {
     @apply rounded-xl border border-win/30 bg-win/10 px-3.5 py-2.5 text-sm text-win;
   }
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 rounded-full border border-loss/40 bg-loss/10 px-4 py-2 text-sm font-medium text-loss transition hover:bg-loss/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-loss/50 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-loss/40 bg-loss/10 px-4 py-2 text-sm font-medium text-loss transition-colors hover:bg-loss/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-loss/50 disabled:cursor-not-allowed disabled:opacity-50;
   }
 }

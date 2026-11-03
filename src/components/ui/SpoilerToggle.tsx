@@ -58,7 +58,7 @@ export default function SpoilerToggle({ initial, className = '' }: { initial: Sp
         setMode(next);
         applyMode(next);
       }}
-      className={`group inline-flex items-center gap-2.5 rounded-full border px-3 py-1.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 ${
+      className={`group inline-flex items-center gap-2.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60 ${
         hidden ? 'border-flame/50 bg-flame/10 text-paper' : 'border-ink-600 bg-ink-850 text-paper-dim hover:border-ink-500 hover:text-paper'
       } ${className}`}
       title={hidden ? 'Les scores sont masqués : cliquez pour les afficher' : 'Masquer les scores pour éviter les spoilers'}
@@ -70,8 +70,8 @@ export default function SpoilerToggle({ initial, className = '' }: { initial: Sp
         className={`relative h-[18px] w-8 rounded-full transition-colors ${hidden ? 'bg-flame' : 'bg-ink-600'}`}
       >
         <span
-          className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-paper shadow transition-[left] ${
-            hidden ? 'left-[16px]' : 'left-[2px]'
+          className={`absolute left-[2px] top-[2px] h-[14px] w-[14px] rounded-full bg-paper shadow transition-transform ${
+            hidden ? 'translate-x-[14px]' : 'translate-x-0'
           }`}
         />
       </span>
