@@ -3,15 +3,16 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-type IconName = 'home' | 'calendar' | 'teams' | 'table' | 'cup';
+type IconName = 'home' | 'calendar' | 'teams' | 'table' | 'cup' | 'ball';
 
-/** `short` : libellé de la barre mobile (cinq onglets sur un écran étroit). */
+/** `short` : libellé de la barre mobile (six onglets sur un écran étroit). */
 const LINKS: { href: string; label: string; short: string; icon: IconName; match: (p: string) => boolean }[] = [
   { href: '/', label: 'Accueil', short: 'Accueil', icon: 'home', match: (p) => p === '/' },
   { href: '/matchs', label: 'Calendrier', short: 'Matchs', icon: 'calendar', match: (p) => p.startsWith('/matchs') },
   { href: '/nba-cup', label: 'NBA Cup', short: 'NBA Cup', icon: 'cup', match: (p) => p.startsWith('/nba-cup') },
   { href: '/equipes', label: 'Équipes', short: 'Équipes', icon: 'teams', match: (p) => p.startsWith('/equipes') },
   { href: '/classement', label: 'Classement', short: 'Classement', icon: 'table', match: (p) => p.startsWith('/classement') },
+  { href: '/euroleague', label: 'Euroleague', short: 'Euroleague', icon: 'ball', match: (p) => p.startsWith('/euroleague') },
 ];
 
 function Icon({ name }: { name: IconName }) {
@@ -56,6 +57,14 @@ function Icon({ name }: { name: IconName }) {
           <path d="M12 13v4M8.5 20h7M10 17h4" />
         </svg>
       );
+    case 'ball':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M3.5 12h17M12 3.5v17" />
+          <path d="M6 6c2.2 1.6 3.5 3.6 3.5 6S8.2 16.4 6 18M18 6c-2.2 1.6-3.5 3.6-3.5 6s1.3 4.4 3.5 6" />
+        </svg>
+      );
     case 'table':
       return (
         <svg {...common}>
@@ -91,7 +100,7 @@ export default function Nav() {
 }
 
 /**
- * Navigation mobile : barre d'onglets fixe en bas d'écran (les cinq
+ * Navigation mobile : barre d'onglets fixe en bas d'écran (les six
  * entrées tiennent toujours, sans défilement horizontal).
  *
  * Elle doit être rendue HORS de l'en-tête : le `backdrop-filter` de
@@ -105,7 +114,7 @@ export function BottomNav() {
       className="fixed inset-x-0 bottom-0 z-50 border-t border-ink-700/80 bg-ink-950/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
       aria-label="Navigation principale"
     >
-      <div className="mx-auto grid max-w-md grid-cols-5">
+      <div className="mx-auto grid max-w-md grid-cols-6">
         {LINKS.map((l) => {
           const active = l.match(pathname);
           return (

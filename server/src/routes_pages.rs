@@ -198,28 +198,72 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<Value, String>>,
 {
+    Ok(
+        load_cached(db, STANDINGS_KEY.to_string(), 30 * 60_000, now, fetch)
+            .await?
+            .unwrap_or_else(|| json!([])),
+    )
+}
+
+/// Valeur de `key` en cache si plus récente que `max_age_ms`, sinon `fetch`
+/// (mise en cache), sinon le cache périmé si `fetch` échoue ; `None` faute
+/// de mieux.
+pub async fn load_cached<F, Fut>(
+    db: &db::Db,
+    key: String,
+    max_age_ms: i64,
+    now: DateTime<Utc>,
+    fetch: F,
+) -> Result<Option<Value>, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Value, String>>,
+{
+    let k = key.clone();
     if let Some(v) = db
-        .run(move |c| db::kv_get_at(c, STANDINGS_KEY, Some(30 * 60_000), now))
+        .run(move |c| db::kv_get_at(c, &k, Some(max_age_ms), now))
         .await?
     {
-        return Ok(v);
+        return Ok(Some(v));
     }
     let fresh = match fetch().await {
         Ok(v) => {
-            let v2 = v.clone();
-            db.run(move |c| db::kv_set(c, STANDINGS_KEY, &v2))
-                .await
-                .map(|_| v)
+            let (v2, k) = (v.clone(), key.clone());
+            db.run(move |c| db::kv_set(c, &k, &v2)).await.map(|_| v)
         }
         Err(e) => Err(e),
     };
     match fresh {
-        Ok(v) => Ok(v),
-        Err(_) => Ok(db
-            .run(move |c| db::kv_get_at(c, STANDINGS_KEY, None, now))
-            .await?
-            .unwrap_or_else(|| json!([]))),
+        Ok(v) => Ok(Some(v)),
+        Err(_) => db.run(move |c| db::kv_get_at(c, &key, None, now)).await,
     }
+}
+
+/// Onglet Euroleague (voir [`crate::euroleague`]) : API officielle, cache de
+/// 10 min, cache périmé si l'API ne répond pas.
+pub async fn euroleague(
+    State(st): State<AppState>,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let spoilers = spoiler_mode(&headers);
+    let fut = async {
+        let now = Utc::now();
+        let season = crate::euroleague::season_code(now);
+        let key = crate::euroleague::cache_key(&season);
+        let s2 = season.clone();
+        let fetch = || async move { crate::euroleague::fetch(&s2).await };
+        match load_cached(&st.db, key, crate::euroleague::CACHE_MS, now, fetch).await {
+            Ok(data) => ok(crate::euroleague::page(
+                data.as_ref(),
+                &season,
+                now,
+                spoilers,
+            )),
+            Err(e) => db_error(e),
+        }
+    };
+    guarded(&st, &uri, &headers, fut).await
 }
 
 pub async fn classement(
