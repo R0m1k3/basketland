@@ -17,6 +17,7 @@ pub mod cup;
 pub mod db;
 pub mod espn;
 pub mod espn_events;
+pub mod euroleague;
 pub mod hls;
 pub mod http;
 pub mod ingest;
@@ -189,6 +190,7 @@ pub fn app(state: state::AppState) -> Router {
         .route("/api/pages/equipes/{abbr}", get(routes_pages::equipe))
         .route("/api/pages/classement", get(routes_pages::classement))
         .route("/api/pages/nba-cup", get(routes_pages::nba_cup))
+        .route("/api/pages/euroleague", get(routes_pages::euroleague))
         .route("/api/pages/parametres", get(routes_pages::parametres))
         .fallback(relay)
         .with_state(state)

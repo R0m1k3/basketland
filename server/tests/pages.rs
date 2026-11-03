@@ -99,13 +99,14 @@ async fn get(r: &axum::Router, uri: &str, cookie: Option<&str>) -> Res {
     }
 }
 
-const PROTECTED: [&str; 7] = [
+const PROTECTED: [&str; 8] = [
     "/api/pages/home",
     "/api/pages/matchs?d=2026-10-28",
     "/api/pages/matchs/401909880",
     "/api/pages/equipes",
     "/api/pages/equipes/LAL",
     "/api/pages/classement",
+    "/api/pages/euroleague",
     "/api/pages/parametres",
 ];
 

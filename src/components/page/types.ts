@@ -201,3 +201,66 @@ export interface NbaCupPage {
   upcoming: GameView[];
   results: GameView[];
 }
+
+/** Club Euroleague (API officielle de l'Euroleague). */
+export interface EuroClub {
+  code: string;
+  /** Code court de trois lettres (affichage mobile). */
+  tv: string;
+  /** Nom usuel (« Real Madrid ») et nom complet (avec sponsor). */
+  name: string;
+  full: string;
+  crest: string | null;
+}
+
+/** Match d'Euroleague, heure de Paris. */
+export interface EuroGame {
+  code: number;
+  phase: string;
+  round: number | null;
+  round_label: string;
+  utc: string;
+  day_paris: string;
+  time_paris: string;
+  played: boolean;
+  /** `pending` : heure passée, score officiel pas encore publié. */
+  status: 'scheduled' | 'live' | 'pending' | 'final';
+  home: EuroClub & { score: number | null };
+  away: EuroClub & { score: number | null };
+  venue: string | null;
+}
+
+/** Ligne du classement officiel de l'Euroleague. */
+export interface EuroStandingRow extends EuroClub {
+  position: number;
+  played: number;
+  wins: number;
+  losses: number;
+  pct: string;
+  pf: number;
+  pa: number;
+  diff: number;
+  home: string;
+  road: string;
+  /** Cinq derniers matchs, du plus ancien au plus récent : 'W' ou 'L'. */
+  form: string[];
+}
+
+/** `GET /api/pages/euroleague` : saison en cours (cache de 10 min). */
+export interface EuroleaguePage {
+  spoilers: SpoilerMode;
+  today: string;
+  /** « 2026-27 ». */
+  season: string;
+  /** L'API de l'Euroleague a répondu au moins une fois. */
+  available: boolean;
+  total: number;
+  played: number;
+  /** Deux prochaines journées (matchs en cours compris). */
+  upcoming: EuroGame[];
+  /** Deux dernières journées jouées, le plus récent d'abord. */
+  results: EuroGame[];
+  standings: EuroStandingRow[];
+  /** Journée du classement affiché. */
+  standings_round: number | null;
+}
