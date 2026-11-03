@@ -43,10 +43,14 @@ function Home({ d }: { d: HomeData }) {
       {/* Bandeau de date, façon une de journal, puis ce que le serveur traite en ce moment. */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-700/70 pb-4">
-          <p className="kicker flex flex-wrap items-center gap-x-3 gap-y-1">
+          <p className="kicker flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <span className="text-paper">{longDate(today)}</span>
-            {season !== null && <span>Saison {seasonLabel(season)}</span>}
-            <span className="hidden sm:inline">Heures de Paris</span>
+            {season !== null && (
+              <>
+                <span aria-hidden="true" className="text-paper-faint">·</span>
+                <span>Saison {seasonLabel(season)}</span>
+              </>
+            )}
           </p>
           <SpoilerToggle initial={spoilers} />
         </div>
@@ -76,7 +80,7 @@ function Home({ d }: { d: HomeData }) {
         ) : (
           <section className="panel flex min-h-[320px] flex-col justify-center gap-4 p-8">
             <p className="kicker">Replays</p>
-            <h1 className="title-xl">Tous les matchs NBA, en VF.</h1>
+            <h1 className="title-xl">Tous les matchs NBA, en VF</h1>
             <p className="max-w-xl text-paper-dim">
               Les replays apparaissent ici dès qu&apos;ils sont disponibles, avec les sous-titres français synchronisés.
             </p>
@@ -97,13 +101,13 @@ function Home({ d }: { d: HomeData }) {
               </h2>
               {nightGames.length > 0 && (
                 <span className="text-sm text-paper-mute">
-                  <span className="num text-xl font-bold text-paper">{nightGames.length}</span> match{nightGames.length > 1 ? 's' : ''}
+                  <span className="num text-xl font-semibold text-paper">{nightGames.length}</span> match{nightGames.length > 1 ? 's' : ''}
                 </span>
               )}
             </div>
             {nextUp && (
               <p className="mt-2 text-sm text-paper-dim">
-                Coup d&apos;envoi <span className="font-semibold text-flame-hot">{countdown(nextUp.date_utc, now)}</span>
+                Coup d&apos;envoi <span className="font-medium text-paper">{countdown(nextUp.date_utc, now)}</span>
               </p>
             )}
           </div>
@@ -121,7 +125,7 @@ function Home({ d }: { d: HomeData }) {
           {nightGames.length > 0 && (
             <Link
               href={`/matchs?d=${nightGames[0].day_paris}`}
-              className="mt-auto flex shrink-0 items-center justify-between border-t border-ink-700/70 px-5 py-3.5 text-sm font-medium text-paper-dim transition hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-flame"
+              className="mt-auto flex shrink-0 items-center justify-between border-t border-ink-700/70 px-5 py-3.5 text-sm font-medium text-paper-dim transition-colors hover:bg-ink-800 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-flame"
             >
               <span className="flex items-center gap-2">
                 <IconCalendar />
@@ -177,7 +181,7 @@ function Home({ d }: { d: HomeData }) {
             {days.map((d) => (
               <div key={d.key} className="panel-soft flex w-[85%] shrink-0 snap-start flex-col md:w-auto">
                 <div className="flex items-baseline justify-between gap-2 border-b border-ink-700/60 px-4 py-3">
-                  <h3 className="font-display text-xl font-bold uppercase tracking-wide">{relativeDay(d.key, today)}</h3>
+                  <h3 className="font-display text-xl font-semibold uppercase tracking-wide">{relativeDay(d.key, today)}</h3>
                   <span className="text-xs text-paper-mute">
                     {['Demain', "Aujourd'hui"].includes(relativeDay(d.key, today)) ? `${shortDate(d.key)} · ` : ''}
                     {d.games.length} match{d.games.length > 1 ? 's' : ''}
@@ -192,14 +196,14 @@ function Home({ d }: { d: HomeData }) {
                 </ol>
                 <Link
                   href={`/matchs?d=${d.key}`}
-                  className="mt-auto px-4 pb-3 pt-1 text-sm font-medium text-paper-mute transition hover:text-flame-hot focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame"
+                  className="mt-auto flex items-center gap-1.5 px-4 pb-4 pt-1 text-sm font-medium text-paper-mute transition-colors hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame"
                 >
                   {d.games.length > 7
-                    ? `+ ${d.games.length - 6} autres matchs`
+                    ? `${d.games.length - 6} autres matchs`
                     : d.games.length === 7
-                      ? '+ 1 autre match'
-                      : 'Voir la journée'}{' '}
-                  →
+                      ? '1 autre match'
+                      : 'Voir la journée'}
+                  <IconArrowRight />
                 </Link>
               </div>
             ))}
@@ -225,7 +229,7 @@ function Home({ d }: { d: HomeData }) {
           <div className="grid gap-4 md:grid-cols-2">
             {standings.map((conf) => (
               <div key={conf.conference} className="panel-soft p-2">
-                <h3 className="px-3 pb-1 pt-2 font-display text-sm font-bold uppercase tracking-[0.18em] text-paper-mute">
+                <h3 className="kicker px-3 pb-2 pt-2">
                   {conf.conference}
                 </h3>
                 <ol>
@@ -235,12 +239,12 @@ function Home({ d }: { d: HomeData }) {
                       <li key={r.abbr}>
                         <Link
                           href={`/equipes/${r.abbr}`}
-                          className="flex items-center gap-3 rounded-lg px-3 py-2 transition hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame"
+                          className="flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame"
                         >
-                          <span className="num w-5 text-lg font-bold text-paper-faint">{r.seed || i + 1}</span>
+                          <span className="num w-5 text-lg font-medium text-paper-faint">{r.seed || i + 1}</span>
                           <TeamLogo abbr={r.abbr} size={28} />
-                          <span className="min-w-0 flex-1 truncate font-display text-base font-bold uppercase tracking-wide">{t.nick}</span>
-                          <span className="num text-lg font-bold">
+                          <span className="min-w-0 flex-1 truncate font-display text-base font-semibold uppercase tracking-wide">{t.nick}</span>
+                          <span className="num text-lg font-semibold">
                             {r.wins}–{r.losses}
                           </span>
                         </Link>
@@ -282,21 +286,21 @@ function VfSummary({
     n > 0 && (
       <span className="inline-flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden="true" />
-        <span className="num font-semibold text-paper">{n}</span> {label}
+        <span className="num font-medium text-paper">{n}</span> {label}
       </span>
     );
   return (
     <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-paper-mute" aria-label="État de la traduction des commentaires">
       {item(ready, 'en VF', 'bg-win')}
-      {item(running, 'en cours', 'animate-pulse bg-flame')}
+      {item(running, 'en cours', 'bg-flame')}
       {item(partial, 'en partie traduit' + (partial > 1 ? 's' : ''), 'bg-flame/50')}
       {item(todo, 'à traduire', 'bg-ink-500')}
       <span className="text-paper-faint">
         {!auto
-          ? 'Traduction à la demande : « Sous-titrer ce match » sur la fiche.'
+          ? 'Traduction à la demande : « Sous-titrer ce match » sur la fiche'
           : night === 'en continu'
-            ? 'Traduits dès que le replay est disponible (en pause pendant la lecture).'
-            : `${night ? `Traduction automatique ${night} ; ` : ''}un match ouvert est traduit aussitôt.`}
+            ? 'Traduits dès que le replay est disponible, en pause pendant la lecture'
+            : `${night ? `Traduction automatique ${night}, ` : ''}un match ouvert est traduit aussitôt`}
       </span>
     </p>
   );

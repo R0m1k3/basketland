@@ -52,8 +52,14 @@ const config: Config = {
         xl2: '1.25rem',
       },
       boxShadow: {
-        glow: '0 0 0 1px rgba(255,90,31,.35), 0 10px 40px -10px rgba(255,90,31,.45)',
         card: '0 1px 0 rgba(255,255,255,.04) inset, 0 20px 40px -24px rgba(0,0,0,.8)',
+      },
+      // Une seule courbe pour toutes les transitions, durée courte par défaut.
+      transitionTimingFunction: {
+        DEFAULT: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      },
+      transitionDuration: {
+        DEFAULT: '150ms',
       },
       keyframes: {
         'pulse-live': { '0%,100%': { opacity: '1' }, '50%': { opacity: '.35' } },
@@ -61,7 +67,7 @@ const config: Config = {
       },
       animation: {
         'pulse-live': 'pulse-live 1.6s ease-in-out infinite',
-        'fade-up': 'fade-up .35s ease-out both',
+        'fade-up': 'fade-up .35s cubic-bezier(0.22, 1, 0.36, 1) both',
       },
     },
   },

@@ -59,7 +59,7 @@ function Team({ d }: { d: TeamData }) {
       {/* Bannière */}
       <section
         aria-labelledby="team-title"
-        className="grain relative isolate overflow-hidden rounded-[28px] border border-ink-700/80 shadow-card"
+        className="relative isolate overflow-hidden rounded-[20px] border border-ink-700/80 shadow-card"
         style={
           {
             background: `linear-gradient(118deg, ${t.primary} 0%, ${t.primary}b3 32%, #111116 78%)`,
