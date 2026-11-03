@@ -484,7 +484,8 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
   sait pas traduire est gardée en anglais en base (marquée `untranslated`)
   sans bloquer le match, mais **jamais affichée** (ni sous-titre, ni export
   WebVTT) : pas d'anglais au milieu de la VF. Elle est retentée
-  à la fin du travail suivant sur ce match, et une piste complète qui en
+  **dès la fin du même travail** (seconde passe, ligne par ligne avec les
+  lignes qui précèdent pour le sens, traducteur encore chargé), et une piste complète qui en
   contient encore (publiée avant ce rattrapage) reçoit un **travail court de
   rattrapage** — sans flux vidéo ni Whisper, les lignes retraduites une à
   une ; la fiche reste « prête » pendant ce temps. Un seul rattrapage par

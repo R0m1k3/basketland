@@ -6544,7 +6544,8 @@
       "traduction 2/3 1200",
       "transcription 2/3 1200",
       "traduction 2/3 1200",
-      "traduction 3/3 1300"
+      "traduction 3/3 1300",
+      "traduction 0/1 1300"
      ],
      "calls": {
       "extract": [
@@ -6563,7 +6564,8 @@
        100003,
        200001,
        200002,
-       300001
+       300001,
+       100003
       ],
       "events": [
        "ollama ouvert",
@@ -6573,6 +6575,7 @@
        "transcription 1",
        "traduction 2",
        "transcription 2",
+       "traduction 1",
        "traduction 1",
        "whisper fermé",
        "ollama fermé"
@@ -7029,7 +7032,8 @@
       "traduction 2/3 1200",
       "transcription 2/3 1200",
       "traduction 2/3 1200",
-      "traduction 3/3 1300"
+      "traduction 3/3 1300",
+      "traduction 0/1 1300"
      ],
      "calls": {
       "extract": [
@@ -7048,7 +7052,8 @@
        100003,
        200001,
        200002,
-       300001
+       300001,
+       100003
       ],
       "events": [
        "ollama ouvert",
@@ -7058,6 +7063,7 @@
        "transcription 1",
        "traduction 2",
        "transcription 2",
+       "traduction 1",
        "traduction 1",
        "whisper fermé",
        "ollama fermé"

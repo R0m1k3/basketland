@@ -581,7 +581,6 @@ struct RunCtx {
     cache: Mutex<TranslationCache>,
     cache_file: PathBuf,
     batches: AtomicUsize,
-    attempted: Mutex<HashSet<i64>>,
     leftover_ctx: TranslateContext,
     roster: RosterIndex,
     asr: Mutex<Option<Transcriber>>,
@@ -953,12 +952,6 @@ impl RunCtx {
                 if todo.is_empty() {
                     continue;
                 }
-                {
-                    let mut a = locked(&self.attempted);
-                    for c in &todo {
-                        a.insert(c.seq);
-                    }
-                }
                 let mut context: Vec<String> = before.clone();
                 context.extend(cues[..k].iter().map(|c| c.text.clone()));
                 let context = context[context.len().saturating_sub(CONTEXT_LINES)..].to_vec();
@@ -1132,8 +1125,9 @@ impl Commentary {
     }
 
     /// `translateLeftovers` : rattrapage des sous-titres publiés restés en
-    /// anglais, ligne par ligne (avec les lignes qui précèdent pour le sens).
-    /// `skip` : lignes déjà tentées pendant ce travail. Une fois au bout, le
+    /// anglais, ligne par ligne (avec les lignes qui précèdent pour le sens),
+    /// y compris celles ratées pendant ce travail : une ligne seule, avec son
+    /// contexte, passe souvent là où son lot avait échoué. Une fois au bout, le
     /// rattrapage est noté pour la piste. Rend le nombre de lignes traduites.
     async fn translate_leftovers(
         &self,
@@ -1142,15 +1136,11 @@ impl Commentary {
         deps: &CommentaryDeps,
         o: &TranslateContext,
         on_progress: &(dyn Fn(f64) + Send + Sync),
-        skip: &HashSet<i64>,
     ) -> Result<usize, CommentaryError> {
         let rows: Vec<_> = self
             .db()
             .with(|c| cdb::untranslated_commentary_cues(c, match_id))
-            .map_err(db_err)?
-            .into_iter()
-            .filter(|c| !skip.contains(&c.seq))
-            .collect();
+            .map_err(db_err)?;
         let mut fixed = 0;
         for (k, c) in rows.iter().enumerate() {
             if crate::media::abort::is_aborted(o.signal.as_ref()) {
@@ -1274,21 +1264,14 @@ impl Commentary {
                 }
                 let p = progress.clone();
                 let fixed = self
-                    .translate_leftovers(
-                        job.match_id,
-                        &cfg,
-                        deps,
-                        &leftover_ctx,
-                        &move |d| {
-                            p(CommentaryProgress {
-                                phase: CommentaryPhase::Traduction,
-                                done: d,
-                                total,
-                                available_until: None,
-                            })
-                        },
-                        &HashSet::new(),
-                    )
+                    .translate_leftovers(job.match_id, &cfg, deps, &leftover_ctx, &move |d| {
+                        p(CommentaryProgress {
+                            phase: CommentaryPhase::Traduction,
+                            done: d,
+                            total,
+                            available_until: None,
+                        })
+                    })
                     .await?;
                 Ok(CommentaryOutcome::ok(format!(
                     "rattrapage : {fixed}/{} ligne(s) restée(s) en anglais traduite(s)",
@@ -1415,7 +1398,6 @@ impl Commentary {
             cache: Mutex::new(cache),
             cache_file,
             batches: AtomicUsize::new(0),
-            attempted: Mutex::new(HashSet::new()),
             leftover_ctx: leftover_ctx.clone(),
             roster,
             asr: Mutex::new(None),
@@ -1505,29 +1487,22 @@ impl Commentary {
             while let Some((_, h)) = inflight.pop_front() {
                 join_translation(h).await?;
             }
-            // Piste complète : les lignes restées en anglais lors d'un travail
-            // précédent sont retentées pendant que le traducteur est chargé.
+            // Piste complète : seconde passe sur les lignes restées en anglais
+            // (ratées pendant ce travail ou un précédent), une à une, pendant
+            // que le traducteur est chargé.
             if !paused {
-                let attempted = locked(&ctx.attempted).clone();
                 let left = self
                     .db()
                     .with(|c| cdb::untranslated_commentary_cues(c, job.match_id))
                     .map_err(db_err)?
-                    .into_iter()
-                    .filter(|c| !attempted.contains(&c.seq))
-                    .count();
+                    .len();
                 if left > 0 {
                     ctx.open_mt().await?;
                 }
                 let r = report.clone();
-                self.translate_leftovers(
-                    job.match_id,
-                    &cfg,
-                    deps,
-                    &leftover_ctx,
-                    &move |d| r(CommentaryPhase::Traduction, d, left as f64),
-                    &attempted,
-                )
+                self.translate_leftovers(job.match_id, &cfg, deps, &leftover_ctx, &move |d| {
+                    r(CommentaryPhase::Traduction, d, left as f64)
+                })
                 .await?;
             }
             Ok(paused)
