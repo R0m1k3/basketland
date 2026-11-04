@@ -292,6 +292,13 @@ pub fn norm_text(s: &str) -> String {
 pub fn is_repetition_loop(text: &str) -> bool {
     let norm = norm_text(text);
     let t: Vec<&str> = norm.split(' ').filter(|w| !w.is_empty()).collect();
+    repetition_loop_at(&t).is_some()
+}
+
+/// Début de la boucle de répétition dans une suite de mots normalisés :
+/// indice de la PREMIÈRE répétition (la phrase dite une fois est gardée).
+fn repetition_loop_at(t: &[&str]) -> Option<usize> {
+    let mut best: Option<usize> = None;
     for n in 1..=6usize {
         let need = if n == 1 { 5 } else { 4 };
         if t.len() < n * need {
@@ -309,12 +316,35 @@ pub fn is_repetition_loop(text: &str) -> bool {
                 j += n;
             }
             if reps >= need {
-                return true;
+                best = Some(best.map_or(i + n, |b: usize| b.min(i + n)));
+                break;
             }
             i += 1;
         }
     }
-    false
+    best
+}
+
+/// Segment en boucle (« to the basket the basket the basket… ») : instant où
+/// la boucle commence, si au moins 3 mots justes la précèdent. Whisper part
+/// souvent en boucle au milieu d'un vrai passage : le début est gardé au lieu
+/// de laisser des dizaines de secondes sans sous-titre.
+fn loop_cut(seg: &AsrSegment, words: &[AsrWord]) -> Option<f64> {
+    let inside: Vec<&AsrWord> = words
+        .iter()
+        .filter(|w| {
+            let m = (w.start + w.end) / 2.0;
+            m >= seg.start - 0.05 && m <= seg.end + 0.05
+        })
+        .collect();
+    let normed: Vec<(String, &AsrWord)> = inside
+        .iter()
+        .map(|w| (norm_text(&w.word), *w))
+        .filter(|(n, _)| !n.is_empty())
+        .collect();
+    let t: Vec<&str> = normed.iter().map(|(n, _)| n.as_str()).collect();
+    let at = repetition_loop_at(&t)?;
+    (at >= 3 && at < normed.len()).then(|| normed[at].1.start)
 }
 
 /// Segment rejeté par le filtre.
@@ -364,8 +394,17 @@ pub fn hallucination_reason(
     if short_suspect(&text) && (isolated || nsp > 0.3 || lp < -0.8) {
         return Some("formule isolée");
     }
+    // Recopie du prompt : la phrase d'en-tête, ou une longue suite de noms
+    // dans l'ordre du prompt. Quelques noms cités par le commentateur (« LeBron
+    // James, Anthony Davis ») sont une vraie phrase, gardée.
     if let Some(p) = prompt.filter(|p| !p.is_empty()) {
-        if js::utf16_len(&text) >= 20 && norm_text(p).contains(&text) {
+        // En-tête : jusqu'au premier point suivi d'un blanc (« … at Lakers. »).
+        let head = p.find(". ").map_or(p, |k| &p[..k]);
+        let words = text.split(' ').count();
+        if js::utf16_len(&text) >= 20
+            && norm_text(p).contains(&text)
+            && (words >= 10 || norm_text(head).contains(&text))
+        {
             return Some("recopie du prompt");
         }
     }
@@ -404,14 +443,41 @@ pub fn filter_transcript(
         if reason.is_none() && (same_run >= 2 || (same_run >= 1 && short_suspect(&norm))) {
             reason = Some("segment répété");
         }
-        match reason {
-            Some(r) => dropped.push(DroppedSegment {
+        let cut = (reason == Some("boucle de répétition"))
+            .then(|| loop_cut(seg, &t.words))
+            .flatten();
+        match (reason, cut) {
+            (Some(r), Some(cut)) => {
+                let head: Vec<&str> = t
+                    .words
+                    .iter()
+                    .filter(|w| {
+                        let m = (w.start + w.end) / 2.0;
+                        m >= seg.start - 0.05 && w.start < cut
+                    })
+                    .map(|w| w.word.as_str())
+                    .collect();
+                // Fin un peu avant la coupure : le premier mot répété, au
+                // milieu juste après `cut`, tombe hors de la marge de 0,05 s.
+                kept.push(AsrSegment {
+                    end: js::max(seg.start, cut - 0.06),
+                    text: head.concat(),
+                    ..seg.clone()
+                });
+                dropped.push(DroppedSegment {
+                    start: cut,
+                    end: seg.end,
+                    text: js::trim(&seg.text).to_string(),
+                    reason: r.into(),
+                });
+            }
+            (Some(r), None) => dropped.push(DroppedSegment {
                 start: seg.start,
                 end: seg.end,
                 text: js::trim(&seg.text).to_string(),
                 reason: r.into(),
             }),
-            None => kept.push(seg.clone()),
+            (None, _) => kept.push(seg.clone()),
         }
     }
     let mid = |w: &AsrWord| (w.start + w.end) / 2.0;
@@ -1025,6 +1091,16 @@ mod tests {
             ),
             Some("recopie du prompt")
         );
+        // Quelques joueurs cités dans l'ordre du prompt : une vraie phrase.
+        let lineup = "NBA basketball game commentary: Portland Trail Blazers at Los Angeles Lakers. LeBron James, Anthony Davis, Austin Reaves, Deni Avdija.";
+        assert_eq!(
+            hallucination_reason(
+                &seg(0.0, 3.0, " LeBron James, Anthony Davis, Austin Reaves."),
+                false,
+                Some(lineup)
+            ),
+            None
+        );
         let t = Transcript {
             segments: vec![
                 seg(0.0, 2.0, " Curry pulls up."),
@@ -1045,6 +1121,27 @@ mod tests {
             ["Thank you."]
         );
         assert_eq!(join_words(&kept.words), "Curry pulls up. Bang! Splash.");
+    }
+
+    #[test]
+    fn boucle_coupee_le_debut_garde() {
+        let text = "Brunson drives to the basket the basket the basket the basket the basket";
+        let t = Transcript {
+            segments: vec![seg(0.0, 10.0, &format!(" {text}"))],
+            words: words(text, 0.0, 0.5, 0.4),
+            voices: Vec::new(),
+        };
+        let (kept, dropped) = filter_transcript(&t, None);
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(join_words(&kept.words), "Brunson drives to the basket");
+        // Boucle dès le début : tout le segment part.
+        let text = "the basket the basket the basket the basket";
+        let t = Transcript {
+            segments: vec![seg(0.0, 10.0, &format!(" {text}"))],
+            words: words(text, 0.0, 0.5, 0.4),
+            voices: Vec::new(),
+        };
+        assert!(filter_transcript(&t, None).0.words.is_empty());
     }
 
     #[test]

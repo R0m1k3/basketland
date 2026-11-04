@@ -17,11 +17,12 @@
 //! (vérifié par `tests/media_node.rs` sur des sorties du code TypeScript).
 
 use super::abort::{is_aborted, sleep, wait_aborted, AbortSignal};
+use super::basket_jargon::{jargon_in, strip_jargon};
 use super::commentary_cues::{parse_verbose_json, Transcript};
 use super::local_ai::{
     ai_client, embedded_ollama_available, embedded_ollama_url, embedded_whisper_available,
 };
-use super::roster_names::{name_rendered, RosterIndex};
+use super::roster_names::{name_rendered, roster_names_in, RosterIndex};
 use crate::api::js_num_value;
 use crate::js::{self, jsre};
 use crate::jsval::{js_parse, js_string};
@@ -736,6 +737,10 @@ pub fn build_user_message(
     if let Some(r) = roster.filter(|r| !r.full.is_empty()) {
         payload.insert("joueurs".into(), json!(r.full));
     }
+    let jargon = jargon_in(&lines.iter().map(|l| l.en.as_str()).collect::<Vec<_>>());
+    if !jargon.is_empty() {
+        payload.insert("jargon".into(), json!(jargon));
+    }
     payload.insert("context".into(), json!(context));
     payload.insert(
         "lines".into(),
@@ -778,6 +783,13 @@ pub fn build_plain_message(
     }
     if let Some(r) = roster.filter(|r| !r.full.is_empty()) {
         parts.push(format!("joueurs : {}", r.full.join(", ")));
+    }
+    let jargon = jargon_in(&[en]);
+    if !jargon.is_empty() {
+        parts.push(format!(
+            "jargon (à garder tel quel) : {}",
+            jargon.join(", ")
+        ));
     }
     if !context.is_empty() {
         parts.push(format!(
@@ -977,9 +989,11 @@ pub fn translation_defect(en: &str, fr: &str) -> Option<&'static str> {
         let tok = m
             .as_str()
             .trim_matches(|c: char| c == '.' || c == '-' || c == '\'');
+        // Nom à majuscules internes (VanVleet, MarJon) : pas un mot collé.
+        let camel_name = jsre!(r"^\p{Lu}\p{Ll}+(?:\p{Lu}\p{Ll}+)+$").is_match(tok);
         let glued = jsre!(r"\p{L}[=/_\\]\p{L}").is_match(tok)
             || jsre!(r"\p{Ll}\.\p{L}").is_match(tok)
-            || jsre!(r"\p{Ll}{2}\p{Lu}").is_match(tok);
+            || (!camel_name && jsre!(r"\p{Ll}{2}\p{Lu}").is_match(tok));
         if glued && !en.contains(tok) {
             return Some("mots collés");
         }
@@ -1155,6 +1169,8 @@ const FRENCH_LOANS: &[&str] = &[
 /// guillemets (citation, slogan). Vide : la ligne est bien en français.
 pub fn english_leftovers(fr: &str) -> Vec<String> {
     let unquoted = jsre!(r#"«[^»]*»|"[^"]*"|“[^”]*”"#).replace_all(fr, " ");
+    // Jargon gardé en anglais (« pick and roll », « catch and shoot ») : pas de l'anglais resté.
+    let unquoted = strip_jargon(&unquoted);
     let mut out = Vec::new();
     for m in jsre!(r"[\p{L}'’-]+").find_iter(&unquoted) {
         let w = m.as_str().replace('’', "'");
@@ -1195,8 +1211,11 @@ pub fn valid_translation(en: &str, fr: Option<&str>) -> bool {
     if jsre!(r#""(i|fr|en)"\s*:"#).is_match(fr) {
         return false;
     }
+    // Recopie de l'anglais : refusée, sauf pour une ligne faite seulement de
+    // noms, de chiffres et de jargon (« LeBron James, Anthony Davis, Austin
+    // Reaves »), qui se dit pareil en français.
     let words = jsre!(r"\s+").split(js::trim(en)).count();
-    if words >= 4 && fold(fr) == fold(en) {
+    if words >= 4 && fold(fr) == fold(en) && !english_leftovers(en).is_empty() {
         return false;
     }
     true
@@ -1253,7 +1272,19 @@ pub fn consistent_translation(en: &str, fr: &str, roster: Option<&RosterIndex>) 
         return false;
     }
     let f = format!(" {}", fold(fr));
-    a.names.iter().all(|n| name_rendered(n, &f, roster))
+    a.names.iter().all(|n| name_rendered(n, &f, roster)) && names_kept(en, fr, roster)
+}
+
+/// Les joueurs de l'effectif nommés dans la ligne anglaise, même en tête de
+/// phrase (que [`anchors`] ne retient pas), sont-ils tous dans la traduction ?
+/// Un nom qui est aussi un mot anglais (Green, White, Smart, Holiday…) ne doit
+/// jamais être traduit (« Vert », « Blanc »).
+pub fn names_kept(en: &str, fr: &str, roster: Option<&RosterIndex>) -> bool {
+    let Some(roster) = roster else { return true };
+    let f = format!(" {}", fold(fr));
+    roster_names_in(en, roster)
+        .iter()
+        .all(|n| name_rendered(&js::slice_utf16(&fold(n), 5), &f, Some(roster)))
 }
 
 /// `schemaSafe` : schéma JSON imposé sans décaler les lignes (Gemma 4 E2B/E4B ;
@@ -1660,11 +1691,18 @@ pub async fn translate_batch(
 }
 
 /// Consigne ajoutée pour reprendre une ligne mal traduite.
-const REPAIR_NOTE: &str = "Attention : la traduction précédente de cette ligne était fautive (mots restés en anglais, caractères étrangers ou mots collés). Écris-la entièrement en français, sans aucun mot anglais (seuls les noms propres et les termes de basket d'usage en France restent : dunk, lay-up, step-back…), sans caractère chinois ni symbole parasite.";
+const REPAIR_NOTE: &str = "Attention : la traduction précédente de cette ligne était fautive (mots restés en anglais, nom de joueur traduit ou oublié, caractères étrangers ou mots collés). Écris-la entièrement en français, sans aucun mot anglais : seuls restent les noms propres, recopiés exactement (un nom comme Green, White ou Smart ne se traduit jamais), et le jargon de basket d'usage en France (pick-and-roll, close-out, step-back, dunk, lay-up…). Aucun caractère chinois ni symbole parasite.";
 
-/// Une ligne à reprendre : non traduite, ou traduite avec de l'anglais resté.
-fn needs_repair(l: &TranslatedLine) -> bool {
-    l.untranslated || !english_leftovers(&l.fr).is_empty()
+/// Défauts d'une traduction affichée : mots anglais restés, plus les joueurs
+/// perdus (nom traduit ou oublié). 0 : rien à reprendre.
+fn repair_score(en: &str, fr: &str, roster: Option<&RosterIndex>) -> usize {
+    english_leftovers(fr).len() + usize::from(!names_kept(en, fr, roster)) * 2
+}
+
+/// Une ligne à reprendre : non traduite, traduite avec de l'anglais resté, ou
+/// qui a perdu un joueur.
+fn needs_repair(en: &str, l: &TranslatedLine, roster: Option<&RosterIndex>) -> bool {
+    l.untranslated || repair_score(en, &l.fr, roster) > 0
 }
 
 /// Reprend une à une, avec une consigne stricte, les lignes non traduites ou
@@ -1678,7 +1716,16 @@ async fn repair_lines(
     cfg: &CommentaryConfig,
     o: &TranslateContext,
 ) {
-    let todo: Vec<usize> = (0..out.len()).filter(|k| needs_repair(&out[*k])).collect();
+    let roster = o.roster.as_ref();
+    let en_of = |i: i64| {
+        lines
+            .iter()
+            .find(|l| l.i == i)
+            .map_or("", |l| l.en.as_str())
+    };
+    let todo: Vec<usize> = (0..out.len())
+        .filter(|k| needs_repair(en_of(out[*k].i), &out[*k], roster))
+        .collect();
     if todo.is_empty() {
         return;
     }
@@ -1702,8 +1749,9 @@ async fn repair_lines(
     for (&k, fr) in todo.iter().zip(fixed) {
         let Some(fr) = fr else { continue };
         let before = &out[k];
+        let en = en_of(before.i);
         let better = before.untranslated
-            || english_leftovers(&fr).len() < english_leftovers(&before.fr).len();
+            || repair_score(en, &fr, roster) < repair_score(en, &before.fr, roster);
         if better {
             out[k] = TranslatedLine {
                 i: before.i,
@@ -2187,6 +2235,77 @@ mod tests {
                 english_leftovers(fr)
             );
         }
+    }
+
+    #[test]
+    fn jargon_et_noms() {
+        // Le jargon gardé en anglais n'est pas de l'anglais resté.
+        for fr in [
+            "Le pick and roll entre les deux, puis un catch and shoot.",
+            "Super close-out, il le force au step-back.",
+            "Et un give and go, and one !",
+        ] {
+            assert!(
+                english_leftovers(fr).is_empty(),
+                "{fr} : {:?}",
+                english_leftovers(fr)
+            );
+        }
+        // Il est rappelé au traducteur avec les lignes qui l'emploient.
+        let lines = [TranslateLine {
+            i: 1,
+            en: "Great closeout, then the pick and roll.".into(),
+            strong: false,
+        }];
+        let m = build_user_message(&lines, &[], "gemma", None, None);
+        assert!(
+            m.contains(r#""jargon":["pick-and-roll","close-out"]"#),
+            "{m}"
+        );
+        let m = build_user_message(
+            &[TranslateLine {
+                i: 1,
+                en: "He scores.".into(),
+                strong: false,
+            }],
+            &[],
+            "gemma",
+            None,
+            None,
+        );
+        assert!(!m.contains("jargon"));
+        // Ligne faite seulement de noms : la recopier est une bonne traduction.
+        let names = "LeBron James, Anthony Davis, Austin Reaves.";
+        assert!(valid_translation(names, Some(names)));
+        // Nom à majuscules internes : pas un « mot collé ».
+        assert_eq!(
+            translation_defect("Van Vleet for three", "VanVleet à trois points"),
+            None
+        );
+        assert!(translation_defect("a nice stat line", "une belleStatistique").is_some());
+        // Un joueur dont le nom est un mot anglais ne doit pas être traduit.
+        let r = super::super::roster_names::roster_index(&["Draymond Green", "Jalen Brunson"]);
+        assert!(!consistent_translation(
+            "Pass to Green.",
+            "Passe pour Vert.",
+            Some(&r)
+        ));
+        assert!(consistent_translation(
+            "Pass to Green.",
+            "Passe pour Green.",
+            Some(&r)
+        ));
+        assert!(!names_kept("Brunson drives.", "Il pénètre.", Some(&r)));
+        assert!(names_kept("Brunson drives.", "Brunson pénètre.", Some(&r)));
+        assert!(needs_repair(
+            "Brunson drives.",
+            &TranslatedLine {
+                i: 1,
+                fr: "Il pénètre.".into(),
+                untranslated: false
+            },
+            Some(&r)
+        ));
     }
 
     #[test]

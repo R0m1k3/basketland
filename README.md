@@ -445,10 +445,20 @@ position de chaque spectateur, dans la qualité réellement lue
 trop lent pour la qualité choisie (ou le cache trop petit).
 
 **Noms des joueurs** : Whisper écorche souvent les noms (« Edie » pour
-Edey). Avec l'effectif du match (feuille de stats ESPN), les écarts d'une ou
-deux lettres sont corrigés avant la traduction, et la liste des joueurs est
-donnée au modèle de traduction, chargé de remplacer un nom qui ressemble à
-un joueur par son orthographe exacte.
+Edey). Avec l'effectif du match (feuille de stats ESPN), sont corrigés avant
+la traduction : les écarts d'une ou deux lettres sur le nom de famille, d'une
+lettre sur le prénom, les noms composés coupés en deux (« Gilgeous
+Alexander »), et, au milieu d'une phrase, les noms qui sonnent pareil
+(« Edie » → Edey, « Kata » → Queta). La liste des joueurs est donnée au
+modèle de traduction, chargé de remplacer un nom qui ressemble à un joueur
+par son orthographe exacte et de ne jamais traduire un nom qui est aussi un
+mot anglais (Green, White, Smart…) ; une traduction qui perd un joueur est
+reprise.
+
+**Jargon du basket** : les termes que les commentateurs français gardent en
+anglais (pick-and-roll, close-out, step-back, catch-and-shoot, switch…,
+liste dans `server/src/media/basket_jargon.rs`) sont rappelés au modèle avec
+chaque ligne qui les emploie, et ne comptent pas comme « anglais resté ».
 
 **Synchro** : la VF s'affiche 0,5 s après l'horodatage de Whisper (qui tombe
 un peu avant la voix) ; menu ⚙ du lecteur → « Synchro de la VF » pour

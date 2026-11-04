@@ -28,6 +28,7 @@ pub mod abort;
 pub mod analysis;
 pub mod audio;
 pub mod audio_energy;
+pub mod basket_jargon;
 pub mod commentary;
 pub mod commentary_ai;
 pub mod commentary_cues;
