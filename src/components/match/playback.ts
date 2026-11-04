@@ -11,6 +11,24 @@ export interface Subtitle {
   kind: string;
   /** Mise en relief (VF des commentaires) : 0 ton normal, 1 voix qui monte, 2 moment fort. */
   emphasis?: number;
+  /** Commentateur qui parle (VF des commentaires) : n° de sa voix, 0 pour le premier entendu ; absent : inconnu. */
+  voice?: number;
+}
+
+/** Couleurs des commentateurs (voix 0 à 4), comme le sous-titrage télé ; au-delà : blanc. */
+export const VOICE_COLORS = 5;
+
+/** Classe CSS de la couleur d'un commentateur, s'il y a au moins deux voix dans le match. */
+export function voiceClass(voice: number | undefined, voices: number): string {
+  if (voices < 2 || voice === undefined || !Number.isInteger(voice) || voice < 0 || voice >= VOICE_COLORS) return '';
+  return ` subtitle-voice-${voice}`;
+}
+
+/** Nombre de commentateurs distincts reconnus dans les sous-titres. */
+export function voiceCount(subs: Subtitle[]): number {
+  const seen = new Set<number>();
+  for (const s of subs) if (s.voice !== undefined) seen.add(s.voice);
+  return seen.size;
 }
 
 export interface CueState {

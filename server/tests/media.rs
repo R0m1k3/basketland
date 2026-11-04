@@ -1083,10 +1083,16 @@ async fn whisper_embarque_protocole() {
         ["Curry", "pulls", "up.", "Bang!"]
     );
     assert_eq!(b.segments[0].text.trim(), "Curry pulls up. Bang!");
+    // Empreintes de voix demandées (COMMENTARY_VOICES actif par défaut) et relues.
+    assert_eq!(a.voices.len(), 1);
+    assert_eq!(
+        (a.voices[0].end, a.voices[0].emb.clone()),
+        (2.0, vec![0.6, 0.8])
+    );
     // Protocole exact : une ligne JSON par requête, champs dans l'ordre de Node.
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
-        "{\"id\":1,\"file\":\"/tmp/chunk-000.ogg\",\"language\":\"en\",\"prompt\":\"NBA\"}\n{\"id\":2,\"file\":\"/tmp/chunk-001.ogg\",\"language\":\"en\",\"hotwords\":\"Zach Edey, Ja Morant\"}\n"
+        "{\"id\":1,\"file\":\"/tmp/chunk-000.ogg\",\"language\":\"en\",\"prompt\":\"NBA\",\"voices\":true}\n{\"id\":2,\"file\":\"/tmp/chunk-001.ogg\",\"language\":\"en\",\"hotwords\":\"Zach Edey, Ja Morant\",\"voices\":true}\n"
     );
     let env: Value =
         serde_json::from_str(&std::fs::read_to_string(format!("{}.env", log.display())).unwrap())

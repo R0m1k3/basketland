@@ -157,6 +157,7 @@ fn full_track(db: &Db, id: i64, model: &str) {
         text_fr: "Salut".into(),
         untranslated: false,
         emphasis: 0.0,
+        speaker: None,
     };
     db.with(|c| cdb::replace_commentary(c, id, &meta, &[cue]))
         .unwrap();
@@ -608,6 +609,7 @@ fn queue_fake(fail_extract: bool, fail_translate: bool) -> (CommentaryDeps, Arc<
             Ok(Transcript {
                 segments: vec![seg],
                 words,
+                voices: Vec::new(),
             })
         })
     });
@@ -910,6 +912,7 @@ async fn aucune_parole_echec_contenu() {
             Ok(Transcript {
                 segments: vec![seg],
                 words: vec![],
+                voices: Vec::new(),
             })
         })
     });
@@ -1622,4 +1625,62 @@ async fn recouvrement_echec_de_traduction() {
         assert!((1..=max_transcribed).contains(&n), "{ahead} : {n}");
         assert_eq!(t.svc.status(A).to_json()["status"], "none");
     }
+}
+
+/// Deux commentateurs (empreintes de voix distinctes) : chaque ligne porte le
+/// n° de celui qui parle, le même dans tous les tronçons, et le registre des
+/// voix est gardé dans le dossier de travail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn une_couleur_par_commentateur_sur_tout_le_match() {
+    use basketland_server::media::voices::VoiceTurn;
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    set_env("COMMENTARY_CHUNK_SEC", "600");
+    let (mut deps, _) = queue_fake(false, false);
+    // Dans chaque tronçon : le premier commentateur parle 5 s, puis le second 4,5 s.
+    deps.transcribe = Arc::new(move |_, _, _| {
+        let say = |text: &str, from: f64| -> Vec<AsrWord> {
+            text.split(' ')
+                .enumerate()
+                .map(|(i, w)| {
+                    AsrWord::new(&format!(" {w}"), from + i as f64, from + i as f64 + 0.8)
+                })
+                .collect()
+        };
+        let mut words = say("Curry pulls up from deep.", 10.0);
+        words.extend(say("What a shot that", 16.0));
+        words.push(AsrWord::new(" is!", 19.6, 20.5));
+        let voice = |start: f64, end: f64, emb: Vec<f32>| VoiceTurn { start, end, emb };
+        let t = Transcript {
+            segments: vec![
+                AsrSegment::new(10.0, 14.8, " Curry pulls up from deep."),
+                AsrSegment::new(16.0, 20.5, " What a shot that is!"),
+            ],
+            words,
+            voices: vec![
+                voice(10.0, 14.8, vec![0.9, 0.1, 0.3]),
+                voice(16.0, 20.5, vec![0.1, 0.95, 0.2]),
+            ],
+        };
+        Box::pin(async move { Ok(t) })
+    });
+    let (r, _) = run(&t.svc, A, false, &deps, CommentaryControl::run_to_end()).await;
+    assert!(r.unwrap().ok);
+    let cues: Vec<(String, Option<i64>)> =
+        t.db.with(|c| cdb::get_commentary_cues(c, A))
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.text_en, c.speaker))
+            .collect();
+    let one = [
+        ("Curry pulls up from deep.".to_string(), Some(0)),
+        ("What a shot that is!".to_string(), Some(1)),
+    ];
+    assert_eq!(cues, [one.clone(), one.clone(), one].concat());
+    let saved: Value = serde_json::from_str(
+        &std::fs::read_to_string(cm::work_dir(&ok_id(&t.db, A)).join("voices.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["voices"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["chunks"].as_array().unwrap().len(), 3);
 }

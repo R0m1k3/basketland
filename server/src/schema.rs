@@ -273,6 +273,13 @@ pub fn migrate(c: &Connection) -> rusqlite::Result<()> {
             "ALTER TABLE commentary_cues ADD COLUMN emphasis INTEGER NOT NULL DEFAULT 0",
         )?;
     }
+    // Commentateur qui parle (n° de voix, NULL : inconnu) : une couleur par commentateur.
+    if !columns(c, "commentary_cues")?
+        .iter()
+        .any(|n| n == "speaker")
+    {
+        c.execute_batch("ALTER TABLE commentary_cues ADD COLUMN speaker INTEGER")?;
+    }
     // Doublage français retiré : ses tables (pistes et tronçons doublés) disparaissent.
     c.execute_batch("DROP TABLE IF EXISTS dub_chunks; DROP TABLE IF EXISTS dub_tracks;")
 }

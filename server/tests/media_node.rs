@@ -85,6 +85,7 @@ fn words_of(v: &Value) -> Vec<AsrWord> {
                     start: num(&w["start"]),
                     end: num(&w["end"]),
                     energy: w.get("energy").and_then(Value::as_f64),
+                    speaker: None,
                 })
                 .collect()
         })
@@ -305,6 +306,7 @@ fn fonctions_pures_comme_node() {
                     .map(|t| Transcript {
                         segments: segments_of(&t["segments"]),
                         words: words_of(&t["words"]),
+                        voices: Vec::new(),
                     })
                     .collect();
                 cues::merge_transcripts(&list).to_json()

@@ -363,10 +363,11 @@ serveurs externes (speaches, Ollama), définir `TRANSCRIBE_URL` /
 on ouvre un match → travail lancé aussitôt, à partir de la position de lecture :
 pour chaque tronçon de 2 min (le passage regardé d'abord, puis la suite) :
    ──ffmpeg──▶ audio du tronçon (Opus mono 16 kHz, 24 kb/s)
-   ──Whisper──▶ texte anglais horodaté au mot
+   ──Whisper──▶ texte anglais horodaté au mot, + empreinte de la voix de chaque prise de parole
+   ──registre des voix du match──▶ n° du commentateur qui parle (le même sur tout le match)
    ──ffmpeg──▶ intensité de la voix, mot par mot (dB par rapport au ton habituel)
    ──filtre des hallucinations, découpage en sous-titres courts calés sur la voix
-     (≤ 60 car., 1,2-5 s, coupés sur les respirations et les changements de ton)
+     (≤ 60 car., 1,2-5 s, coupés sur les respirations, les changements de ton et de commentateur)
    ──Ollama (TranslateGemma 12B) ou API OpenAI──▶ français, par lots contrôlés
    ──▶ publiés (commentary_cues + commentary_chunks) ──▶ GET /api/matches/[id]/subtitles
 tous les tronçons faits : piste complète (badge « VF », statut « ready »)
@@ -399,6 +400,23 @@ estompée. Les **moments forts** ressortent : quand la voix monte (≥ +3 dB
 par rapport au ton habituel du passage), texte appuyé et liseré orange ;
 quand elle explose (≥ +6 dB, ou un « ! »), ligne plus grande et plus chaude
 qui « claque » à l'entrée.
+
+**Une couleur par commentateur** : comme le sous-titrage télé, chaque
+commentateur a sa couleur de texte (jaune, cyan, vert, rose, lavande ; blanc
+au-delà de cinq voix, ou quand la voix n'est pas reconnue), et une nouvelle
+ligne commence dès que l'autre prend la parole. Pendant la transcription, le
+worker Whisper calcule l'**empreinte de la voix** de chaque prise de parole
+(modèle WeSpeaker ResNet34, ~26 Mo, téléchargé au premier usage dans
+`/data/models/hf`, sur le processeur : ~3 s par tronçon de 2 min) ; le
+serveur les regroupe sur tout le match (`server/src/media/voices.rs`,
+registre gardé dans `voices.json` du dossier de travail), si bien qu'un
+commentateur garde sa couleur d'un bout à l'autre, même quand les tronçons
+sont traduits dans le désordre. Mesuré sur VoxConverse (débats télévisés) :
+98 % du temps de parole attribué au bon intervenant. Les couleurs
+n'apparaissent que si deux voix au moins sont reconnues, et se coupent dans
+le menu ⚙ du lecteur (« Couleur par commentateur »). Les matchs traduits
+avant cette version n'ont pas de couleurs : « Relancer la traduction » les
+refait (la transcription est alors refaite aussi, pour les empreintes).
 
 **La lecture reste prioritaire** : ffmpeg, Whisper, Ollama et l'OCR
 tournent en priorité processeur basse (`nice` 10, `BACKGROUND_NICE`) ;
@@ -511,6 +529,7 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
+| `COMMENTARY_VOICES` | activé | Reconnaît les commentateurs (empreinte de la voix de chaque prise de parole, Whisper embarqué seulement) : une couleur par commentateur dans les sous-titres. `0` désactive (plus de calcul d'empreintes, sous-titres sans couleur). |
 | `WHISPER_BEAM_SIZE` | `5` | Largeur du faisceau de Whisper (1 à 10). `5` : plus juste quand le public couvre les commentateurs ; `1` (décodage glouton) : 1,5 à 2 fois plus rapide, moins juste sur l'audio bruité. |
 | `WHISPER_VAD_THRESHOLD` | `0.35` | Seuil de détection de la parole (Silero VAD, 0,5 par défaut chez faster-whisper) : plus bas, moins de passages couverts par le public écartés comme « pas de parole ». |
 | `WHISPER_VAD_MIN_SILENCE_MS` | `1000` | Silence (ms) qui sépare deux passages de parole. |

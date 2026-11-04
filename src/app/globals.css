@@ -311,6 +311,25 @@ body {
   color: #ffe9c7;
   font-size: clamp(13px, calc(var(--sub-scale, 1) * 1.85cqw), 40px);
 }
+/* Une couleur par commentateur, comme le sous-titrage télé (jaune, cyan,
+   vert, rose, lavande) ; claires, lisibles sur le fond sombre, et distinctes
+   de l'orange des moments forts. Sélecteur plus précis que `.subtitle-emph-2` :
+   la couleur du commentateur l'emporte sur le ton chaud du moment fort. */
+.subtitle-box.subtitle-voice-0 .subtitle-text {
+  color: #ffe45c;
+}
+.subtitle-box.subtitle-voice-1 .subtitle-text {
+  color: #6ee7ff;
+}
+.subtitle-box.subtitle-voice-2 .subtitle-text {
+  color: #8ef59a;
+}
+.subtitle-box.subtitle-voice-3 .subtitle-text {
+  color: #ffa3d7;
+}
+.subtitle-box.subtitle-voice-4 .subtitle-text {
+  color: #c9b8ff;
+}
 @keyframes subtitle-pop {
   0% {
     opacity: 0;

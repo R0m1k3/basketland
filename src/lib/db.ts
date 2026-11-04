@@ -290,6 +290,8 @@ function migrate(db: DatabaseSyncType): void {
     (db.prepare('PRAGMA table_info(commentary_cues)').all() as { name: string }[]).map((c) => c.name),
   );
   if (!cueCols.has('emphasis')) db.exec('ALTER TABLE commentary_cues ADD COLUMN emphasis INTEGER NOT NULL DEFAULT 0');
+  // Commentateur qui parle (n° de voix, NULL : inconnu), écrit par le serveur Rust.
+  if (!cueCols.has('speaker')) db.exec('ALTER TABLE commentary_cues ADD COLUMN speaker INTEGER');
 }
 
 export function getDb(): DatabaseSyncType {

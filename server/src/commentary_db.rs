@@ -61,6 +61,8 @@ pub struct CommentaryCueRow {
     pub untranslated: i64,
     /// 0 ton normal, 1 voix qui monte, 2 moment fort.
     pub emphasis: i64,
+    /// Commentateur qui parle (n° de voix, 0 pour le premier entendu) ; `None` : inconnu.
+    pub speaker: Option<i64>,
 }
 
 fn cue_row(r: &Row) -> rusqlite::Result<CommentaryCueRow> {
@@ -73,6 +75,7 @@ fn cue_row(r: &Row) -> rusqlite::Result<CommentaryCueRow> {
         text_fr: col_text(r, "text_fr").unwrap_or_default(),
         untranslated: col_int(r, "untranslated").unwrap_or(0),
         emphasis: col_int(r, "emphasis").unwrap_or(0),
+        speaker: col_int(r, "speaker"),
     })
 }
 
@@ -87,6 +90,8 @@ pub struct CueInput {
     /// Vrai (non nul) : ligne restée en anglais.
     pub untranslated: bool,
     pub emphasis: f64,
+    /// Commentateur (n° de voix) ; `None` : inconnu.
+    pub speaker: Option<u32>,
 }
 
 /// Piste traduite d'un match (`CommentaryTrackRow`).
@@ -133,8 +138,8 @@ pub struct CommentaryTrackMeta {
 
 fn insert_cues(c: &Connection, match_id: i64, cues: &[CueInput]) -> rusqlite::Result<()> {
     let mut st = c.prepare(
-        "INSERT OR REPLACE INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated, emphasis)
-     VALUES (:m, :seq, :start, :end, :en, :fr, :u, :e)",
+        "INSERT OR REPLACE INTO commentary_cues (match_id, seq, start_ts, end_ts, text_en, text_fr, untranslated, emphasis, speaker)
+     VALUES (:m, :seq, :start, :end, :en, :fr, :u, :e, :sp)",
     )?;
     for q in cues {
         st.execute(named_params! {
@@ -146,6 +151,7 @@ fn insert_cues(c: &Connection, match_id: i64, cues: &[CueInput]) -> rusqlite::Re
             ":fr": q.text_fr,
             ":u": if q.untranslated { 1.0 } else { 0.0 },
             ":e": crate::js::max(0.0, crate::js::min(2.0, crate::js::round(q.emphasis))),
+            ":sp": q.speaker,
         })?;
     }
     Ok(())

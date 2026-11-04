@@ -225,6 +225,7 @@ fn cue_input(seq: i64, s: f64, en: &str, u: bool, e: f64) -> cdb::CueInput {
         text_fr: format!("FR {en}"),
         untranslated: u,
         emphasis: e,
+        speaker: None,
     }
 }
 
@@ -829,6 +830,7 @@ async fn statuts_de_la_file_comme_node() {
         text_fr: fr.into(),
         untranslated: u,
         emphasis: 0.0,
+        speaker: None,
     };
     db.with(|c| {
         cdb::publish_commentary_chunk(

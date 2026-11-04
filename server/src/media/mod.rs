@@ -45,6 +45,7 @@ pub mod scoreboard;
 pub mod tesseract;
 pub mod video_scan;
 pub mod viewers;
+pub mod voices;
 
 pub use abort::AbortSignal;
 

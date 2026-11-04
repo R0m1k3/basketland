@@ -1,10 +1,10 @@
 'use client';
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type HlsType from 'hls.js';
 import type { ErrorData, HlsConfig } from 'hls.js';
 import TeamLogo from '@/components/ui/TeamLogo';
-import { DEFAULT_SUB_DELAY, usePlayback, useScreenLines, type Subtitle } from '@/components/match/playback';
+import { DEFAULT_SUB_DELAY, usePlayback, useScreenLines, voiceClass, voiceCount, type Subtitle } from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
@@ -187,6 +187,9 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   // VF en haut par défaut : plus facile à suivre, et le bandeau du score (en bas) reste dégagé.
   const [subPos, setSubPos] = useState<SubPos>('haut');
   const [subDelay, setSubDelay] = useState(DEFAULT_SUB_DELAY);
+  // Une couleur par commentateur (voix reconnues pendant la transcription).
+  const [voiceColors, setVoiceColors] = useState(true);
+  const voices = useMemo(() => voiceCount(subtitles), [subtitles]);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
 
   const posKey = src ? `bl:pos:${src}` : null;
@@ -199,6 +202,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     const d = Number(readPref('bl:subdelay'));
     if (readPref('bl:subdelay') !== null && Number.isFinite(d)) setSubDelay(Math.max(-5, Math.min(10, d)));
     if (readPref('bl:vf') === '0') setVfOn(false);
+    if (readPref('bl:voices') === '0') setVoiceColors(false);
     const q = readPref('bl:quality');
     if (q && q !== 'auto' && Number.isFinite(Number(q))) setQuality(Number(q));
     if (posKey) {
@@ -533,6 +537,11 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     writePref('bl:subpos', p);
   }, []);
 
+  const chooseVoiceColors = useCallback((on: boolean) => {
+    setVoiceColors(on);
+    writePref('bl:voices', on ? '1' : '0');
+  }, []);
+
   const chooseDelay = useCallback((d: number) => {
     const v = Math.round(Math.max(-5, Math.min(10, d)) * 10) / 10;
     setSubDelay(v);
@@ -654,7 +663,9 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         aria-label="Replay du match"
       />
 
-      {vfOn && started && <SubtitleOverlay subs={subtitles} lifted={showControls} pos={subPos} />}
+      {vfOn && started && (
+        <SubtitleOverlay subs={subtitles} lifted={showControls} pos={subPos} voices={voiceColors ? voices : 0} />
+      )}
 
       {/* Affiche avant la première lecture */}
       {!started && !error && (
@@ -771,6 +782,9 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           onSubSize={chooseSize}
           subPos={subPos}
           onSubPos={choosePos}
+          voices={voices}
+          voiceColors={voiceColors}
+          onVoiceColors={chooseVoiceColors}
           subDelay={subDelay}
           onSubDelay={chooseDelay}
           speed={speed}
@@ -797,9 +811,21 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
  * instant au-dessus, plus petite et estompée, le temps de finir de la lire.
  * Les moments forts (voix qui monte, cri) ressortent : texte plus appuyé,
  * liseré orange, et pour les plus forts une ligne plus grande qui « claque ».
+ * Chaque commentateur a sa couleur de texte (jaune, cyan, vert…), comme le
+ * sous-titrage télé, dès que deux voix au moins sont reconnues (`voices`).
  * Seul composant re-rendu au changement de ligne.
  */
-const SubtitleOverlay = memo(function SubtitleOverlay({ subs, lifted, pos }: { subs: Subtitle[]; lifted: boolean; pos: SubPos }) {
+const SubtitleOverlay = memo(function SubtitleOverlay({
+  subs,
+  lifted,
+  pos,
+  voices,
+}: {
+  subs: Subtitle[];
+  lifted: boolean;
+  pos: SubPos;
+  voices: number;
+}) {
   const lines = useScreenLines();
   const noSpoil = useNoSpoil();
   if (!lines.length) return null;
@@ -821,7 +847,7 @@ const SubtitleOverlay = memo(function SubtitleOverlay({ subs, lifted, pos }: { s
         return (
           <div
             key={s.seq}
-            className={`subtitle-box ${current ? 'subtitle-roll' : 'subtitle-prev'}${banner ? ' subtitle-banner' : ''}${emph}`}
+            className={`subtitle-box ${current ? 'subtitle-roll' : 'subtitle-prev'}${banner ? ' subtitle-banner' : ''}${emph}${voiceClass(s.voice, voices)}`}
             aria-hidden={current ? undefined : true}
           >
             <span className="subtitle-overlay subtitle-text">{text}</span>
@@ -993,6 +1019,9 @@ function SettingsMenu({
   onSubSize,
   subPos,
   onSubPos,
+  voices,
+  voiceColors,
+  onVoiceColors,
   subDelay,
   onSubDelay,
   speed,
@@ -1007,6 +1036,9 @@ function SettingsMenu({
   onSubSize: (s: SubSize) => void;
   subPos: SubPos;
   onSubPos: (p: SubPos) => void;
+  voices: number;
+  voiceColors: boolean;
+  onVoiceColors: (on: boolean) => void;
   subDelay: number;
   onSubDelay: (d: number) => void;
   speed: number;
@@ -1057,6 +1089,16 @@ function SettingsMenu({
           En haut
         </Seg>
       </MenuGroup>
+      {voices >= 2 && (
+        <MenuGroup title="Couleur par commentateur" hint={`${voices} voix`}>
+          <Seg active={voiceColors} onClick={() => onVoiceColors(true)}>
+            Oui
+          </Seg>
+          <Seg active={!voiceColors} onClick={() => onVoiceColors(false)}>
+            Non
+          </Seg>
+        </MenuGroup>
+      )}
       <MenuGroup title="Synchro de la VF" hint={subDelay === 0 ? 'calée' : `${subDelay > 0 ? '+' : ''}${String(subDelay).replace('.', ',')} s`}>
         <Seg active={false} onClick={() => onSubDelay(subDelay - 0.5)}>
           Plus tôt

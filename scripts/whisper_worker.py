@@ -6,6 +6,9 @@ Processus de travail piloté par Node (src/lib/localAi.ts) via stdin/stdout,
 une requête JSON par ligne :
   → {"id": 1, "file": "/data/…/chunk-000.ogg", "language": "en", "prompt": "…"}
   ← {"id": 1, "ok": true, "result": { verbose_json façon API OpenAI }}
+Avec `"voices": true`, le résultat porte aussi `voices` : l'empreinte de la
+voix de chaque prise de parole (voir `voice_turns`), pour reconnaître les
+commentateurs et donner une couleur à chacun.
 Le modèle n'est chargé qu'une fois pour tout le match ; Node arrête le
 processus à la fin de la transcription, ce qui libère la mémoire du GPU pour
 la traduction.
@@ -97,6 +100,141 @@ def batch_size_for(device: str) -> int:
         return 0
 
 
+# ---------------------------------------------------------------- voix
+# Qui parle ? Chaque prise de parole (mots de Whisper regroupés, coupés aux
+# respirations) reçoit une EMPREINTE de voix : un vecteur de 256 nombres
+# calculé par un petit modèle de reconnaissance du locuteur (WeSpeaker
+# ResNet34, VoxCeleb, ONNX, ~26 Mo, sur le processeur). Deux prises de
+# parole d'une même personne ont des empreintes proches (cosinus ~0,6),
+# celles de deux personnes différentes non (~0,1 à 0,2). Le serveur regroupe
+# ensuite ces empreintes sur tout le match (src/media/voices.rs).
+
+VOICE_REPO = "Wespeaker/wespeaker-voxceleb-resnet34-LM"
+VOICE_FILE = "voxceleb_resnet34_LM.onnx"
+VOICE_REVISION = "f0c48c298fd835726c27956a5d617bad7115627e"
+SR = 16000
+# Prise de parole : mots séparés de moins de 0,5 s, 4 s au plus (au-delà,
+# découpée : un changement de voix sans pause reste repérable).
+TURN_GAP = 0.5
+TURN_MAX = 4.0
+# Fenêtre minimale d'une empreinte : 1 s autour d'une prise de parole courte.
+EMBED_MIN = 1.0
+
+
+def _mel_banks(n_mels: int = 80, n_fft: int = 512, low: float = 20.0, high: float = 8000.0):
+    import numpy as np
+
+    def mel(f):
+        return 1127.0 * np.log(1.0 + f / 700.0)
+
+    pts = np.linspace(mel(low), mel(high), n_mels + 2)
+    m = mel(np.arange(n_fft // 2 + 1) * SR / n_fft)
+    banks = np.zeros((n_mels, n_fft // 2 + 1), np.float64)
+    for i in range(n_mels):
+        lo, c, hi = pts[i], pts[i + 1], pts[i + 2]
+        banks[i] = np.maximum(0.0, np.minimum((m - lo) / (c - lo), (hi - m) / (hi - c)))
+    return banks
+
+
+def fbank(x):
+    """
+    Bancs de filtres Mel (80) façon Kaldi, comme à l'entraînement du modèle :
+    trames de 25 ms tous les 10 ms, pré-accentuation 0,97, fenêtre de Povey,
+    logarithme, moyenne de chaque bande retirée. `None` si moins d'une trame.
+    """
+    import numpy as np
+
+    n = 1 + (len(x) - 400) // 160
+    if n < 1:
+        return None
+    idx = np.arange(400)[None, :] + 160 * np.arange(n)[:, None]
+    f = x[idx].astype(np.float64) * 32768.0
+    f -= f.mean(axis=1, keepdims=True)
+    f = np.concatenate([f[:, :1] * 0.03, f[:, 1:] - 0.97 * f[:, :-1]], axis=1)
+    f *= _WINDOW
+    power = np.abs(np.fft.rfft(f, 512)) ** 2
+    e = np.log(np.maximum(power @ _BANKS.T, 1.1920929e-07)).astype(np.float32)
+    return e - e.mean(axis=0, keepdims=True)
+
+
+_BANKS = None
+_WINDOW = None
+
+
+class VoiceEmbedder:
+    def __init__(self):
+        global _BANKS, _WINDOW
+        import numpy as np
+        import onnxruntime as ort
+        from huggingface_hub import hf_hub_download
+
+        _BANKS = _mel_banks()
+        _WINDOW = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(400) / 399)) ** 0.85
+        path = hf_hub_download(VOICE_REPO, VOICE_FILE, revision=VOICE_REVISION)
+        opts = ort.SessionOptions()
+        # Tâche de fond sur le NAS : deux cœurs au plus.
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+
+    def __call__(self, x):
+        import numpy as np
+
+        feats = fbank(x)
+        if feats is None:
+            return None
+        e = self.session.run(None, {"feats": feats[None]})[0][0]
+        norm = float(np.linalg.norm(e))
+        return e / norm if norm > 0 else None
+
+
+_embedder = None
+_embedder_failed = False
+
+
+def voice_embedder():
+    """Modèle chargé au premier usage ; une panne (hors ligne…) n'empêche pas la transcription."""
+    global _embedder, _embedder_failed
+    if _embedder is None and not _embedder_failed:
+        try:
+            _embedder = VoiceEmbedder()
+            log("empreintes de voix prêtes")
+        except Exception as e:
+            _embedder_failed = True
+            log(f"empreintes de voix indisponibles ({e}) : sous-titres sans couleur par commentateur")
+    return _embedder
+
+
+def turns_of(words) -> list:
+    """Prises de parole [(début, fin)] : mots proches regroupés, 4 s au plus."""
+    turns = []
+    for w in words:
+        if turns and w["start"] - turns[-1][1] < TURN_GAP and w["end"] - turns[-1][0] <= TURN_MAX:
+            turns[-1][1] = max(turns[-1][1], w["end"])
+        else:
+            turns.append([w["start"], w["end"]])
+    return turns
+
+
+def voice_turns(audio, words) -> list:
+    """`[{start, end, emb}]` : empreinte (arrondie au millième) de chaque prise de parole."""
+    embed = voice_embedder()
+    if embed is None:
+        return []
+    total = len(audio) / SR
+    out = []
+    for start, end in turns_of(words):
+        a, b = start, end
+        if b - a < EMBED_MIN:
+            mid = (a + b) / 2
+            a = max(0.0, min(mid - EMBED_MIN / 2, total - EMBED_MIN))
+            b = min(total, a + EMBED_MIN)
+        e = embed(audio[int(a * SR) : int(b * SR)])
+        if e is not None:
+            out.append({"start": round(start, 3), "end": round(end, 3), "emb": [round(float(v), 3) for v in e]})
+    return out
+
+
 def to_verbose(segments, info) -> dict:
     segs = []
     words = []
@@ -163,8 +301,13 @@ def main() -> int:
             req = json.loads(line)
             req_id = req.get("id")
             extra = {"batch_size": batch_size} if batch_size > 0 else {}
+            # Son décodé une seule fois (16 kHz mono, comme le fait
+            # faster-whisper) : il sert aussi aux empreintes de voix.
+            from faster_whisper.audio import decode_audio
+
+            audio = decode_audio(req["file"], sampling_rate=SR)
             segments, info = engine.transcribe(
-                req["file"],
+                audio,
                 language=req.get("language") or "en",
                 initial_prompt=req.get("prompt") or None,
                 # Effectif du match : les noms des joueurs sont bien mieux
@@ -181,7 +324,14 @@ def main() -> int:
                 hallucination_silence_threshold=2.0,
                 **extra,
             )
-            send({"id": req_id, "ok": True, "result": to_verbose(list(segments), info)})
+            result = to_verbose(list(segments), info)
+            if req.get("voices"):
+                try:
+                    result["voices"] = voice_turns(audio, result["words"])
+                except Exception as e:  # jamais au prix de la transcription
+                    log(f"empreintes de voix impossibles : {e}")
+                    result["voices"] = []
+            send({"id": req_id, "ok": True, "result": result})
         except Exception as e:
             traceback.print_exc()
             send({"id": req_id, "ok": False, "error": str(e)})

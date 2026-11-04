@@ -68,10 +68,19 @@ fn setup() -> T {
     let (full, partial) = (pick(1), pick(0));
     c.execute("DELETE FROM commentary_cues WHERE match_id = ?1", [full])
         .unwrap();
-    for (seq, start, end, fr, untranslated, emphasis) in [
-        (1, 12.5, 14.0, "Et il marque !", 0, 2),
-        (2, 3.25, 6.5, "Tir & panier <b>gras</b> --> flèche", 0, 0),
-        (3, 20.0, 21.0, "line still in English", 1, 0),
+    // Voix du commentateur : n° 1 et 0 sur les deux premières lignes, inconnue ensuite.
+    for (seq, start, end, fr, untranslated, emphasis, speaker) in [
+        (1, 12.5, 14.0, "Et il marque !", 0, 2, Some(1)),
+        (
+            2,
+            3.25,
+            6.5,
+            "Tir & panier <b>gras</b> --> flèche",
+            0,
+            0,
+            Some(0),
+        ),
+        (3, 20.0, 21.0, "line still in English", 1, 0, None),
         (
             4,
             3.25,
@@ -79,11 +88,12 @@ fn setup() -> T {
             "Une phrase un peu plus longue que d'habitude, coupée sur deux lignes à l'export",
             0,
             1,
+            None,
         ),
     ] {
         c.execute(
-            "INSERT INTO commentary_cues VALUES (?1, ?2, ?3, ?4, 'en', ?5, ?6, ?7)",
-            rusqlite::params![full, seq, start, end, fr, untranslated, emphasis],
+            "INSERT INTO commentary_cues VALUES (?1, ?2, ?3, ?4, 'en', ?5, ?6, ?7, ?8)",
+            rusqlite::params![full, seq, start, end, fr, untranslated, emphasis, speaker],
         )
         .unwrap();
     }
@@ -259,10 +269,12 @@ async fn sous_titres_publies_et_signe_de_vie() {
     assert_eq!(seqs, [2, 4, 1]);
     assert_eq!(
         v["subtitles"][2],
-        json!({ "seq": 1, "video_ts": 12.5, "end_ts": 14, "text": "Et il marque !", "speaker": "", "kind": "voice", "emphasis": 2 })
+        json!({ "seq": 1, "video_ts": 12.5, "end_ts": 14, "text": "Et il marque !", "speaker": "", "kind": "voice", "emphasis": 2, "voice": 1 })
     );
     assert!(v["subtitles"][0].get("emphasis").is_none());
+    assert_eq!(v["subtitles"][0]["voice"], 0);
     assert_eq!(v["subtitles"][1]["emphasis"], 1);
+    assert!(v["subtitles"][1].get("voice").is_none());
     assert_eq!(v["commentary"]["status"], "ready");
     // Sans `t` : `Number(null)` vaut 0, le spectateur est à 0 s.
     assert!(t.media.commentary.viewer_active(id));
@@ -354,9 +366,9 @@ async fn export_webvtt() {
         body,
         format!(
             "WEBVTT\nNOTE BasketLand VF — {away} @ {home}\n\n\
-             1\n00:00:03.250 --> 00:00:06.500\nTir &amp; panier &lt;b&gt;gras&lt;/b&gt; --&gt; flèche\n\n\
+             1\n00:00:03.250 --> 00:00:06.500\n<v Commentateur 1>Tir &amp; panier &lt;b&gt;gras&lt;/b&gt; --&gt; flèche\n\n\
              2\n00:00:03.250 --> 00:00:03.750\nUne phrase un peu plus longue que d'habitude,\ncoupée sur deux lignes à l'export\n\n\
-             3\n00:00:12.500 --> 00:00:14.000\nEt il marque !\n"
+             3\n00:00:12.500 --> 00:00:14.000\n<v Commentateur 2>Et il marque !\n"
         )
     );
 }
