@@ -174,10 +174,10 @@ services:
 
 > **Contrôle de santé** : ne mettez pas de bloc `healthcheck:` dans le
 > compose, l'image a le sien (`basketland-server health`). L'ancien contrôle
-> `node -e "fetch(...)"` échoue toujours (Node n'est plus dans l'image) et
-> laisse le conteneur « unhealthy ». Le compose manager d'Unraid garde sa
+> `node -e "fetch(...)"` reste accepté : Node n'est plus dans l'image, mais
+> un faux `node` le redirige vers `basketland-server health`. Le compose manager d'Unraid garde sa
 > propre copie du fichier (`/boot/config/plugins/compose.manager/projects/basketland/`) :
-> elle ne suit pas ce dépôt, il faut la corriger dans **Docker → Compose →
+> elle ne suit pas ce dépôt, mieux vaut y retirer le bloc dans **Docker → Compose →
 > basketland → Edit Stack**. Raison d'un échec :
 > `docker inspect --format '{{json .State.Health}}' basketland`.
 

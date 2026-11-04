@@ -14,8 +14,11 @@ fn health_check() -> i32 {
         .unwrap_or(3012);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let res = (|| -> std::io::Result<String> {
-        let mut s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
-        s.set_read_timeout(Some(Duration::from_secs(5)))?;
+        // 2 s + 2 s : sous le délai de Docker (5 s), sinon il tue le contrôle
+        // avant que la raison soit écrite.
+        let mut s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+        s.set_read_timeout(Some(Duration::from_secs(2)))?;
+        s.set_write_timeout(Some(Duration::from_secs(1)))?;
         s.write_all(b"GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")?;
         let mut head = [0u8; 12];
         s.read_exact(&mut head)?;
