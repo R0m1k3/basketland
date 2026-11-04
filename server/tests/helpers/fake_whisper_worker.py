@@ -51,4 +51,6 @@ for line in sys.stdin:
             {"word": " Bang!", "start": 1.4, "end": 2},
         ],
     }
+    if req.get("voices"):
+        result["voices"] = [{"start": 0, "end": 2, "emb": [0.6, 0.8]}]
     send({"id": req["id"], "ok": True, "result": result, "prompt": req.get("prompt")})

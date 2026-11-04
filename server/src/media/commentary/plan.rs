@@ -160,6 +160,8 @@ pub struct ChunkCue {
     pub end: f64,
     pub text: String,
     pub emphasis: Option<u8>,
+    /// Commentateur (n° de voix) ; `None` : inconnu.
+    pub speaker: Option<u32>,
 }
 
 /// `chunkCues` : sous-titres d'UN tronçon, numérotés dans sa plage de seq.
@@ -181,6 +183,7 @@ pub fn chunk_cues(
         end: c.end,
         text: c.text,
         emphasis: c.emphasis,
+        speaker: c.speaker,
     })
     .collect()
 }

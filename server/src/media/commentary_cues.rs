@@ -14,6 +14,7 @@
 //! JavaScript (unités UTF-16, `\s`, `\b`, `Math.round`) : mêmes sorties que
 //! Node, vérifiées sur des cas produits par le code TypeScript.
 
+use super::voices::{parse_voices, VoiceTurn};
 use crate::api::js_num_value;
 use crate::js::{self, jsre};
 use serde_json::{Map, Value};
@@ -28,6 +29,8 @@ pub struct AsrWord {
     /// Intensité de la voix sur ce mot, en dB par rapport au niveau habituel
     /// du tronçon (0 = ton normal, +6 = nettement plus fort).
     pub energy: Option<f64>,
+    /// Voix (n° de commentateur, voir `voices.rs`) ; `None` : inconnue.
+    pub speaker: Option<u32>,
 }
 
 impl AsrWord {
@@ -37,10 +40,11 @@ impl AsrWord {
             start,
             end,
             energy: None,
+            speaker: None,
         }
     }
 
-    /// Forme JSON de Node : `{ word, start, end, energy? }`.
+    /// Forme JSON de Node : `{ word, start, end, energy?, speaker? }`.
     pub fn to_json(&self) -> Value {
         let mut m = Map::new();
         m.insert("word".into(), Value::from(self.word.clone()));
@@ -48,6 +52,9 @@ impl AsrWord {
         m.insert("end".into(), js_num_value(self.end));
         if let Some(e) = self.energy {
             m.insert("energy".into(), js_num_value(e));
+        }
+        if let Some(k) = self.speaker {
+            m.insert("speaker".into(), Value::from(k));
         }
         Value::Object(m)
     }
@@ -109,15 +116,21 @@ pub struct Transcript {
     pub segments: Vec<AsrSegment>,
     /// Mots horodatés (niveau supérieur) ; vide si le serveur n'en donne pas.
     pub words: Vec<AsrWord>,
+    /// Empreinte de la voix de chaque prise de parole (Whisper embarqué).
+    pub voices: Vec<VoiceTurn>,
 }
 
 impl Transcript {
-    /// Forme JSON de Node `{ segments, words }` (cache sur disque).
+    /// Forme JSON de Node `{ segments, words, voices? }` (cache sur disque).
     pub fn to_json(&self) -> Value {
-        serde_json::json!({
+        let mut v = serde_json::json!({
             "segments": self.segments.iter().map(AsrSegment::to_json).collect::<Vec<_>>(),
             "words": self.words.iter().map(AsrWord::to_json).collect::<Vec<_>>(),
-        })
+        });
+        if !self.voices.is_empty() {
+            v["voices"] = Value::Array(self.voices.iter().map(VoiceTurn::to_json).collect());
+        }
+        v
     }
 }
 
@@ -130,6 +143,8 @@ pub struct Cue {
     pub text: String,
     /// Mise en relief : 1 voix qui monte, 2 moment fort (absent : ton normal).
     pub emphasis: Option<u8>,
+    /// Commentateur qui parle (n°, voir `voices.rs`) ; absent : inconnu.
+    pub speaker: Option<u32>,
 }
 
 impl Cue {
@@ -142,6 +157,9 @@ impl Cue {
         m.insert("text".into(), Value::from(self.text.clone()));
         if let Some(e) = self.emphasis {
             m.insert("emphasis".into(), Value::from(e));
+        }
+        if let Some(k) = self.speaker {
+            m.insert("speaker".into(), Value::from(k));
         }
         Value::Object(m)
     }
@@ -175,6 +193,10 @@ fn parse_words(raw: Option<&Value>) -> Vec<AsrWord> {
             start,
             end: js::max(start, end),
             energy: finite(o.get("energy")),
+            speaker: o
+                .get("speaker")
+                .and_then(Value::as_u64)
+                .and_then(|k| u32::try_from(k).ok()),
         });
     }
     out
@@ -210,6 +232,7 @@ pub fn parse_verbose_json(raw: &Value) -> Transcript {
     Transcript {
         segments,
         words: parse_words(o.get("words")),
+        voices: parse_voices(o.get("voices")),
     }
 }
 
@@ -407,6 +430,7 @@ pub fn filter_transcript(
         Transcript {
             segments: kept,
             words,
+            voices: t.voices.clone(),
         },
         dropped,
     )
@@ -427,6 +451,7 @@ pub fn shift_transcript(t: &Transcript, offset: f64, keep_from: f64, keep_to: f6
         start: r3(w.start + offset),
         end: r3(w.end + offset),
         energy: w.energy,
+        speaker: w.speaker,
     };
     let keep = |s: f64, e: f64| {
         let m = (s + e) / 2.0;
@@ -453,6 +478,16 @@ pub fn shift_transcript(t: &Transcript, offset: f64, keep_from: f64, keep_to: f6
             .map(sw)
             .filter(|w| keep(w.start, w.end))
             .collect(),
+        voices: t
+            .voices
+            .iter()
+            .map(|v| VoiceTurn {
+                start: r3(v.start + offset),
+                end: r3(v.end + offset),
+                emb: v.emb.clone(),
+            })
+            .filter(|v| keep(v.start, v.end))
+            .collect(),
     }
 }
 
@@ -462,7 +497,13 @@ pub fn merge_transcripts(list: &[Transcript]) -> Transcript {
     segments.sort_by(by_start(|s: &AsrSegment| s.start));
     let mut words: Vec<AsrWord> = list.iter().flat_map(|t| t.words.clone()).collect();
     words.sort_by(by_start(|w: &AsrWord| w.start));
-    Transcript { segments, words }
+    let mut voices: Vec<VoiceTurn> = list.iter().flat_map(|t| t.voices.clone()).collect();
+    voices.sort_by(by_start(|v: &VoiceTurn| v.start));
+    Transcript {
+        segments,
+        words,
+        voices,
+    }
 }
 
 // ---------------------------------------------------------------- mots
@@ -731,6 +772,22 @@ pub fn cue_emphasis(g: &[AsrWord], text: &str) -> u8 {
     level
 }
 
+/// Voix d'un sous-titre : celle qui y parle le plus longtemps (mots sans voix ignorés).
+pub fn cue_speaker(g: &[AsrWord]) -> Option<u32> {
+    let mut time: Vec<(u32, f64)> = Vec::new();
+    for w in g {
+        let Some(k) = w.speaker else { continue };
+        let d = js::max(0.01, w.end - w.start);
+        match time.iter_mut().find(|(x, _)| *x == k) {
+            Some(t) => t.1 += d,
+            None => time.push((k, d)),
+        }
+    }
+    time.into_iter()
+        .reduce(|a, b| if b.1 > a.1 { b } else { a })
+        .map(|(k, _)| k)
+}
+
 /// `buildCues` : regroupe les mots en sous-titres courts, calés sur la voix ;
 /// les sous-titres ne se chevauchent jamais.
 pub fn build_cues(input: &[AsrWord], opts: &CueOptions) -> Vec<Cue> {
@@ -761,7 +818,9 @@ pub fn build_cues(input: &[AsrWord], opts: &CueOptions) -> Vec<Cue> {
                 (Some(l), Some(e)) => (e - l).abs() >= o.tone_shift_db && gap >= 0.12,
                 _ => false,
             };
-            if gap >= o.hard_gap {
+            // Un autre commentateur prend la parole : nouvelle ligne.
+            let other_voice = matches!((prev.speaker, w.speaker), (Some(a), Some(b)) if a != b);
+            if gap >= o.hard_gap || other_voice {
                 groups.push(std::mem::take(&mut cur));
             } else if too_long(&cur, &w) {
                 let k = best_split(&cur, &o);
@@ -800,6 +859,7 @@ pub fn build_cues(input: &[AsrWord], opts: &CueOptions) -> Vec<Cue> {
             end: g[g.len() - 1].end,
             text,
             emphasis: (emphasis > 0).then_some(emphasis),
+            speaker: cue_speaker(g),
         });
     }
     let r2 = |x: f64| js::round(x * 100.0) / 100.0;
@@ -977,6 +1037,7 @@ mod tests {
                 words("Bang! Splash.", 20.0, 0.3, 0.25),
             ]
             .concat(),
+            voices: Vec::new(),
         };
         let (kept, dropped) = filter_transcript(&t, None);
         assert_eq!(
@@ -994,6 +1055,7 @@ mod tests {
                 AsrWord::new(" chunk", 598.0, 599.5),
                 AsrWord::new(" boundary", 599.8, 600.4),
             ],
+            voices: Vec::new(),
         };
         let b = Transcript {
             segments: vec![seg(2.0, 5.0, " boundary next")],
@@ -1001,6 +1063,7 @@ mod tests {
                 AsrWord::new(" boundary", 2.8, 3.4),
                 AsrWord::new(" next", 3.5, 4.0),
             ],
+            voices: Vec::new(),
         };
         let pa = shift_transcript(&a, 0.0, 0.0, 600.0);
         let pb = shift_transcript(&b, 597.0, 600.0, 1200.0);
@@ -1094,6 +1157,7 @@ mod tests {
         let w = words_from_transcript(&Transcript {
             segments: vec![seg(10.0, 12.0, " Jokic finds Murray.")],
             words: vec![],
+            voices: Vec::new(),
         });
         assert_eq!(
             w.iter().map(|x| x.word.as_str()).collect::<Vec<_>>(),
@@ -1117,5 +1181,51 @@ mod tests {
         );
         assert_eq!(w.split('\n').count(), 2);
         assert!(w.split('\n').all(|l| js::utf16_len(l) <= 42));
+    }
+
+    #[test]
+    fn nouvelle_ligne_quand_un_autre_commentateur_parle() {
+        let voiced = |text: &str, t0: f64, k: Option<u32>| -> Vec<AsrWord> {
+            words(text, t0, 0.3, 0.25)
+                .into_iter()
+                .map(|w| AsrWord { speaker: k, ..w })
+                .collect()
+        };
+        // Sans pause ni ponctuation : une seule ligne quand la voix est inconnue…
+        let same = [
+            voiced("Curry for three", 0.0, None),
+            voiced("yes he hits it", 0.9, None),
+        ]
+        .concat();
+        assert_eq!(
+            texts(&build_cues(&same, &CueOptions::default())),
+            ["Curry for three yes he hits it"]
+        );
+        // … deux lignes, chacune avec sa voix, quand le second commentateur enchaîne.
+        let two = [
+            voiced("Curry for three", 0.0, Some(0)),
+            voiced("yes he hits it", 0.9, Some(1)),
+        ]
+        .concat();
+        let cues = build_cues(&two, &CueOptions::default());
+        assert_eq!(texts(&cues), ["Curry for three", "yes he hits it"]);
+        assert_eq!(
+            cues.iter().map(|c| c.speaker).collect::<Vec<_>>(),
+            [Some(0), Some(1)]
+        );
+        assert_eq!(cues[1].to_json()["speaker"], 1);
+        // Mots sans voix au milieu : pas de coupure, la voix majoritaire l'emporte.
+        let mixed = [
+            voiced("Curry for", 0.0, Some(2)),
+            voiced("three", 0.6, None),
+        ]
+        .concat();
+        let cues = build_cues(&mixed, &CueOptions::default());
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].speaker, Some(2));
+        assert!(build_cues(&same, &CueOptions::default())[0]
+            .to_json()
+            .get("speaker")
+            .is_none());
     }
 }

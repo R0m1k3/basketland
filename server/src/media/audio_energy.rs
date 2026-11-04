@@ -143,7 +143,11 @@ pub fn with_energy(t: &Transcript, env: &Envelope) -> Transcript {
             None => s.clone(),
         })
         .collect();
-    Transcript { segments, words }
+    Transcript {
+        segments,
+        words,
+        voices: t.voices.clone(),
+    }
 }
 
 /// `audioEnvelope` : enveloppe d'un fichier audio (décodé par ffmpeg, PCM
@@ -247,6 +251,7 @@ mod tests {
                 ..AsrSegment::new(0.0, 1.0, " a b")
             }],
             words: vec![AsrWord::new(" far", 5.0, 5.2), AsrWord::new(" a", 0.1, 0.3)],
+            voices: Vec::new(),
         };
         let t = with_energy(&t, &env);
         assert_eq!(t.words[0].energy, None);

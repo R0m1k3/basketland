@@ -30,6 +30,7 @@ use crate::media::commentary_ai::{
 use crate::media::commentary_cues::{parse_verbose_json, Transcript};
 use crate::media::local_ai::{OllamaSession, WhisperSession};
 use crate::media::roster_names::{fix_roster_names, roster_index, RosterIndex};
+use crate::media::voices::{with_voices, VoiceRegistry};
 use futures_util::future::{FutureExt, Shared};
 use serde_json::{json, Map, Value};
 use std::collections::hash_map::Entry;
@@ -456,16 +457,22 @@ fn chunk_audio(dir: &Path, p: &ChunkPlan) -> PathBuf {
 /// Réglages de la transcription qui changent son résultat : une transcription
 /// gardée n'est reprise que s'ils n'ont pas changé (sinon elle est refaite).
 /// `v2` : recherche en faisceau, pleine précision, détection de la parole
-/// réglée pour le commentaire sportif.
+/// réglée pour le commentaire sportif. `|voix` : avec les empreintes de voix
+/// des commentateurs (une transcription plus ancienne, sans elles, est refaite).
 fn asr_settings() -> String {
     let env = |k: &str| std::env::var(k).unwrap_or_default();
     format!(
-        "v2|beam={}|compute={}|vad={},{},{}",
+        "v2|beam={}|compute={}|vad={},{},{}{}",
         crate::media::local_ai::whisper_beam_size(),
         env("WHISPER_COMPUTE_TYPE"),
         env("WHISPER_VAD_THRESHOLD"),
         env("WHISPER_VAD_MIN_SILENCE_MS"),
         env("WHISPER_VAD_PAD_MS"),
+        if crate::media::local_ai::voices_enabled() {
+            "|voix"
+        } else {
+            ""
+        },
     )
 }
 
@@ -589,6 +596,9 @@ struct RunCtx {
     dash_failures: AtomicUsize,
     /// Lots en cours de traduction, tous tronçons confondus ([`lot_slots`]).
     lot_slots: tokio::sync::Semaphore,
+    /// Voix des commentateurs entendues dans le match (`voices.json`).
+    voices: Mutex<VoiceRegistry>,
+    voices_file: PathBuf,
 }
 
 /// Lots traduits en même temps sur l'ensemble des tronçons en cours. Ollama
@@ -876,6 +886,30 @@ impl RunCtx {
         Ok(transcript)
     }
 
+    /// Chaque mot du tronçon annoté du commentateur qui le dit (n° de voix,
+    /// le même sur tout le match) ; registre gardé sur disque.
+    fn label_voices(&self, plan: &ChunkPlan, t: Transcript) -> Transcript {
+        if t.voices.is_empty() {
+            return t;
+        }
+        let mut reg = locked(&self.voices);
+        let before = reg.len();
+        let labels = reg.label_chunk(plan.index, &t.voices);
+        if let Err(e) = write_json(&self.voices_file, &reg.to_json()) {
+            eprintln!("[commentaires] voix des commentateurs non gardées : {e}");
+        }
+        if reg.len() > before {
+            println!(
+                "[commentaires] match {} tronçon {}/{} : {} voix de commentateur(s) reconnue(s) jusqu'ici",
+                self.match_id,
+                plan.index + 1,
+                self.total,
+                reg.len()
+            );
+        }
+        with_voices(&t, &labels)
+    }
+
     /// `needsTranslation` : ligne pas en cache, changée, ou restée en anglais.
     fn needs_translation(&self, c: &ChunkCue) -> bool {
         match locked(&self.cache).lines.get(&c.seq) {
@@ -1014,6 +1048,7 @@ impl RunCtx {
                         text_fr: translated.map_or_else(|| c.text.clone(), |t| t.fr.clone()),
                         untranslated: translated.is_none(),
                         emphasis: c.emphasis.map_or(0.0, f64::from),
+                        speaker: c.speaker,
                     }
                 })
                 .collect()
@@ -1349,6 +1384,15 @@ impl Commentary {
         let done = Arc::new(Mutex::new(done));
 
         let cache_file = dir.join("translation.json");
+        // Voix des commentateurs : reprises avec la piste, oubliées à une relance explicite.
+        let voices_file = dir.join("voices.json");
+        let voices = if fresh {
+            VoiceRegistry::default()
+        } else {
+            read_json(&voices_file)
+                .map(|v| VoiceRegistry::from_json(&v))
+                .unwrap_or_default()
+        };
         // Relance explicite : tout est retraduit (seule la transcription est reprise).
         let cache = if fresh {
             TranslationCache::read(Path::new(""), &cfg.translate_model)
@@ -1404,6 +1448,8 @@ impl Commentary {
             mt: Mutex::new(None),
             dash_failures: AtomicUsize::new(0),
             lot_slots: tokio::sync::Semaphore::new(lot_slots(&cfg)),
+            voices: Mutex::new(voices),
+            voices_file,
         });
         // Extraction anticipée du tronçon suivant pendant que le GPU traite le courant.
         let mut prefetched: HashMap<usize, tokio::task::JoinHandle<Result<(), RunFail>>> =
@@ -1458,6 +1504,7 @@ impl Commentary {
                     }
                 }
                 let transcript = ctx.transcribe_chunk(&plan, &mut prefetched).await?;
+                let transcript = ctx.label_voices(&plan, transcript);
                 let cues: Vec<ChunkCue> = chunk_cues(&plan, &transcript, ctx.prompt.as_deref())
                     .into_iter()
                     .map(|c| ChunkCue {

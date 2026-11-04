@@ -245,7 +245,11 @@ pub fn fake_transcript(plans: &[ChunkPlan], index: usize) -> Transcript {
         });
         words.extend(ws);
     }
-    Transcript { segments, words }
+    Transcript {
+        segments,
+        words,
+        voices: Vec::new(),
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -314,6 +318,7 @@ pub fn fake_deps(o: Fake) -> (CommentaryDeps, CallsRef) {
                     Ok(Transcript {
                         segments: vec![seg],
                         words: vec![],
+                        voices: Vec::new(),
                     })
                 });
             }
@@ -490,7 +495,18 @@ pub fn snapshot(db: &Db) -> Value {
     .collect();
     json!({
         "tracks": tracks,
-        "cues": rows(db, "SELECT * FROM commentary_cues ORDER BY match_id, seq"),
+        // `speaker` (voix du commentateur) : colonne plus récente que les
+        // sorties de Node ; vide dans ces travaux (pas d'empreintes de voix).
+        "cues": rows(db, "SELECT * FROM commentary_cues ORDER BY match_id, seq")
+            .into_iter()
+            .map(|mut r| {
+                let o = r.as_object_mut().unwrap();
+                if o.get("speaker").is_some_and(Value::is_null) {
+                    o.shift_remove("speaker");
+                }
+                r
+            })
+            .collect::<Vec<_>>(),
         "chunks": rows(db, "SELECT * FROM commentary_chunks ORDER BY match_id, idx"),
         "kv": kv,
     })

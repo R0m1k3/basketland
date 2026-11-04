@@ -228,6 +228,13 @@ pub fn whisper_beam_size() -> u32 {
         .unwrap_or(5)
 }
 
+/// `COMMENTARY_VOICES` : reconnaître les commentateurs (empreinte de la voix
+/// de chaque prise de parole, une couleur par commentateur dans les
+/// sous-titres). Actif par défaut ; `0` le coupe.
+pub fn voices_enabled() -> bool {
+    std::env::var("COMMENTARY_VOICES").map_or(true, |v| js::trim(&v) != "0")
+}
+
 /// Une session de transcription : un processus Python, un modèle chargé.
 #[derive(Clone)]
 pub struct WhisperSession {
@@ -397,6 +404,9 @@ impl WhisperSession {
         }
         if let Some(h) = hotwords.filter(|h| !h.is_empty()) {
             req.insert("hotwords".into(), Value::from(h));
+        }
+        if voices_enabled() {
+            req.insert("voices".into(), Value::from(true));
         }
         let (id, rx) = self.worker.request(req).await;
         let reply = tokio::select! {

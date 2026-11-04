@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCue, findOnScreen, minReadTime, readDuration, type Subtitle } from '../src/components/match/playback';
+import { findCue, findOnScreen, minReadTime, readDuration, voiceClass, voiceCount, type Subtitle } from '../src/components/match/playback';
 import { fmtTime, parseClock } from '../src/components/match/format';
 import { stripScores } from '../src/components/match/spoiler';
 
@@ -94,5 +94,23 @@ describe('findOnScreen (VF en roll-up)', () => {
     const long = mk(2, 0, 'Shai Gilgeous-Alexander marque un shoot à 3 points, passe décisive de Jalen Williams');
     expect(readDuration(long)).toBeGreaterThan(readDuration(court));
     expect(readDuration(long)).toBeLessThanOrEqual(7);
+  });
+});
+
+describe('couleur par commentateur', () => {
+  const voiced = (seq: number, voice?: number): Subtitle => ({ ...sub(seq, seq * 10, seq * 10 + 2), kind: 'voice', voice });
+  it('compte les voix reconnues, sans les lignes de voix inconnue', () => {
+    expect(voiceCount([voiced(1, 0), voiced(2, 1), voiced(3, 0), voiced(4)])).toBe(2);
+    expect(voiceCount([voiced(1)])).toBe(0);
+  });
+  it('une classe par voix dès deux commentateurs', () => {
+    expect(voiceClass(0, 2)).toBe(' subtitle-voice-0');
+    expect(voiceClass(4, 5)).toBe(' subtitle-voice-4');
+  });
+  it('pas de couleur : une seule voix, voix inconnue ou au-delà de la palette', () => {
+    expect(voiceClass(0, 1)).toBe('');
+    expect(voiceClass(undefined, 3)).toBe('');
+    expect(voiceClass(5, 6)).toBe('');
+    expect(voiceClass(1, 0)).toBe('');
   });
 });

@@ -121,6 +121,10 @@ pub async fn subtitles(
                 if c.emphasis != 0 {
                     o["emphasis"] = Value::from(c.emphasis);
                 }
+                // Commentateur (n° de voix) : une couleur par commentateur à l'écran.
+                if let Some(k) = c.speaker {
+                    o["voice"] = Value::from(k);
+                }
                 o
             })
             .collect();
@@ -221,7 +225,11 @@ pub async fn subtitles_vtt(
                 video_ts: c.start_ts,
                 end_ts: Some(c.end_ts),
                 text_fr: wrap_two_lines(&c.text_fr, 42),
-                speaker: String::new(),
+                // `<v Commentateur 1>` : les lecteurs WebVTT peuvent les distinguer.
+                speaker: c
+                    .speaker
+                    .map(|k| format!("Commentateur {}", k + 1))
+                    .unwrap_or_default(),
             })
             .collect();
         let body = to_web_vtt(
