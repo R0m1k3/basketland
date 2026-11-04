@@ -82,6 +82,9 @@ ENV BL_STATIC_DIR=/app/out
 COPY --chown=node:node scripts/whisper_worker.py ./scripts/
 # Récupération d'accès : docker exec -it basketland basketland-server reset-password <identifiant> <mot-de-passe>
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# Ancien contrôle de santé `node -e "fetch(…/api/health)"` (compose d'Unraid
+# pas mis à jour) : redirigé vers `basketland-server health`.
+COPY --chmod=755 scripts/node-healthcheck-shim.sh /usr/local/bin/node
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]
 

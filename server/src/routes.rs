@@ -65,9 +65,11 @@ pub(crate) fn db_error(e: String) -> Response {
 // ---------------------------------------------------------------- /api/health
 
 pub async fn health(State(st): State<AppState>) -> Response {
+    // Connexion à part : un travail long sur la connexion partagée ne doit
+    // pas faire dépasser le délai du contrôle Docker (conteneur « unhealthy »).
     let r = st
         .db
-        .run(|c| {
+        .run_own(|c| {
             let n = db::count_all_matches(c)?;
             Ok((n, db::last_successful_ingest(c)?, db::last_ingests(c, 5)?))
         })
