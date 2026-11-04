@@ -42,3 +42,15 @@ export function parseClock(input: string): number | null {
 }
 
 export { periodName } from '@/lib/linescore';
+
+/**
+ * Libellé de la qualité vidéo dans le menu. En manuel, la qualité réellement
+ * lue est ajoutée quand elle diffère du choix (bascule en cours, ou repli
+ * momentané après une erreur d'ok.ru) : on ne prétend plus afficher du 720p
+ * quand l'image est en 360p.
+ */
+export function qualityLabel(quality: 'auto' | number, activeHeight: number | null): string {
+  if (quality === 'auto') return `Auto${activeHeight ? ` · ${activeHeight}p` : ''}`;
+  if (activeHeight && activeHeight !== quality) return `${quality}p · ${activeHeight}p en lecture`;
+  return `${quality}p`;
+}

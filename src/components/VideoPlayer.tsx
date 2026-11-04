@@ -6,7 +6,7 @@ import type { ErrorData, HlsConfig } from 'hls.js';
 import TeamLogo from '@/components/ui/TeamLogo';
 import { DEFAULT_SUB_DELAY, usePlayback, useScreenLines, voiceClass, voiceCount, type Subtitle } from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
-import { fmtTime } from '@/components/match/format';
+import { fmtTime, qualityLabel as formatQualityLabel } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
 
 export type { Subtitle };
@@ -56,7 +56,11 @@ const SPEEDS = [1, 1.25, 1.5, 2];
  *   proxy arrivent à la vitesse du réseau local et gonflent l'estimation ;
  *   la moyenne rapide (4 s) garde une descente vive quand ok.ru ralentit ;
  * - qualité plafonnée à la taille du lecteur (inutile de charger du 1080p
- *   dans une vignette de 390 px) ;
+ *   dans une vignette de 390 px) — en Auto seulement ;
+ * - qualité choisie à la main conservée après une erreur de segment
+ *   (`preserveManualLevelOnError`). Par défaut, hls.js repasse en Auto au
+ *   premier segment en échec (fréquent quand ok.ru ralentit) : le menu
+ *   affichait toujours « 720p » mais l'image restait dégradée ;
  * - délais compatibles avec les reprises du proxy (il relance lui-même
  *   ok.ru après ~8 s sans réponse ou 5 s sans données) ; nouvelles
  *   tentatives avec backoff exponentiel — une nouvelle tentative rejoint le
@@ -79,6 +83,7 @@ const HLS_CONFIG: Partial<HlsConfig> = {
   abrEwmaFastVoD: 4,
   abrEwmaSlowVoD: 25,
   capLevelToPlayerSize: true,
+  preserveManualLevelOnError: true,
   testBandwidth: false,
   fragLoadPolicy: {
     default: {
@@ -638,8 +643,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   }, []);
 
   const showControls = controlsShown || paused || menuOpen;
-  const qualityLabel =
-    quality === 'auto' ? `Auto${activeHeight ? ` · ${activeHeight}p` : ''}` : `${quality}p`;
+  const qualityLabel = formatQualityLabel(quality, activeHeight);
 
   return (
     <div

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findCue, findOnScreen, minReadTime, readDuration, voiceClass, voiceCount, type Subtitle } from '../src/components/match/playback';
-import { fmtTime, parseClock } from '../src/components/match/format';
+import { fmtTime, parseClock, qualityLabel } from '../src/components/match/format';
 import { stripScores } from '../src/components/match/spoiler';
 
 const sub = (seq: number, video_ts: number, end_ts: number | null = null): Subtitle => ({
@@ -113,4 +113,11 @@ describe('couleur par commentateur', () => {
     expect(voiceClass(5, 6)).toBe('');
     expect(voiceClass(1, 0)).toBe('');
   });
+});
+
+describe('qualityLabel (menu Qualité)', () => {
+  it('auto, avec la qualité lue', () => expect(qualityLabel('auto', 480)).toBe('Auto · 480p'));
+  it('auto, avant la lecture', () => expect(qualityLabel('auto', null)).toBe('Auto'));
+  it('manuel, qualité atteinte', () => expect(qualityLabel(720, 720)).toBe('720p'));
+  it('manuel, image encore dégradée : on le dit', () => expect(qualityLabel(720, 360)).toBe('720p · 360p en lecture'));
 });
