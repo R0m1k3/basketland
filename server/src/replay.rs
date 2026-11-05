@@ -224,15 +224,15 @@ impl Replays {
             let r = self.0.bv.find_replay(&rm, fresh).await?;
             // Un replay déjà trouvé n'est jamais rétrogradé par une recherche
             // qui échoue (page ou embed momentanément illisible).
-            let upd = (!(was_available && !r.available)
-                && (nonempty(&r.ok_id) || nonempty(&r.slug)))
-            .then(|| VideoUpdate {
-                slug: r.slug.clone(),
-                ok_id: r.ok_id.clone(),
-                duration: r.duration,
-                available: r.available,
-                kind: r.kind,
-            });
+            let keeps_found = !was_available || r.available;
+            let upd =
+                (keeps_found && (nonempty(&r.ok_id) || nonempty(&r.slug))).then(|| VideoUpdate {
+                    slug: r.slug.clone(),
+                    ok_id: r.ok_id.clone(),
+                    duration: r.duration,
+                    available: r.available,
+                    kind: r.kind,
+                });
             db.run(move |c| match &upd {
                 Some(u) => idb::set_video(c, id, u),
                 None => idb::mark_video_checked(c, id),

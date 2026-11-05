@@ -1,0 +1,5 @@
+# Même version de Rust partout : la CI, les postes de dev et l'image Docker (rust:1.96).
+[toolchain]
+channel = "1.96"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

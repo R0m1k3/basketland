@@ -487,8 +487,9 @@ pub fn filter_transcript(
         .iter()
         .filter(|w| {
             let m = mid(w);
-            !(dropped.iter().any(|d| inside(m, d.start, d.end))
-                && !kept.iter().any(|k| inside(m, k.start, k.end)))
+            // Un mot n'est retiré que s'il tombe dans un passage écarté et dans aucun passage gardé.
+            !dropped.iter().any(|d| inside(m, d.start, d.end))
+                || kept.iter().any(|k| inside(m, k.start, k.end))
         })
         .cloned()
         .collect();
