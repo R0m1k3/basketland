@@ -380,6 +380,7 @@ impl CommentaryDeps {
                     }
                     // Modèle chargé en mémoire GPU dès maintenant, pendant que Whisper travaille.
                     s.warm(&cfg.translate_model, Some(&signal)).await;
+                    s.log_gpu_usage(&cfg.translate_model).await;
                     let s = Arc::new(s);
                     Ok(TranslatorSession {
                         close: Arc::new(move || {
@@ -412,17 +413,27 @@ async fn join_translation(
     }
 }
 
-/// `COMMENTARY_TRANSLATE_AHEAD` (3 par défaut, 1 à 8) : tronçons traduits en
-/// même temps avec le recouvrement. Un traducteur en ligne (MiniMax-M3 :
-/// une à quatre minutes par tronçon) est bien plus lent que la transcription
-/// (une seconde sur GPU) : un seul tronçon à la fois laissait la
-/// transcription attendre. Chaque tronçon est publié dès qu'il est traduit.
-fn translate_ahead() -> usize {
+/// `COMMENTARY_TRANSLATE_AHEAD` (1 à 8) : tronçons traduits en même temps
+/// avec le recouvrement. Un traducteur en ligne (MiniMax-M3 : une à quatre
+/// minutes par tronçon) est bien plus lent que la transcription (une seconde
+/// sur GPU) : un seul tronçon à la fois laissait la transcription attendre
+/// (3 par défaut). Avec l'Ollama embarqué, les lots de tous les tronçons se
+/// partagent ses places ([`lot_slots`]) : au-delà de 2, chaque tronçon
+/// attendait les autres et sortait plus tard (2 par défaut). Chaque tronçon
+/// est publié dès qu'il est traduit.
+fn translate_ahead_for(cfg: &CommentaryConfig) -> usize {
+    let def = if cfg.translate_provider == TranslateProvider::Ollama
+        && cfg.translate_mode == ServiceMode::Embedded
+    {
+        2
+    } else {
+        3
+    };
     std::env::var("COMMENTARY_TRANSLATE_AHEAD")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|n| *n > 0)
-        .map_or(3, |n| n.min(8))
+        .map_or(def, |n| n.min(8))
 }
 
 /// `COMMENTARY_OVERLAP` (activé par défaut ; `0` le coupe) : le tronçon suivant
@@ -614,7 +625,7 @@ fn lot_slots(cfg: &CommentaryConfig) -> usize {
     if cfg.translate_provider == TranslateProvider::Ollama {
         per_chunk
     } else {
-        per_chunk * translate_ahead()
+        per_chunk * translate_ahead_for(cfg)
     }
 }
 
@@ -1456,13 +1467,13 @@ impl Commentary {
             HashMap::new();
 
         // Traductions en cours (les plus anciennes devant), pendant que les
-        // tronçons suivants se transcrivent : jusqu'à `translate_ahead()` à la fois.
+        // tronçons suivants se transcrivent : jusqu'à `translate_ahead_for` à la fois.
         type Inflight = std::collections::VecDeque<(
             usize,
             tokio::task::JoinHandle<Result<(), CommentaryError>>,
         )>;
         let mut inflight: Inflight = Inflight::new();
-        let ahead = translate_ahead();
+        let ahead = translate_ahead_for(&ctx.cfg);
         // Tronçons faits, plus ceux en cours de traduction (jamais choisis deux fois).
         let taken = |inflight: &Inflight| {
             let mut d = locked(&done).clone();

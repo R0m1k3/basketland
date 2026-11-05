@@ -51,12 +51,16 @@ conteneur**, sur la carte graphique. Une seule fois sur le NAS :
 Sans carte NVIDIA, tout fonctionne aussi, mais la traduction tourne sur le
 processeur (bien plus lente : plusieurs heures par match).
 
-**Plusieurs cartes** (p. ex. RTX 5060 Ti + RTX 3060) : tout le travail
-(Ollama, Whisper) tourne sur **la carte 0**, au
-sens de `nvidia-smi` (ordre du bus PCI). Variable `CUDA_VISIBLE_DEVICES` :
-`0` par défaut, `1` pour l'autre carte, vide pour les laisser toutes visibles.
-Le journal `[commentaires] Ollama embarqué prêt (GPU)` confirme qu'Ollama
-voit la carte.
+**Plusieurs cartes** (p. ex. RTX 5060 Ti + RTX 3060) : par défaut, tout le
+travail (Ollama, Whisper) tourne sur **la carte 0**, au sens de `nvidia-smi`
+(ordre du bus PCI). Variable `CUDA_VISIBLE_DEVICES` : `0` par défaut, `1` pour
+l'autre carte, vide pour les laisser toutes visibles. **Une carte chacun**
+(recommandé avec deux cartes : le modèle de traduction a la sienne en entier
+et ne déborde pas en RAM) : `CUDA_VISIBLE_DEVICES: '0,1'`,
+`OLLAMA_CUDA_DEVICE: '0'`, `WHISPER_CUDA_DEVICE: '1'`. Le journal
+`[commentaires] Ollama embarqué prêt (GPU, carte 0, contexte 8192)` et
+`[ollama] <modèle> : X Go sur la carte / Y Go (100 %)` confirment où tourne
+chacun.
 
 ### Option A — une commande (le plus rapide)
 
@@ -122,6 +126,7 @@ Dans Unraid : **Docker → Add Container**
 | Variable d'environnement | `TZ` = `Europe/Paris` |
 | Variable d'environnement | `NVIDIA_VISIBLE_DEVICES` = `all` |
 | Variable d'environnement (plusieurs cartes) | `CUDA_VISIBLE_DEVICES` = `0` (numéro `nvidia-smi` de la carte à utiliser) |
+| Variable d'environnement (deux cartes, une chacun) | `CUDA_VISIBLE_DEVICES` = `0,1`, `OLLAMA_CUDA_DEVICE` = `0`, `WHISPER_CUDA_DEVICE` = `1` |
 | Extra Parameters (vue avancée) | `--runtime=nvidia` |
 | Path / Volume | `/mnt/user/appdata/basketland` → `/data` |
 
@@ -166,8 +171,11 @@ services:
     environment:
       TZ: Europe/Paris
       NVIDIA_VISIBLE_DEVICES: all
-      # Carte utilisée (numéro `nvidia-smi`), s'il y en a plusieurs.
-      CUDA_VISIBLE_DEVICES: '0'
+      # Cartes visibles (numéros `nvidia-smi`), s'il y en a plusieurs ;
+      # avec deux cartes : une pour la traduction, une pour la transcription.
+      CUDA_VISIBLE_DEVICES: '0,1'
+      OLLAMA_CUDA_DEVICE: '0'
+      WHISPER_CUDA_DEVICE: '1'
     volumes:
       - /mnt/user/appdata/basketland:/data
 ```
@@ -492,6 +500,13 @@ traitement** (traduction ou analyse, avancement, « en pause pendant la
 lecture ») et la file d'attente, ainsi que l'état de chaque replay : « VF »
 (prête), « VF en cours », « VF 45 % » (en partie traduit).
 
+**Demande explicite** (« Sous-titrer ce match », « Reprendre la
+traduction », lancement à la lecture) : elle va jusqu'au bout, même fiche
+fermée. Elle ne cède sa place **qu'à un administrateur qui lit un autre
+match** (la position de sa vidéo avance), puis reprend juste après. Une fiche
+simplement ouverte, un replay trouvé par une autre fiche, ou la lecture d'un
+autre utilisateur ne l'interrompent pas.
+
 **Traduction automatique** (Paramètres, administrateurs ; activée par
 défaut) : désactivée, plus rien ne part tout seul — ni travail de fond (ceux
 déjà en file sont abandonnés), ni lancement à l'ouverture d'un match. La
@@ -501,7 +516,8 @@ serveur.
 
 **Mémoire GPU** : pendant un travail, Whisper (large-v3-turbo, fp16 ≈ 1,6 Go)
 et le modèle de traduction (TranslateGemma 12B Q4_K_M ≈ 8,1 Go, plus le
-contexte) sont chargés ensemble : il faut une carte de 12 Go. Sur une carte
+contexte de 8192 tokens) sont chargés ensemble : il faut une carte de 12 Go,
+ou une carte chacun (`OLLAMA_CUDA_DEVICE`, `WHISPER_CUDA_DEVICE`). Sur une carte
 plus petite, `TRANSLATE_PARALLEL=1` réduit la mémoire du contexte, ou
 `TRANSLATE_MODEL=gemma4:e4b` (≈ 6,6 Go) revient au modèle précédent. Avec
 une clé OpenAI, Ollama n'est pas démarré du tout.
@@ -547,7 +563,10 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSCRIBE_API_KEY` | — | Jeton `Bearer`, si speaches est protégé par `API_KEY`. |
 | `TRANSCRIBE_TIMEOUT_MS` | `1200000` (20 min) | Délai max de transcription d'un tronçon. |
 | `TRANSLATE_URL` | — (Ollama embarqué) | Ollama EXTERNE, ex. `http://192.168.1.16:11434/v1`. Vide : Ollama embarqué dans le conteneur (127.0.0.1, non exposé). |
-| `CUDA_VISIBLE_DEVICES` | `0` | Carte NVIDIA utilisée par TOUS les moteurs embarqués (Ollama, Whisper), numérotée comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; vide : toutes visibles. |
+| `CUDA_VISIBLE_DEVICES` | `0` | Cartes NVIDIA visibles par les moteurs embarqués (Ollama, Whisper), numérotées comme `nvidia-smi` (`CUDA_DEVICE_ORDER=PCI_BUS_ID` dans l'image). `1` : la deuxième carte ; `0,1` : les deux (avec les deux variables suivantes) ; vide : toutes visibles. |
+| `OLLAMA_CUDA_DEVICE` | — | Carte réservée à l'Ollama embarqué (numéro `nvidia-smi` ou UUID), posée dans son seul `CUDA_VISIBLE_DEVICES`. Sans effet sur un Ollama déjà lancé ailleurs (le journal le signale). |
+| `WHISPER_CUDA_DEVICE` | — | Carte réservée à Whisper embarqué, même principe. Avec `OLLAMA_CUDA_DEVICE`, chacun a sa carte : la traduction ne partage plus la mémoire avec la transcription. |
+| `OLLAMA_CONTEXT_LENGTH` | `8192` | Fenêtre de contexte de l'Ollama embarqué (2048 à 131072), même valeur pour le serveur, le préchargement et chaque requête (une valeur qui change fait recharger le modèle). 4096 ne suffisait pas : prompt système (~3 000 tokens), joueurs, lot et réponse débordaient, d'où des lots repris par moitiés puis ligne à ligne. Un Ollama externe garde son propre réglage. |
 | `WHISPER_DEVICE` | `auto` | `cuda`, `cpu` ou `auto` (GPU si visible, sinon processeur). |
 | `WHISPER_BATCH_SIZE` | `0` | Transcription par lots (mode « batched » de faster-whisper, p. ex. `8` sur GPU, ou `auto` : 8 sur carte NVIDIA, 0 sur processeur) : nettement plus rapide avec le même modèle, **mais** faster-whisper désactive alors le filtre des hallucinations pendant les silences (`hallucination_silence_threshold`) et les nouvelles tentatives à d'autres températures : plus de risque de phrases inventées pendant les pauses. `0` : mode séquentiel (par défaut). |
 | `COMMENTARY_VOICES` | activé | Reconnaît les commentateurs (empreinte de la voix de chaque prise de parole, Whisper embarqué seulement) : une couleur par commentateur dans les sous-titres. `0` désactive (plus de calcul d'empreintes, sous-titres sans couleur). |
@@ -566,13 +585,13 @@ une clé OpenAI, Ollama n'est pas démarré du tout.
 | `TRANSLATE_JSON_SCHEMA` | auto | `1` / `0` : impose ou non le schéma JSON de sortie (Ollama embarqué). Auto : oui pour Gemma 4 E2B/E4B, non sinon (Gemma 4 12B décale des lignes sous schéma imposé ; TranslateGemma passe par son gabarit brut, sans schéma). |
 | `TRANSLATE_PROMPT_FILE` | — | Fichier texte remplaçant le prompt système par défaut (`TRANSLATE_SYSTEM_PROMPT` dans `src/lib/commentaryAi.ts`). Il doit demander la sortie `{"t":[{"i":<id>,"fr":"…"}]}`. |
 | `TRANSLATE_API_KEY` | — | Jeton `Bearer` éventuel du serveur de traduction. |
-| `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction. |
+| `TRANSLATE_TIMEOUT_MS` | `300000` (5 min) | Délai max d'une requête de traduction ; chaque dépassement (et chaque nouvel essai) est écrit au journal `[commentaires] requête de traduction échouée …`. |
 | `COMMENTARY_CHUNK_SEC` | `120` | Durée d'un tronçon audio (s) : plus court = premiers sous-titres plus tôt, plus long = moins de requêtes et plus de contexte pour Whisper. |
 | `COMMENTARY_NIGHT_WINDOW` | `always` | Travail de fond (traduction et analyse vidéo des replays disponibles), toujours en pause pendant une lecture : `always` = dès que le replay est disponible, `2-6` = seulement de 2 h à 6 h (heure de Paris), `off` = jamais (seulement à l'ouverture d'un match). |
 | `COMMENTARY_MAX_LEAD_SEC` | `0` | Avance maximale de la traduction sur la lecture (s). `0` (défaut) : aucune, la traduction va au bout du match d'une traite. Une valeur, p. ex. `300` : pendant la lecture, la traduction attend quand elle a cette avance. |
 | `COMMENTARY_OVERLAP` | `1` | Le tronçon suivant est transcrit pendant que le courant se traduit (la transcription n'attend plus le traducteur). `0` : l'un après l'autre. |
 | `TRANSLATE_REPAIR_MODEL` | `MiniMax-M3` (MiniMax) | Modèle qui reprend une à une les lignes que le modèle de traduction a laissées en anglais, avec des caractères chinois ou des mots collés (réglable dans Paramètres › MiniMax › « Reprise des lignes douteuses » ; `aucun` : le modèle de traduction reprend lui-même). Pour OpenAI, seulement par cette variable. |
-| `COMMENTARY_TRANSLATE_AHEAD` | `3` | Tronçons traduits en même temps (1 à 8) pendant que les suivants se transcrivent. Un traducteur en ligne (MiniMax-M3 : 1 à 4 min par tronçon) est bien plus lent que la transcription sur GPU (1 s) : un seul à la fois la faisait attendre. Chaque tronçon est publié dès qu'il est traduit ; un échec arrête le travail. |
+| `COMMENTARY_TRANSLATE_AHEAD` | `2` (Ollama embarqué), `3` sinon | Tronçons traduits en même temps (1 à 8) pendant que les suivants se transcrivent. Un traducteur en ligne (MiniMax-M3 : 1 à 4 min par tronçon) est bien plus lent que la transcription sur GPU (1 s) : un seul à la fois la faisait attendre. Avec l'Ollama embarqué, les lots de tous les tronçons se partagent ses places (`TRANSLATE_PARALLEL`) : à 3, chaque tronçon attendait les deux autres et sortait plus tard. Chaque tronçon est publié dès qu'il est traduit ; un échec arrête le travail. |
 | `COMMENTARY_PARALLEL_FETCH` | `1` | Audio de chaque tronçon téléchargé segment par segment sur plusieurs connexions en même temps (ok.ru bride chaque connexion à quelques centaines de kb/s : un seul ffmpeg extrayait moins vite que le temps réel), puis découpé sur place. Un segment qui cale est repris sur une connexion neuve. `0` : ancienne extraction par ffmpeg (et son complet, ci-dessous). |
 | — | — | Son de chaque tronçon pris d'abord dans le **son seul** d'ok.ru (manifeste DASH `metadataUrl`, piste AAC ≥ 48 kb/s : 5 à 7 fois moins de données que la vidéo HLS, horodatage juste à 20 ms près), fragments téléchargés en parallèle par plages d'octets ; flux vidéo HLS en secours (abandonné pour le travail après deux échecs du son seul). |
 | `COMMENTARY_FETCH_PARALLEL` | `16` | Connexions simultanées vers ok.ru par tronçon (1 à 32), quand rien n'est choisi dans Paramètres › Téléchargement de l'audio (le choix de la page l'emporte). |
