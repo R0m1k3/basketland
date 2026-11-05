@@ -858,9 +858,11 @@ async fn statuts_de_la_file_comme_node() {
     })
     .unwrap();
     snap("en file, piste partielle", &abc);
-    svc.touch_viewer(B, Some(1250.0));
+    // Un ADMINISTRATEUR lit B (la position bouge) : depuis le 05/11/2026, seule
+    // cette lecture fait attendre une demande explicite (Node : toute fiche ouverte).
+    svc.touch_viewer_by(B, Some(1250.0), true);
     snap("en file, spectateur à 1250", &abc);
-    svc.touch_viewer(B, Some(700.0));
+    svc.touch_viewer_by(B, Some(700.0), true);
     snap("en file, spectateur à 700", &abc);
     resolve(A, outcome(false, Some(FailureKind::Contenu), false, "vide")).await;
     pause().await;
