@@ -244,8 +244,13 @@ fn status(g: &Value, now: DateTime<Utc>) -> &'static str {
     }
 }
 
-fn view(g: &Value, now: DateTime<Utc>) -> Value {
+/// Match affiché : jour et heure de Paris, statut, et diffusion beIN SPORTS
+/// connue (`tv`, voir [`crate::tv_fr::euro_tv_json`]).
+fn view(g: &Value, now: DateTime<Utc>, tv: Option<&Value>) -> Value {
     let mut v = g.clone();
+    if let Some(t) = crate::tv_fr::euro_tv_json(tv, g["code"].as_i64()) {
+        v["tv_fr"] = t;
+    }
     if let Some(at) = g["utc"].as_str().and_then(time::parse_instant) {
         v["day_paris"] = json!(time::paris_date_key(at));
         v["time_paris"] = json!(time::paris_time(at));
@@ -273,14 +278,20 @@ fn first_rounds<'a>(games: impl Iterator<Item = &'a Value>, n: usize) -> Vec<&'a
 
 /// `GET /api/pages/euroleague` : `data` est le cache (ou `None` si l'API n'a
 /// jamais répondu).
-pub fn page(data: Option<&Value>, season: &str, now: DateTime<Utc>, spoilers: &str) -> Value {
+pub fn page(
+    data: Option<&Value>,
+    season: &str,
+    now: DateTime<Utc>,
+    spoilers: &str,
+    tv: Option<&Value>,
+) -> Value {
     let empty = Vec::new();
     let games = data.and_then(|d| d["games"].as_array()).unwrap_or(&empty);
     // À venir : matchs pas encore joués (en cours compris), deux journées.
     let upcoming: Vec<Value> =
         first_rounds(games.iter().filter(|g| g["played"] != true), ROUNDS_SHOWN)
             .into_iter()
-            .map(|g| view(g, now))
+            .map(|g| view(g, now, tv))
             .collect();
     // Résultats : deux dernières journées jouées, le plus récent d'abord.
     let results: Vec<Value> = first_rounds(
@@ -288,7 +299,7 @@ pub fn page(data: Option<&Value>, season: &str, now: DateTime<Utc>, spoilers: &s
         ROUNDS_SHOWN,
     )
     .into_iter()
-    .map(|g| view(g, now))
+    .map(|g| view(g, now, tv))
     .collect();
     let season = data.and_then(|d| d["season"].as_str()).unwrap_or(season);
     json!({
@@ -376,7 +387,7 @@ mod tests {
     fn page_a_venir_et_resultats_sur_deux_journees() {
         let data = snapshot("E2026", sample(), vec![], Some(2));
         let now = Utc.with_ymd_and_hms(2026, 11, 4, 20, 30, 0).unwrap();
-        let p = page(Some(&data), "E2026", now, "show");
+        let p = page(Some(&data), "E2026", now, "show", None);
         let codes = |k: &str| -> Vec<i64> {
             p[k].as_array()
                 .unwrap()
@@ -397,15 +408,29 @@ mod tests {
         // Coup d'envoi passé depuis longtemps, sans score : en attente.
         let later = now + Duration::hours(5);
         assert_eq!(
-            page(Some(&data), "E2026", later, "show")["upcoming"][0]["status"],
+            page(Some(&data), "E2026", later, "show", None)["upcoming"][0]["status"],
             "pending"
+        );
+    }
+
+    #[test]
+    fn page_avec_diffusions_bein() {
+        let data = snapshot("E2026", sample(), vec![], Some(2));
+        let now = Utc.with_ymd_and_hms(2026, 11, 4, 12, 0, 0).unwrap();
+        let tv = json!({ "31": [{ "name": "beIN SPORTS 2", "live": false }] });
+        let p = page(Some(&data), "E2026", now, "show", Some(&tv));
+        assert_eq!(p["upcoming"][0]["code"], 21);
+        assert!(p["upcoming"][0].get("tv_fr").is_none());
+        assert_eq!(
+            p["upcoming"][1]["tv_fr"],
+            json!([{ "name": "beIN SPORTS 2", "kind": "bein", "live": false }])
         );
     }
 
     #[test]
     fn page_sans_donnees() {
         let now = Utc.with_ymd_and_hms(2026, 11, 4, 12, 0, 0).unwrap();
-        let p = page(None, "E2026", now, "hide");
+        let p = page(None, "E2026", now, "hide", None);
         assert_eq!(p["available"], false);
         assert_eq!(p["spoilers"], "hide");
         assert_eq!(p["upcoming"], json!([]));

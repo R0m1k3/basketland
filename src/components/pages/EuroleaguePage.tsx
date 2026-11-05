@@ -5,6 +5,7 @@ import { longDate, relativeDay } from '@/components/schedule/dates';
 import AutoRefresh from '@/components/ui/AutoRefresh';
 import SpoilerToggle from '@/components/ui/SpoilerToggle';
 import { RevealButton } from '@/components/ui/Score';
+import { TvBadges } from '@/components/ui/TvBadge';
 import { PageData } from '@/components/page/pageData';
 import type { EuroClub, EuroGame, EuroleaguePage as EuroData, EuroStandingRow } from '@/components/page/types';
 
@@ -211,6 +212,12 @@ function GameCard({ game }: { game: EuroGame }) {
         )}
       </div>
       <Side club={away} align="left" win={awayWin} lose={homeWin} />
+      {game.tv_fr?.length ? (
+        <div className="col-span-3 flex flex-wrap justify-center gap-1.5">
+          {/* Chaîne et différé pour un match à venir, diffuseur seul ensuite (comme `GameBadges`). */}
+          <TvBadges tv={game.tv_fr} size="sm" short={game.status === 'pending' || game.status === 'final'} />
+        </div>
+      ) : null}
     </div>
   );
 }

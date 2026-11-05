@@ -253,15 +253,27 @@ pub async fn euroleague(
         let key = crate::euroleague::cache_key(&season);
         let s2 = season.clone();
         let fetch = || async move { crate::euroleague::fetch(&s2).await };
-        match load_cached(&st.db, key, crate::euroleague::CACHE_MS, now, fetch).await {
-            Ok(data) => ok(crate::euroleague::page(
-                data.as_ref(),
-                &season,
-                now,
-                spoilers,
-            )),
-            Err(e) => db_error(e),
-        }
+        let data = match load_cached(&st.db, key, crate::euroleague::CACHE_MS, now, fetch).await {
+            Ok(d) => d,
+            Err(e) => return db_error(e),
+        };
+        // Diffusions beIN SPORTS (job `sync-tv-fr`), sans limite d'âge.
+        let tv_key = crate::tv_fr::euro_key(&season);
+        let tv = match st
+            .db
+            .run(move |c| db::kv_get_at(c, &tv_key, None, now))
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return db_error(e),
+        };
+        ok(crate::euroleague::page(
+            data.as_ref(),
+            &season,
+            now,
+            spoilers,
+            tv.as_ref(),
+        ))
     };
     guarded(&st, &uri, &headers, fut).await
 }

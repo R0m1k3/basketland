@@ -66,6 +66,8 @@ pub fn start(st: AppState) {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+        // Liste Prime Video France connue, avant toute page servie.
+        crate::prime_fr::load(&st.db).await;
         schedule(st);
     });
 }
@@ -117,7 +119,8 @@ fn schedule(st: AppState) {
             }
         },
     );
-    // Diffusions beIN SPORTS (guide des programmes, mis à jour chaque nuit).
+    // Diffusions beIN SPORTS (guide des programmes, mis à jour chaque nuit),
+    // Euroleague comprise, et liste Prime Video France (relue chaque jour).
     let d = db.clone();
     every(
         Duration::from_secs(4 * 60 * MIN),
