@@ -37,7 +37,7 @@ basketland-server (Rust) ── port 3012 : API, files médias, cron, SQLite
 
 ## Déploiement sur Unraid
 
-L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement démarrer/arrêter/redémarrer un conteneur existant) : aucune mutation `createContainer` n'existe. Deux chemins possibles.
+L'API GraphQL d'Unraid ne sait pas *créer* de conteneur (elle sait seulement démarrer/arrêter/redémarrer un conteneur existant) : aucune mutation `createContainer` n'existe. Trois chemins possibles : docker compose (recommandé), une commande `docker run` ou l'interface web.
 
 ### Prérequis : la carte NVIDIA
 
@@ -62,7 +62,45 @@ et ne déborde pas en RAM) : `CUDA_VISIBLE_DEVICES: '0,1'`,
 `[ollama] <modèle> : X Go sur la carte / Y Go (100 %)` confirment où tourne
 chacun.
 
-### Option A — une commande (le plus rapide)
+### Recommandé — docker compose
+
+Avec le plugin **Compose Manager** (Apps → « Docker Compose Manager ») :
+**Docker → Compose → Add New Stack**, nom `basketland`, puis **Edit Stack**,
+collez le fichier ci-dessous et **Compose Up**. Le `docker-compose.yml` du
+dépôt ajoute les variables facultatives (`INGEST_TOKEN`, `MINIMAX_API_KEY`). En ligne de commande, `docker compose up -d` dans le
+dossier du fichier fait la même chose.
+
+```yaml
+services:
+  basketland:
+    image: ghcr.io/r0m1k3/basketland:latest
+    container_name: basketland
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - '3012:3012'
+    environment:
+      TZ: Europe/Paris
+      NVIDIA_VISIBLE_DEVICES: all
+      # Cartes visibles (numéros `nvidia-smi`), s'il y en a plusieurs ;
+      # avec deux cartes : une pour la traduction, une pour la transcription.
+      CUDA_VISIBLE_DEVICES: '0,1'
+      OLLAMA_CUDA_DEVICE: '0'
+      WHISPER_CUDA_DEVICE: '1'
+    volumes:
+      - /mnt/user/appdata/basketland:/data
+```
+
+> **Contrôle de santé** : ne mettez pas de bloc `healthcheck:` dans le
+> compose, l'image a le sien (`basketland-server health`). L'ancien contrôle
+> `node -e "fetch(...)"` reste accepté : Node n'est plus dans l'image, mais
+> un faux `node` le redirige vers `basketland-server health`. Le compose manager d'Unraid garde sa
+> propre copie du fichier (`/boot/config/plugins/compose.manager/projects/basketland/`) :
+> elle ne suit pas ce dépôt, mieux vaut y retirer le bloc dans **Docker → Compose →
+> basketland → Edit Stack**. Raison d'un échec :
+> `docker inspect --format '{{json .State.Health}}' basketland`.
+
+### Option A — une commande `docker run`
 
 Dans **Unraid → Terminal**, collez :
 
@@ -157,42 +195,24 @@ L'image est **publique** : aucun jeton n'est nécessaire sur le NAS, Unraid la
 tire directement. (Le dépôt GitHub et le paquet GHCR sont publics, comme les
 autres dépôts et paquets du compte.)
 
-### Alternative docker-compose
-
-```yaml
-services:
-  basketland:
-    image: ghcr.io/r0m1k3/basketland:latest
-    container_name: basketland
-    restart: unless-stopped
-    runtime: nvidia
-    ports:
-      - '3012:3012'
-    environment:
-      TZ: Europe/Paris
-      NVIDIA_VISIBLE_DEVICES: all
-      # Cartes visibles (numéros `nvidia-smi`), s'il y en a plusieurs ;
-      # avec deux cartes : une pour la traduction, une pour la transcription.
-      CUDA_VISIBLE_DEVICES: '0,1'
-      OLLAMA_CUDA_DEVICE: '0'
-      WHISPER_CUDA_DEVICE: '1'
-    volumes:
-      - /mnt/user/appdata/basketland:/data
-```
-
-> **Contrôle de santé** : ne mettez pas de bloc `healthcheck:` dans le
-> compose, l'image a le sien (`basketland-server health`). L'ancien contrôle
-> `node -e "fetch(...)"` reste accepté : Node n'est plus dans l'image, mais
-> un faux `node` le redirige vers `basketland-server health`. Le compose manager d'Unraid garde sa
-> propre copie du fichier (`/boot/config/plugins/compose.manager/projects/basketland/`) :
-> elle ne suit pas ce dépôt, mieux vaut y retirer le bloc dans **Docker → Compose →
-> basketland → Edit Stack**. Raison d'un échec :
-> `docker inspect --format '{{json .State.Health}}' basketland`.
-
 ### Mettre à jour le conteneur
 
 L'image est reconstruite et republiée automatiquement par la CI à chaque
 push sur `main`. Pour reprendre la nouvelle version sur le NAS :
+
+**Avec docker compose** : **Docker → Compose → basketland → Update Stack**,
+ou dans **Terminal** :
+
+```bash
+cd /boot/config/plugins/compose.manager/projects/basketland && \
+docker compose pull && docker compose up -d && docker image prune -f
+```
+
+Si vous changez des variables (p. ex. `CUDA_VISIBLE_DEVICES`), modifiez
+d'abord le fichier par **Edit Stack** : c'est la copie du Compose Manager
+qui compte, pas celle du dépôt.
+
+**Avec `docker run`** :
 
 ```bash
 docker pull ghcr.io/r0m1k3/basketland:latest && \
@@ -215,7 +235,7 @@ versions de l'image (sinon chacune reste sur le disque du NAS).
 Chaque image publiée depuis `main` porte aussi l'étiquette `sha-<commit>`
 (7 premiers caractères du commit, visibles dans l'historique GitHub ou sur la page
 du paquet GHCR). Pour revenir en arrière, relancer le conteneur avec cette étiquette
-à la place de `latest`, par exemple `ghcr.io/r0m1k3/basketland:sha-8e4ba72`.
+à la place de `latest`, par exemple `ghcr.io/r0m1k3/basketland:sha-8e4ba72` (avec compose : ligne `image:` du fichier, puis **Update Stack**).
 
 Avant de revenir en arrière, copier le dossier `/mnt/user/appdata/basketland` :
 une version récente peut avoir modifié la base, et une ancienne version ne sait
