@@ -12,16 +12,20 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Une seule exécution à la fois par branche ou PR. Sur une PR, un nouveau commit
+# annule l'exécution en cours ; sur main, on ne coupe jamais une publication.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  build:
+  # Interface (Next.js) : types, tests, build.
+  node:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -41,9 +45,58 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Serveur Rust (API, files médias, cron, interface statique).
-      - name: Rust tests
-        run: cargo test --manifest-path server/Cargo.toml --locked
+  # Serveur Rust (API, files médias, cron, interface statique), avec l'OCR natif
+  # comme dans l'image Docker (fonction cargo `ocr`).
+  rust:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libtesseract
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libtesseract-dev libleptonica-dev
+
+      # Version de Rust lue dans rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      # Données de langue « eng » de Tesseract utilisées par les tests OCR
+      # (paquet npm @tesseract.js-data/eng).
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format
+        run: cargo fmt --manifest-path server/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path server/Cargo.toml --locked --all-targets --features ocr -- -D warnings
+
+      - name: Tests
+        run: cargo test --manifest-path server/Cargo.toml --locked --features ocr
+
+  docker:
+    needs: [node, rust]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Free disk space
         run: |
@@ -52,8 +105,8 @@ jobs:
           docker image prune --all --force
           df -h /
 
-      # Connexion aussi sur une pull request (même dépôt) : l'image de base
-      # est lue, et publiée si elle manque, dans le registre.
+      # Connexion aussi sur une pull request (même dépôt) : l'image de base est
+      # lue dans le registre. Une PR ne publie jamais rien.
       - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:
@@ -81,8 +134,10 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Hors PR : publiée sous son empreinte ; l'étiquette mobile `:lite` (défaut
+      # du Dockerfile pour un build local) ne bouge que depuis la branche principale.
       - name: Build and push base image
-        if: steps.base.outputs.exists != 'true'
+        if: steps.base.outputs.exists != 'true' && github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -91,24 +146,40 @@ jobs:
           push: true
           tags: |
             ${{ steps.base.outputs.image }}
-            ${{ steps.base.outputs.moving }}
+            ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.base.outputs.moving || '' }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      # PR qui change Dockerfile.base : la base est construite pour la vérifier,
+      # sans être publiée. L'image de l'application, qui en dépend, sera
+      # construite après le merge.
+      - name: Build base image (pull request, not pushed)
+        if: steps.base.outputs.exists != 'true' && github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.base
+          target: lite
+          push: false
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `sha-<commit>` : chaque version publiée reste disponible, pour
+          # revenir en arrière sur le NAS si `latest` pose problème.
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
       # Sur une pull request, l'image est construite SANS être publiée : une
       # erreur du Dockerfile est vue avant le merge, pas après.
       - name: Build and push Docker image
+        if: steps.base.outputs.exists == 'true' || github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .

@@ -311,7 +311,7 @@ Reprendre le modèle de `R0m1k3/LogiFlow/.github/workflows/docker-build.yml` :
 - `on: push` sur `main` + `tags: v*`
 - `permissions: contents: read, packages: write`
 - login GHCR avec `secrets.GITHUB_TOKEN`
-- `docker/metadata-action@v5` (tags `latest`, `sha`, `v*`)
+- `docker/metadata-action@v5` (tags `latest`, `sha-<commit>`, `v*`)
 - `docker/setup-buildx-action@v3` + `docker/build-push-action@v5`
 - cache GHA (`cache-from: type=gha`, `cache-to: type=gha,mode=max`)
 

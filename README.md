@@ -202,6 +202,17 @@ sans `-v` ne touche pas au dossier hôte.
 Après une mise à jour, `docker image prune -f` supprime les anciennes
 versions de l'image (sinon chacune reste sur le disque du NAS).
 
+### Revenir à une version précédente
+
+Chaque image publiée depuis `main` porte aussi l'étiquette `sha-<commit>`
+(7 premiers caractères du commit, visibles dans l'historique GitHub ou sur la page
+du paquet GHCR). Pour revenir en arrière, relancer le conteneur avec cette étiquette
+à la place de `latest`, par exemple `ghcr.io/r0m1k3/basketland:sha-8e4ba72`.
+
+Avant de revenir en arrière, copier le dossier `/mnt/user/appdata/basketland` :
+une version récente peut avoir modifié la base, et une ancienne version ne sait
+pas toujours la relire.
+
 > Si tu as installé le conteneur via l'interface Unraid, un **Update** dans
 > l'onglet Docker fait la même chose (téléchargement de la nouvelle image
 > puis redémarrage), sans ligne de commande. Unraid ne propose « Update »
