@@ -260,6 +260,30 @@ fn whisper_exit_message(why: &str, tail: &str) -> String {
     )
 }
 
+/// Fenêtre de contexte d'Ollama (`OLLAMA_CONTEXT_LENGTH`, 8192 par défaut,
+/// 2048 à 131072). Une seule valeur pour le serveur, le préchargement et
+/// chaque requête : Ollama recharge le modèle quand `num_ctx` change. 4096
+/// ne suffisait pas : prompt système (~3 000 tokens), joueurs et lot de 14
+/// lignes, plus 1 200 tokens de réponse, débordaient (prompt tronqué, lots
+/// repris par moitiés puis ligne à ligne).
+pub fn ollama_num_ctx() -> u32 {
+    std::env::var("OLLAMA_CONTEXT_LENGTH")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|n| (2048..=131_072).contains(n))
+        .unwrap_or(8192)
+}
+
+/// Carte imposée à un processus enfant (`OLLAMA_CUDA_DEVICE`,
+/// `WHISPER_CUDA_DEVICE` : numéro `nvidia-smi`, ou UUID), posée dans son
+/// `CUDA_VISIBLE_DEVICES`. `None` : il hérite de celle du conteneur.
+pub fn cuda_device(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 /// Environnement du processus Whisper : cache Hugging Face
 /// (`/data/models/hf`) et cuBLAS/cuDNN des paquets pip de son environnement.
 fn worker_env(models: &Path) -> Vec<(String, String)> {
@@ -280,6 +304,9 @@ fn worker_env(models: &Path) -> Vec<(String, String)> {
             .collect::<Vec<_>>()
             .join(":");
         env.push(("LD_LIBRARY_PATH".into(), v));
+    }
+    if let Some(d) = cuda_device("WHISPER_CUDA_DEVICE") {
+        env.push(("CUDA_VISIBLE_DEVICES".into(), d));
     }
     env
 }
@@ -369,7 +396,10 @@ impl WhisperSession {
                     None | Some(Value::Null) => "?".to_string(),
                     Some(v) => js_string(v),
                 };
-                println!("[commentaires] Whisper embarqué prêt ({model}, {device})");
+                let card = cuda_device("WHISPER_CUDA_DEVICE")
+                    .map(|d| format!(", carte {d}"))
+                    .unwrap_or_default();
+                println!("[commentaires] Whisper embarqué prêt ({model}, {device}{card})");
                 Ok(s)
             }
             Err(e) => {
@@ -474,7 +504,12 @@ const TEXT_PLAIN: &str = "text/plain;charset=UTF-8";
 fn log_ollama_memory(text: &str) {
     for line in text.lines() {
         let l = line.to_ascii_lowercase();
-        if l.contains("offloaded") || l.contains("insufficient") || l.contains("out of memory") {
+        if l.contains("offloaded")
+            || l.contains("insufficient")
+            || l.contains("out of memory")
+            || l.contains("truncating input prompt")
+            || l.contains("context shift")
+        {
             let line = line.trim();
             let short: String = line.chars().take(300).collect();
             println!("[ollama] {short}");
@@ -530,6 +565,37 @@ fn ollama_start_failure(tail: &str, exited: Option<&str>, waited_s: u64) -> Stri
     }
 }
 
+/// Ligne « gemma4:12b : 9.1 Go sur la carte / 9.1 Go (100 %), contexte
+/// 8192 » d'après la réponse de `/api/ps` ; `None` si le modèle n'y est pas.
+pub fn gpu_usage_line(ps: &Value, name: &str) -> Option<String> {
+    let m = ps
+        .get("models")?
+        .as_array()?
+        .iter()
+        .find(|m| m.get("name").and_then(Value::as_str) == Some(name))?;
+    let size = m.get("size").and_then(Value::as_f64)?;
+    let vram = m.get("size_vram").and_then(Value::as_f64).unwrap_or(0.0);
+    if size <= 0.0 {
+        return None;
+    }
+    let pct = (vram / size * 100.0).round();
+    let ctx = m
+        .get("context_length")
+        .and_then(Value::as_u64)
+        .map(|c| format!(", contexte {c}"))
+        .unwrap_or_default();
+    let warn = if pct < 100.0 {
+        " — le modèle déborde dans la RAM : traduction ralentie"
+    } else {
+        ""
+    };
+    Some(format!(
+        "{name} : {:.1} Go sur la carte / {:.1} Go ({pct} %){ctx}{warn}",
+        vram / 1e9,
+        size / 1e9
+    ))
+}
+
 /// Ollama embarqué pour la durée de la traduction. Si un Ollama répond déjà
 /// sur le port (lancé ailleurs), il est utilisé tel quel et n'est pas arrêté.
 pub struct OllamaSession {
@@ -545,6 +611,12 @@ impl OllamaSession {
             base: embedded_ollama_url(),
         };
         if ollama_up(&s.base).await {
+            if let Some(d) = cuda_device("OLLAMA_CUDA_DEVICE") {
+                println!(
+                    "[commentaires] un Ollama répond déjà sur {} : OLLAMA_CUDA_DEVICE={d} et OLLAMA_CONTEXT_LENGTH sont sans effet sur lui",
+                    s.base
+                );
+            }
             return Ok(s);
         }
         let models = models_dir().join("ollama");
@@ -552,24 +624,20 @@ impl OllamaSession {
         // Clé d'identification d'Ollama (~/.ollama) dans le volume, à côté des modèles.
         let home = models_dir().join("ollama-home");
         std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-        let parallel = {
-            let n = std::env::var("TRANSLATE_PARALLEL")
-                .ok()
-                .map_or(f64::NAN, |v| crate::api::js_number(&v));
-            let n = if n.is_nan() || n == 0.0 { 2.0 } else { n };
-            js::max(1.0, js::min(8.0, n.trunc()))
-        };
+        // Même valeur que les lots envoyés en même temps (une seule lecture).
+        let parallel = super::commentary_ai::translate_parallel() as f64;
         let bin = embedded_paths().ollama;
-        let mut child = Command::new(&bin)
+        let mut cmd = Command::new(&bin);
+        if let Some(d) = cuda_device("OLLAMA_CUDA_DEVICE") {
+            cmd.env("CUDA_VISIBLE_DEVICES", d);
+        }
+        let mut child = cmd
             .arg("serve")
             .env("OLLAMA_HOST", s.base.trim_start_matches("http://"))
             .env("OLLAMA_MODELS", &models)
             .env("HOME", &home)
             .env("OLLAMA_NUM_PARALLEL", js_number_string(parallel))
-            .env(
-                "OLLAMA_CONTEXT_LENGTH",
-                env_or("OLLAMA_CONTEXT_LENGTH", || "4096".into()),
-            )
+            .env("OLLAMA_CONTEXT_LENGTH", ollama_num_ctx().to_string())
             .env("OLLAMA_KEEP_ALIVE", "10m")
             // Mémoire : un seul modèle chargé, attention « flash » et cache
             // des clés/valeurs en 8 bits (moitié moins de mémoire du contexte,
@@ -640,7 +708,13 @@ impl OllamaSession {
                 } else {
                     "processeur (aucun GPU détecté)"
                 };
-                println!("[commentaires] Ollama embarqué prêt ({gpu})");
+                let card = cuda_device("OLLAMA_CUDA_DEVICE")
+                    .map(|d| format!(", carte {d}"))
+                    .unwrap_or_default();
+                println!(
+                    "[commentaires] Ollama embarqué prêt ({gpu}{card}, contexte {})",
+                    ollama_num_ctx()
+                );
                 return Ok(s);
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -756,12 +830,42 @@ impl OllamaSession {
         let req = ai_client()
             .post(format!("{}/api/generate", self.base))
             .header("Content-Type", TEXT_PLAIN)
-            .body(json!({ "model": name, "prompt": "", "stream": false }).to_string())
+            .body(
+                json!({
+                    "model": name,
+                    "prompt": "",
+                    "stream": false,
+                    "options": { "num_ctx": ollama_num_ctx() },
+                })
+                .to_string(),
+            )
             .timeout(Duration::from_secs(180))
             .send();
         tokio::select! {
             _ = req => {}
             _ = wait_aborted(signal) => {}
+        }
+    }
+
+    /// Journalise la place du modèle chargé (`/api/ps`) : tout sur la carte,
+    /// ou une part débordée dans la RAM (traduction alors bien plus lente).
+    pub async fn log_gpu_usage(&self, name: &str) {
+        let res = ai_client()
+            .get(format!("{}/api/ps", self.base))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await;
+        let Ok(res) = res else { return };
+        let Some(v) = res
+            .text()
+            .await
+            .ok()
+            .and_then(|t| crate::jsval::js_parse(&t))
+        else {
+            return;
+        };
+        if let Some(line) = gpu_usage_line(&v, name) {
+            println!("[ollama] {line}");
         }
     }
 
@@ -788,6 +892,52 @@ impl Drop for OllamaSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fenetre_de_contexte_unique() {
+        let _g = crate::media::ENV_LOCK.blocking_lock();
+        let saved = crate::media::set_env(&[("OLLAMA_CONTEXT_LENGTH", None)]);
+        assert_eq!(ollama_num_ctx(), 8192);
+        std::env::set_var("OLLAMA_CONTEXT_LENGTH", "12288");
+        assert_eq!(ollama_num_ctx(), 12288);
+        for bad in ["512", "abc", "999999", ""] {
+            std::env::set_var("OLLAMA_CONTEXT_LENGTH", bad);
+            assert_eq!(ollama_num_ctx(), 8192, "{bad}");
+        }
+        crate::media::restore_env(saved);
+    }
+
+    #[test]
+    fn carte_de_whisper() {
+        let _g = crate::media::ENV_LOCK.blocking_lock();
+        let saved = crate::media::set_env(&[("WHISPER_CUDA_DEVICE", None)]);
+        let tmp = tempfile::tempdir().unwrap();
+        let cuda = |env: Vec<(String, String)>| {
+            env.into_iter()
+                .find(|(k, _)| k == "CUDA_VISIBLE_DEVICES")
+                .map(|(_, v)| v)
+        };
+        assert_eq!(cuda(worker_env(tmp.path())), None); // hérite du conteneur
+        std::env::set_var("WHISPER_CUDA_DEVICE", " 1 ");
+        assert_eq!(cuda(worker_env(tmp.path())).as_deref(), Some("1"));
+        crate::media::restore_env(saved);
+    }
+
+    #[test]
+    fn place_du_modele_sur_la_carte() {
+        let ps = json!({ "models": [
+            { "name": "gemma4:12b", "size": 9.1e9, "size_vram": 9.1e9, "context_length": 8192 },
+            { "name": "autre", "size": 4e9, "size_vram": 1e9 },
+        ] });
+        assert_eq!(
+            gpu_usage_line(&ps, "gemma4:12b").as_deref(),
+            Some("gemma4:12b : 9.1 Go sur la carte / 9.1 Go (100 %), contexte 8192")
+        );
+        let l = gpu_usage_line(&ps, "autre").unwrap();
+        assert!(l.contains("(25 %)") && l.contains("déborde"), "{l}");
+        assert_eq!(gpu_usage_line(&ps, "absent"), None);
+        assert_eq!(gpu_usage_line(&json!({}), "gemma4:12b"), None);
+    }
 
     #[test]
     fn modeles_retires_effaces() {

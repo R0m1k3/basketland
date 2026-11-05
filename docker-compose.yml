@@ -11,8 +11,12 @@ services:
     environment:
       TZ: Europe/Paris
       NVIDIA_VISIBLE_DEVICES: all
-      # Carte utilisée, numéro de `nvidia-smi` : 0 (RTX 5060 Ti), 1 (RTX 3060).
-      CUDA_VISIBLE_DEVICES: '0'
+      # Cartes visibles, numéros de `nvidia-smi` : 0 (RTX 5060 Ti), 1 (RTX 3060).
+      CUDA_VISIBLE_DEVICES: '0,1'
+      # Une carte chacun : traduction (Ollama) sur la 5060 Ti, transcription
+      # (Whisper) sur la 3060 ; le modèle de traduction a la sienne en entier.
+      OLLAMA_CUDA_DEVICE: '0'
+      WHISPER_CUDA_DEVICE: '1'
       # Jeton d'accès à /api/ingest (les jobs de synchronisation).
       # À définir dans l'UI Unraid ; sinon un jeton est généré dans /data.
       INGEST_TOKEN: ${INGEST_TOKEN:-}

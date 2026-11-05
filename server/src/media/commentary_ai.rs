@@ -21,6 +21,7 @@ use super::basket_jargon::{jargon_in, strip_jargon};
 use super::commentary_cues::{parse_verbose_json, Transcript};
 use super::local_ai::{
     ai_client, embedded_ollama_available, embedded_ollama_url, embedded_whisper_available,
+    ollama_num_ctx,
 };
 use super::roster_names::{name_rendered, roster_names_in, RosterIndex};
 use crate::api::js_num_value;
@@ -1355,7 +1356,7 @@ pub fn chat_body(
         b.insert("keep_alive".into(), Value::from("10m"));
         b.insert(
             "options".into(),
-            json!({ "temperature": t, "top_p": 0.9, "num_ctx": 4096, "num_predict": 1200, "stop": ["<end_of_turn>"] }),
+            json!({ "temperature": t, "top_p": 0.9, "num_ctx": ollama_num_ctx(), "num_predict": 1200, "stop": ["<end_of_turn>"] }),
         );
     } else if native {
         b.insert("messages".into(), messages);
@@ -1372,7 +1373,7 @@ pub fn chat_body(
         }
         b.insert(
             "options".into(),
-            json!({ "temperature": t, "top_p": 0.9, "num_ctx": 4096, "num_predict": 1200 }),
+            json!({ "temperature": t, "top_p": 0.9, "num_ctx": ollama_num_ctx(), "num_predict": 1200 }),
         );
     } else if cfg.translate_provider == TranslateProvider::Openai {
         b.insert("messages".into(), messages);
@@ -1442,6 +1443,20 @@ fn warn_if_thinking(d: Option<&Value>, model: &str) {
     }
 }
 
+/// Modèle rechargé pendant une requête (`load_duration` > 1 s) : un
+/// `num_ctx` différent du préchargement, ou un modèle sorti de la mémoire.
+fn log_reload(d: Option<&Value>, model: &str) {
+    let ns = js::prop(d, "load_duration")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    if ns > 1e9 {
+        eprintln!(
+            "[commentaires] {model} rechargé pendant une traduction ({:.1} s)",
+            ns / 1e9
+        );
+    }
+}
+
 /// `chatCompletion` : appel brut au LLM ; [`ServiceError`] si le serveur ne
 /// répond pas correctement. Réponse vide ou mal formée : `''` (le lot sera retenté).
 pub async fn chat_completion(
@@ -1461,7 +1476,7 @@ pub async fn chat_completion(
     let minimax = cfg.translate_provider == TranslateProvider::Minimax;
     let online = minimax || cfg.translate_provider == TranslateProvider::Openai;
     let mut last = String::new();
-    for _attempt in 0..2 {
+    for attempt in 0..2 {
         if is_aborted(signal) {
             return Err(ServiceError::new(
                 "traduction interrompue",
@@ -1484,6 +1499,14 @@ pub async fn chat_completion(
                 if is_aborted(signal) {
                     break;
                 }
+                // Échec silencieux jusqu'ici : un délai dépassé (300 s par
+                // défaut) coûtait 5 min par lot sans aucune trace.
+                eprintln!(
+                    "[commentaires] requête de traduction échouée ({}, essai {}/2, délai {} s) : {why}",
+                    cfg.translate_model,
+                    attempt + 1,
+                    timeout.as_secs()
+                );
                 sleep(ms(o.retry_delay, 3000), signal).await;
                 continue;
             }
@@ -1521,6 +1544,7 @@ pub async fn chat_completion(
             }
             if native {
                 warn_if_thinking(d, &cfg.translate_model);
+                log_reload(d, &cfg.translate_model);
             }
             let content = if raw {
                 js::prop(d, "response")
@@ -1553,6 +1577,10 @@ pub async fn chat_completion(
         if status < 500 && status != 429 {
             break;
         }
+        eprintln!(
+            "[commentaires] requête de traduction refusée (essai {}/2) : {last}",
+            attempt + 1
+        );
         sleep(
             ms(o.retry_delay, if status == 429 { 10_000 } else { 3000 }),
             signal,
@@ -2101,6 +2129,33 @@ pub async fn translate_batch_mt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Préfixe stable d'un lot à l'autre (cache de prompt d'Ollama) : match et
+    /// joueurs d'abord, puis ce qui change (jargon, contexte, lignes). Repose
+    /// sur `preserve_order` de serde_json.
+    #[test]
+    fn prefixe_stable_du_message() {
+        let roster = super::super::roster_names::roster_index(&["Nikola Jokic", "Jamal Murray"]);
+        let lines = [TranslateLine {
+            i: 7,
+            en: "Pick-and-roll for Jokic".into(),
+            strong: false,
+        }];
+        let m = build_user_message(
+            &lines,
+            &["Murray brings it up.".to_string()],
+            "gemma4:12b",
+            Some(&roster),
+            Some("Nuggets @ Lakers"),
+        );
+        let pos = |k: &str| {
+            m.find(&format!("\"{k}\":"))
+                .unwrap_or_else(|| panic!("{k} : {m}"))
+        };
+        assert!(pos("match") < pos("joueurs"));
+        assert!(pos("joueurs") < pos("context"));
+        assert!(pos("context") < pos("lines"));
+    }
 
     #[test]
     fn hunyuan_mt_pilote_comme_un_modele_de_traduction() {

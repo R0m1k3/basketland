@@ -25,7 +25,10 @@ use std::time::Duration;
 
 static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-const ENV_KEYS: [&str; 28] = [
+const ENV_KEYS: [&str; 31] = [
+    "OLLAMA_CUDA_DEVICE",
+    "WHISPER_CUDA_DEVICE",
+    "OLLAMA_CONTEXT_LENGTH",
     "WHISPER_BEAM_SIZE",
     "TRANSCRIBE_URL",
     "TRANSLATE_URL",
@@ -570,7 +573,7 @@ async fn ollama_embarque_api_native() {
     let b0: Value = serde_json::from_str(&reqs[0].body).unwrap();
     assert_eq!(
         b0["options"],
-        json!({ "temperature": 0.2, "top_p": 0.9, "num_ctx": 4096, "num_predict": 1200 })
+        json!({ "temperature": 0.2, "top_p": 0.9, "num_ctx": 8192, "num_predict": 1200 })
     );
     assert_eq!(b0["format"]["required"], json!(["t"]));
     // Gemma 4 réfléchit par défaut sous Ollama : coupé (lent, réponse tronquée).
@@ -1223,6 +1226,7 @@ async fn ollama_embarque_cycle_de_vie() {
     set("OLLAMA_PORT", free_port().to_string());
     set("MODELS_DIR", dir.path().join("models"));
     set("TRANSLATE_PARALLEL", "3.7");
+    set("OLLAMA_CUDA_DEVICE", "0");
     let s = OllamaSession::open(Some(Duration::from_secs(20)))
         .await
         .unwrap();
@@ -1242,8 +1246,10 @@ async fn ollama_embarque_cycle_de_vie() {
             v["context"].as_str(),
             v["keep"].as_str()
         ),
-        (Some("3"), Some("4096"), Some("10m"))
+        (Some("3"), Some("8192"), Some("10m"))
     );
+    // Carte imposée à Ollama seul (OLLAMA_CUDA_DEVICE).
+    assert_eq!(v["cuda"].as_str(), Some("0"));
     assert_eq!(
         v["models"],
         json!(dir.path().join("models/ollama").to_string_lossy())

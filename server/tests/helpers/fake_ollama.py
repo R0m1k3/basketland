@@ -41,7 +41,8 @@ class H(BaseHTTPRequestHandler):
                                                 "parallel": os.environ.get("OLLAMA_NUM_PARALLEL"),
                                                 "models": os.environ.get("OLLAMA_MODELS"),
                                                 "context": os.environ.get("OLLAMA_CONTEXT_LENGTH"),
-                                                "keep": os.environ.get("OLLAMA_KEEP_ALIVE")})])
+                                                "keep": os.environ.get("OLLAMA_KEEP_ALIVE"),
+                                                "cuda": os.environ.get("CUDA_VISIBLE_DEVICES")})])
         if self.path == "/api/show":
             return self.reply(200 if state["pulled"] else 404, ["{}" if state["pulled"] else '{"error":"model not found"}'])
         if self.path == "/api/pull":
