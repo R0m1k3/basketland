@@ -806,6 +806,23 @@ impl Commentary {
         self.viewers().touch_at(match_id, t, self.now());
     }
 
+    /// [`Self::touch_viewer`] ; `admin` : signe de vie d'un administrateur
+    /// (sa lecture peut interrompre une demande explicite).
+    pub fn touch_viewer_by(&self, match_id: i64, t: Option<f64>, admin: bool) {
+        self.viewers().touch_by_at(match_id, t, self.now(), admin);
+    }
+
+    /// Un administrateur lit un AUTRE match que `except` : seule raison pour
+    /// laquelle une demande explicite cède sa place (une fiche simplement
+    /// ouverte, un replay trouvé ou la lecture d'un autre utilisateur, non).
+    pub fn admin_playing_other(&self, except: i64) -> bool {
+        let now = self.now();
+        let v = self.viewers();
+        v.active_ids_at(now)
+            .into_iter()
+            .any(|id| id != except && v.admin_playing_at(id, now))
+    }
+
     /// `viewerActive`, à l'heure du service.
     pub fn viewer_active(&self, id: i64) -> bool {
         self.viewers().active_at(id, self.now())
@@ -1102,29 +1119,38 @@ impl Commentary {
         }
     }
 
-    /// `preemptBackground` : un match regardé passe devant un travail de
-    /// FOND (ou explicite dont la fiche n'est plus regardée, ou dont la fiche
-    /// a été quittée — `viewerGone`) : celui-ci est interrompu puis remis en
-    /// file juste derrière, sans compter comme un échec.
+    /// `preemptBackground` : un match demandé depuis sa fiche (ou dont le
+    /// replay vient d'être trouvé) passe devant un travail de FOND, ou d'une
+    /// fiche quittée (`viewerGone`) : celui-ci est interrompu puis remis en
+    /// file juste derrière, sans compter comme un échec. Un travail EXPLICITE
+    /// ne cède qu'à un match en file qu'un administrateur est en train de lire.
     fn preempt_background(&self) {
         let now = self.now();
         let mut st = self.st();
-        let watched = st.queue.iter().find(|j| j.viewer).map(|j| j.match_id);
+        let explicit = st.running.as_ref().is_some_and(|r| r.job.explicit());
+        let watched = st
+            .queue
+            .iter()
+            .find(|j| j.viewer && (!explicit || self.viewers().admin_playing_at(j.match_id, now)))
+            .map(|j| j.match_id);
         let Some(watched) = watched else { return };
         let Some(r) = st.running.as_mut() else { return };
         if r.preempted {
             return;
         }
         let id = r.job.match_id;
-        let yields = !r.job.viewer
-            || (r.job.explicit() && !self.viewers().active_at(id, now))
-            || self.viewers().gone_at(id, now);
+        let yields = explicit || !r.job.viewer || self.viewers().gone_at(id, now);
         if !yields {
             return;
         }
         r.preempted = true;
+        let why = if explicit {
+            "un administrateur le lit"
+        } else {
+            "demandé depuis sa fiche ou replay trouvé"
+        };
         println!(
-            "[commentaires] match {id} mis en pause : le match {watched} est regardé, il passe en premier"
+            "[commentaires] match {id} mis en pause : le match {watched} passe en premier ({why})"
         );
         r.signal.abort();
     }
@@ -1159,10 +1185,12 @@ impl Commentary {
 
     /// `mustWait` : travail de fond (ou explicite, fiche fermée) qui attend :
     /// quelqu'un regarde un autre match.
+    /// Un travail explicite n'attend que si un administrateur lit un autre match.
     fn must_wait(&self, job: &Job) -> bool {
-        (!job.viewer || job.explicit())
-            && !self.viewer_active(job.match_id)
-            && self.someone_watching(job.match_id)
+        if job.explicit() {
+            return !self.viewer_active(job.match_id) && self.admin_playing_other(job.match_id);
+        }
+        !job.viewer && !self.viewer_active(job.match_id) && self.someone_watching(job.match_id)
     }
 
     fn schedule_repump(&self) {
@@ -1289,12 +1317,17 @@ impl Commentary {
         let up = move || w.upgrade().map(Commentary);
         let (u1, u2, u3, u4) = (up.clone(), up.clone(), up.clone(), up);
         CommentaryControl {
-            // Un travail de fond cède la place dès que quelqu'un regarde un AUTRE match.
+            // Un travail de fond cède la place dès que quelqu'un regarde un
+            // AUTRE match ; un travail explicite, seulement quand un
+            // administrateur lit un autre match.
             keep_going: Arc::new(move || {
                 u1().is_some_and(|c| {
                     c.viewer_active(id)
-                        || ((explicit.load(Ordering::SeqCst) || (!viewer && c.in_night_window()))
-                            && !c.someone_watching(id))
+                        || if explicit.load(Ordering::SeqCst) {
+                            !c.admin_playing_other(id)
+                        } else {
+                            !viewer && c.in_night_window() && !c.someone_watching(id)
+                        }
                 })
             }),
             target: Arc::new(move || u2().and_then(|c| c.viewer_position(id)).unwrap_or(0.0)),

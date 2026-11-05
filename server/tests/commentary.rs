@@ -1132,9 +1132,11 @@ async fn travail_de_fond_cede_la_place_a_une_lecture_puis_reprend() {
     assert_eq!(t.svc.status(D).status, "ready");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn demande_explicite_jusqu_au_bout_fiche_fermee_et_hors_fenetre() {
-    let _g = LOCK.lock().await;
+/// Demande explicite pendant laquelle, au 1er tronçon, `watch` s'exécute
+/// (quelqu'un ouvre ou lit un autre match) ; renvoie le service et les appels.
+async fn explicite_avec(
+    watch: impl Fn(&basketland_server::media::commentary::Commentary) + Send + Sync + 'static,
+) -> (T, CallsRef) {
     let t = ondemand();
     set_env("COMMENTARY_NIGHT_WINDOW", "off");
     set_env("COMMENTARY_VIEWER_IDLE_MS", "60000");
@@ -1147,21 +1149,69 @@ async fn demande_explicite_jusqu_au_bout_fiche_fermee_et_hors_fenetre() {
         let mut w = watched.lock().unwrap();
         if idx == 0 && !*w {
             *w = true;
-            svc.touch_viewer(OTHER, Some(10.0));
+            watch(&svc);
         }
     }));
     t.svc.set_runner(Some(t.svc.runner_with(deps)));
     t.svc.enqueue(D, opts(true, false, true)); // personne ne regarde la fiche de D
+    (t, calls)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn demande_explicite_jusqu_au_bout_fiche_fermee_et_hors_fenetre() {
+    let _g = LOCK.lock().await;
+    // Un autre match ouvert, et même lu par un utilisateur non administrateur
+    // (cas du 05/11 : arrêt à 35 %) : la demande explicite va au bout, sans pause.
+    let (t, calls) = explicite_avec(|svc| {
+        svc.touch_viewer(OTHER, Some(10.0));
+        svc.touch_viewer_by(OTHER, Some(30.0), false);
+    })
+    .await;
+    t.svc.idle().await;
+    assert_eq!(calls.lock().unwrap().transcribe, vec![0, 1, 2]);
+    assert_eq!(t.svc.status(D).status, "ready");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn demande_explicite_cede_a_la_lecture_d_un_administrateur() {
+    let _g = LOCK.lock().await;
+    let (t, calls) = explicite_avec(|svc| {
+        svc.touch_viewer_by(OTHER, Some(10.0), true);
+        svc.touch_viewer_by(OTHER, Some(30.0), true); // la position avance : lecture
+    })
+    .await;
     wait_for("1er tronçon", || {
         calls.lock().unwrap().transcribe == vec![0]
     })
     .await;
-    // Cède la place à la lecture de l'autre match : remis en file, pas abandonné.
+    // Cède la place à la lecture de l'administrateur : remis en file, pas abandonné.
     wait_for("en file", || t.svc.status(D).status == "queued").await;
+    assert!(t.svc.record(D).is_none());
     t.clock.advance_ms(10 * 60_000);
     t.svc.idle().await;
     assert_eq!(calls.lock().unwrap().transcribe, vec![0, 1, 2]);
     assert_eq!(t.svc.status(D).status, "ready");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_trouve_n_interrompt_pas_une_demande_explicite() {
+    let _g = LOCK.lock().await;
+    let t = setup(&[A, B, C]);
+    let g = Gated::default();
+    t.svc.set_runner(Some(g.runner(true, None)));
+    t.svc.enqueue(A, opts(true, false, true)); // « Sous-titrer ce match », fiche fermée ensuite
+    assert_eq!(g.started(), vec![A]);
+    // Replay de B trouvé (fiche de B restée ouverte dans un onglet) : en tête de file, sans interrompre A.
+    t.svc.touch_viewer(B, Some(0.0));
+    t.svc.prioritize_on_view(B);
+    t.svc.nudge(B);
+    assert_eq!(t.svc.status(A).status, "running");
+    assert_eq!(t.svc.queue_position(B), Some(1));
+    g.resolve(A, ok("ok"));
+    wait_for("B démarre", || g.started() == vec![A, B]).await;
+    g.resolve(B, ok("ok"));
+    t.svc.idle().await;
+    assert!(t.svc.record(A).unwrap().ok);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

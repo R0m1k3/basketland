@@ -22,6 +22,9 @@ struct Viewer {
     t: f64,
     /// Dernière fois que la position a avancé (lecture).
     moved_at: Option<f64>,
+    /// Dernière fois que la position a avancé sous la session d'un
+    /// administrateur : seule cette lecture interrompt une demande explicite.
+    admin_moved_at: Option<f64>,
 }
 
 /// Instant courant (ms depuis l'époque), comme `Date.now()`.
@@ -77,6 +80,11 @@ impl Viewers {
     /// `touchViewer` : signe de vie (position en secondes si connue ; `None` =
     /// `undefined`/`null`). Une position qui change d'au moins 1 s : la vidéo est lue.
     pub fn touch_at(&self, match_id: i64, t: Option<f64>, now: f64) {
+        self.touch_by_at(match_id, t, now, false);
+    }
+
+    /// [`Self::touch_at`] ; `admin` : signe de vie envoyé par un administrateur.
+    pub fn touch_by_at(&self, match_id: i64, t: Option<f64>, now: f64, admin: bool) {
         let mut m = self.map.lock().unwrap_or_else(|e| e.into_inner());
         let prev = m.get(&match_id).copied();
         let pos = match t {
@@ -89,12 +97,18 @@ impl Viewers {
         } else {
             prev.and_then(|p| p.moved_at)
         };
+        let admin_moved_at = if moved && admin {
+            Some(now)
+        } else {
+            prev.and_then(|p| p.admin_moved_at)
+        };
         m.insert(
             match_id,
             Viewer {
                 at: now,
                 t: pos,
                 moved_at,
+                admin_moved_at,
             },
         );
     }
@@ -107,6 +121,14 @@ impl Viewers {
     pub fn playing_at(&self, match_id: i64, now: f64) -> bool {
         self.get(match_id).is_some_and(|v| {
             now - v.at < viewer_idle_ms() && v.moved_at.is_some_and(|m| now - m < PLAYING_MS)
+        })
+    }
+
+    /// Vidéo lue par un administrateur : actif ET position avancée par lui
+    /// depuis moins d'une minute.
+    pub fn admin_playing_at(&self, match_id: i64, now: f64) -> bool {
+        self.get(match_id).is_some_and(|v| {
+            now - v.at < viewer_idle_ms() && v.admin_moved_at.is_some_and(|m| now - m < PLAYING_MS)
         })
     }
 
@@ -183,6 +205,25 @@ impl Viewers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lecture_d_un_administrateur() {
+        let v = Viewers::default();
+        let now = 1_800_000_000_000.0;
+        // Lecture par un utilisateur : lue, mais pas par un administrateur.
+        v.touch_by_at(1, Some(0.0), now, false);
+        v.touch_by_at(1, Some(20.0), now + 20_000.0, false);
+        assert!(v.playing_at(1, now + 20_000.0));
+        assert!(!v.admin_playing_at(1, now + 20_000.0));
+        // Fiche ouverte par un administrateur sans lecture (position fixe) : non plus.
+        v.touch_by_at(2, Some(5.0), now, true);
+        v.touch_by_at(2, Some(5.0), now + 20_000.0, true);
+        assert!(!v.admin_playing_at(2, now + 20_000.0));
+        // Position qui avance sous une session administrateur : oui, pendant une minute.
+        v.touch_by_at(2, Some(25.0), now + 40_000.0, true);
+        assert!(v.admin_playing_at(2, now + 40_000.0));
+        assert!(!v.admin_playing_at(2, now + 101_000.0));
+    }
 
     #[test]
     fn lecture_en_cours_ou_en_pause() {

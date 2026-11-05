@@ -95,9 +95,10 @@ pub async fn subtitles(
             Err(r) => return r,
         };
         let id = m.id;
+        let admin = require_admin(&st, &headers).await.is_ok();
         let r = blocking(&st, move |md| {
             let c = &md.commentary;
-            c.touch_viewer(id, t.is_finite().then_some(t));
+            c.touch_viewer_by(id, t.is_finite().then_some(t), admin);
             // En file derrière le match d'une fiche quittée : celui-ci cède la place.
             c.nudge(id);
             (c.served_cues(id), c.status(id).to_json())
@@ -432,7 +433,16 @@ pub async fn watching(
             })
             .and_then(|v| v.get("t").and_then(Value::as_f64))
             .filter(|t| t.is_finite());
-        if let Err(r) = blocking(&st, move |md| md.commentary.touch_viewer(id, t)).await {
+        let admin = require_admin(&st, &headers).await.is_ok();
+        if let Err(r) = blocking(&st, move |md| {
+            let c = &md.commentary;
+            c.touch_viewer_by(id, t, admin);
+            // Lecture d'un administrateur : un travail explicite en cours
+            // sur un autre match cède la place si celui-ci est en file.
+            c.nudge(id);
+        })
+        .await
+        {
             return r;
         }
         StatusCode::NO_CONTENT.into_response()
