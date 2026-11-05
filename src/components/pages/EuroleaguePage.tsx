@@ -137,7 +137,7 @@ function Rounds({ games, today, empty }: { games: EuroGame[]; today: string; emp
     else r.days.push({ key: g.day_paris, games: [g] });
   }
   return (
-    <div className="max-w-3xl space-y-8">
+    <div className="space-y-8">
       {rounds.map((r) => (
         <section key={r.label} aria-label={r.label} className="space-y-4">
           <h2 className="section-title">{r.label}</h2>
@@ -149,7 +149,8 @@ function Rounds({ games, today, empty }: { games: EuroGame[]; today: string; emp
                   <span className="font-display text-lg font-bold uppercase tracking-wide">{longDate(day.key)}</span>
                   {['Aujourd\'hui', 'Demain', 'Hier'].includes(rel) && <span className="chip-flame">{rel}</span>}
                 </h3>
-                <ol className="space-y-2">
+                {/* Deux colonnes dès l'écran large : la page garde toute sa largeur. */}
+                <ol className="grid gap-2.5 lg:grid-cols-2">
                   {day.games.map((g) => (
                     <li key={g.code} className="animate-fade-up">
                       <GameCard game={g} />
@@ -187,9 +188,12 @@ function GameCard({ game }: { game: EuroGame }) {
   const awayWin = done && (away.score as number) > (home.score as number);
   const scope = `el-${game.code}`;
   return (
-    <div data-scope={scope} className="panel grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-3 py-3 sm:px-5">
+    <div
+      data-scope={scope}
+      className="panel grid h-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-3 py-3 sm:px-5"
+    >
       <Side club={home} align="right" win={homeWin} lose={awayWin} />
-      <div className="flex min-w-[5.5rem] flex-col items-center gap-1 text-center">
+      <div className="flex w-[8.5rem] flex-col items-center gap-1 text-center">
         {done ? (
           <>
             <span className="spoil-show num whitespace-nowrap text-2xl font-bold">
@@ -210,14 +214,10 @@ function GameCard({ game }: { game: EuroGame }) {
         ) : (
           <span className="num text-xl font-bold text-paper">{game.time_paris}</span>
         )}
+        {/* Chaîne et différé pour un match à venir, diffuseur seul ensuite (comme `GameBadges`). */}
+        <TvBadges tv={game.tv_fr} size="sm" short={game.status === 'pending' || game.status === 'final'} />
       </div>
       <Side club={away} align="left" win={awayWin} lose={homeWin} />
-      {game.tv_fr?.length ? (
-        <div className="col-span-3 flex flex-wrap justify-center gap-1.5">
-          {/* Chaîne et différé pour un match à venir, diffuseur seul ensuite (comme `GameBadges`). */}
-          <TvBadges tv={game.tv_fr} size="sm" short={game.status === 'pending' || game.status === 'final'} />
-        </div>
-      ) : null}
     </div>
   );
 }
