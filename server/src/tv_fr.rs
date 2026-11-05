@@ -7,12 +7,15 @@
 //!   un direct ; plus tard, un différé. Le résultat est écrit dans la colonne
 //!   `matches.tv_fr` (liste JSON) et conservé une fois le match passé (le
 //!   guide ne garde pas les jours écoulés).
-//! - **Prime Video** : en France, Prime Video diffuse les matchs de son
-//!   affiche américaine (vendredis de NBA Cup, phase finale de la NBA Cup,
-//!   play-in…) : un match dont les diffuseurs ESPN citent « Prime Video » est
-//!   annoncé sur Prime Video, comme les matchs de saison régulière joués en
-//!   Europe (Paris, Londres, Berlin, Manchester), exclusifs Prime Video en
-//!   France. Calculé à la lecture ([`tv_fr_json`]), rien n'est stocké.
+//! - **beIN SPORTS, Euroleague** : programmes « Euroligue » du même guide,
+//!   appariés aux matchs de la saison Euroleague (voir [`apply_euro`]) ;
+//!   résultat dans `kv_cache`, clé `tv_fr:euroleague:<saison>`.
+//! - **Prime Video** : un match est annoncé sur Prime Video si les
+//!   diffuseurs ESPN citent « Prime Video » (affiche américaine de Prime,
+//!   aussi diffusée en France), s'il figure dans la programmation de Prime
+//!   Video France ([`crate::prime_fr`], relue chaque jour), ou s'il est joué
+//!   en Europe (Paris, Londres, Berlin, Manchester). Calculé à la lecture
+//!   ([`tv_fr_json`]).
 //!
 //! `BL_TV_GUIDE_URL` : autre adresse du guide (XMLTV, brut ou gzip) ; vide,
 //! la recherche beIN SPORTS est désactivée.
@@ -25,6 +28,7 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime, Utc};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
+use std::sync::Arc;
 
 /// Guide complet de la France métropolitaine (≈ 9 Mo compressé, mis à jour
 /// chaque nuit).
@@ -46,12 +50,18 @@ pub struct Programme {
     pub stop: DateTime<Utc>,
     /// Titre, sous-titre et description, en minuscules.
     pub text: String,
+    /// Titre et sous-titre, normalisés ([`fold`]) : l'affiche, sans la
+    /// description (qui peut citer d'autres équipes).
+    pub head: String,
 }
 
 /// Programmes beIN SPORTS du guide et période qu'il couvre.
 #[derive(Debug, Clone, Default)]
 pub struct Guide {
+    /// Programmes NBA.
     pub programmes: Vec<Programme>,
+    /// Matchs d'Euroligue masculine (75 min ou plus : ni avant-match ni résumé).
+    pub euro: Vec<Programme>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     /// Premier début et dernière fin de programme de chaque chaîne.
@@ -145,29 +155,50 @@ fn unescape(s: &str) -> String {
     out
 }
 
-/// Textes des éléments `<title>`, `<sub-title>` et `<desc>` d'un programme.
-fn texts(block: &str) -> String {
+/// Textes des éléments `<title>` et `<sub-title>` (affiche), puis avec
+/// `<desc>` (texte complet, en minuscules) d'un programme.
+fn texts(block: &str) -> (String, String) {
+    let head = format!(
+        "{}{}",
+        tag_texts(block, "title"),
+        tag_texts(block, "sub-title")
+    );
+    let text = format!("{head}{}", tag_texts(block, "desc")).to_lowercase();
+    (fold(&head), text)
+}
+
+/// Minuscules sans accents (« Panathinaïkos » → « panathinaikos »,
+/// « München » → « munchen », « İstanbul » → « istanbul »).
+pub fn fold(s: &str) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    s.nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ı' { 'i' } else { c })
+        .collect()
+}
+
+/// Textes de tous les éléments `<tag>` d'un programme.
+fn tag_texts(block: &str, tag: &str) -> String {
     let mut out = String::new();
-    for tag in ["title", "sub-title", "desc"] {
-        let open = format!("<{tag}");
-        let close = format!("</{tag}>");
-        let mut rest = block;
-        while let Some(i) = rest.find(&open) {
-            let after = &rest[i + open.len()..];
-            // `<title…>` mais pas `<titlex>`.
-            if !after.starts_with(['>', ' ']) {
-                rest = after;
-                continue;
-            }
-            let Some(gt) = after.find('>') else { break };
-            let body = &after[gt + 1..];
-            let Some(end) = body.find(&close) else { break };
-            out.push_str(&unescape(&body[..end]));
-            out.push(' ');
-            rest = &body[end + close.len()..];
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut rest = block;
+    while let Some(i) = rest.find(&open) {
+        let after = &rest[i + open.len()..];
+        // `<title…>` mais pas `<titlex>`.
+        if !after.starts_with(['>', ' ']) {
+            rest = after;
+            continue;
         }
+        let Some(gt) = after.find('>') else { break };
+        let body = &after[gt + 1..];
+        let Some(end) = body.find(&close) else { break };
+        out.push_str(&unescape(&body[..end]));
+        out.push(' ');
+        rest = &body[end + close.len()..];
     }
-    out.to_lowercase()
+    out
 }
 
 /// Programme NBA (« NBA », pas « WNBA »).
@@ -244,15 +275,32 @@ fn handle(block: &str, g: &mut Guide) {
     let span = g.spans.entry(channel.clone()).or_insert((start, stop));
     span.0 = span.0.min(start);
     span.1 = span.1.max(stop);
-    let text = texts(block);
-    if is_nba(&text) {
-        g.programmes.push(Programme {
-            channel,
-            start,
-            stop,
-            text,
-        });
+    let (head, text) = texts(block);
+    let p = Programme {
+        channel,
+        start,
+        stop,
+        text,
+        head,
+    };
+    // Listes indépendantes : la description d'un match d'Euroligue peut
+    // citer la NBA (l'appariement NBA exige de toute façon deux franchises).
+    if is_euroleague(&p.head, &fold(&p.text)) && p.stop - p.start >= Duration::minutes(75) {
+        g.euro.push(p.clone());
     }
+    if is_nba(&p.text) {
+        g.programmes.push(p);
+    }
+}
+
+/// Programme d'Euroligue masculine : la compétition est citée quelque part
+/// (`text`, normalisé), l'affiche (`head`) n'est ni féminine ni d'EuroCoupe
+/// (une description d'Euroligue peut citer l'EuroCoupe).
+fn is_euroleague(head: &str, text: &str) -> bool {
+    (text.contains("euroligue") || text.contains("euroleague"))
+        && !["feminin", "women", "eurocup", "eurocoupe"]
+            .iter()
+            .any(|w| head.contains(w))
 }
 
 /// Lit le guide, compressé (gzip) ou non.
@@ -281,10 +329,22 @@ pub struct Airing {
 /// programme entre 1 h avant et 30 min après l'heure du match) ; à défaut,
 /// le premier différé (dans les 30 h).
 pub fn airings(guide: &Guide, start: DateTime<Utc>, home: &str, away: &str) -> Vec<Airing> {
+    airings_by(&guide.programmes, start, |p| {
+        mentions(&p.text, home) && mentions(&p.text, away)
+    })
+}
+
+/// Diffusions d'un match parmi `programmes` : ceux que `cites` rattache au
+/// match, avec les fenêtres de [`airings`].
+pub fn airings_by(
+    programmes: &[Programme],
+    start: DateTime<Utc>,
+    cites: impl Fn(&Programme) -> bool,
+) -> Vec<Airing> {
     let mut live: Vec<Airing> = Vec::new();
     let mut later: Option<(DateTime<Utc>, String)> = None;
-    for p in &guide.programmes {
-        if !mentions(&p.text, home) || !mentions(&p.text, away) {
+    for p in programmes {
+        if !cites(p) {
             continue;
         }
         let d = p.start - start;
@@ -362,6 +422,187 @@ pub fn apply_guide(c: &Connection, guide: &Guide) -> rusqlite::Result<(usize, us
     Ok((found, changed))
 }
 
+// ---------------------------------------------------------------- Euroleague
+
+/// Noms des clubs dans le guide (normalisés), par code de l'API Euroleague
+/// (`code`, pas `tvCode`). À revoir à chaque saison : un club absent passe
+/// par [`club_keys`] (nom officiel) et est signalé dans le message du job.
+const EURO_ALIASES: &[(&str, &[&str])] = &[
+    ("ASV", &["asvel", "villeurbanne"]),
+    ("BAR", &["barcelona", "barcelone", "barca"]),
+    ("BAS", &["baskonia", "vitoria"]),
+    ("BES", &["besiktas"]),
+    ("DUB", &["dubai"]),
+    ("HTA", &["hapoel"]),
+    ("IST", &["efes"]),
+    ("MAD", &["real madrid"]),
+    ("MIL", &["milan", "olimpia"]),
+    ("MUN", &["bayern"]),
+    ("OLY", &["olympiacos", "olympiakos"]),
+    ("PAM", &["valencia", "valence"]),
+    ("PAN", &["panathinaikos"]),
+    ("PAR", &["partizan"]),
+    ("PRS", &["paris"]),
+    ("RED", &["crvena", "zvezda", "etoile rouge"]),
+    ("TEL", &["maccabi"]),
+    ("ULK", &["fenerbahce"]),
+    ("VIR", &["virtus"]),
+    ("ZAL", &["zalgiris"]),
+];
+
+/// Mots trop communs pour désigner un club à eux seuls.
+const COMMON_WORDS: &[&str] = &[
+    "basketball",
+    "basket",
+    "istanbul",
+    "belgrade",
+    "athens",
+    "piraeus",
+    "kaunas",
+];
+
+/// Mots désignant un club dans l'affiche d'un programme, et vrai si le club
+/// est hors de [`EURO_ALIASES`] (repli : nom officiel entier, puis ses mots
+/// de 5 lettres ou plus hors [`COMMON_WORDS`]).
+pub fn club_keys(code: &str, full: &str) -> (Vec<String>, bool) {
+    if let Some((_, keys)) = EURO_ALIASES.iter().find(|(c, _)| *c == code) {
+        return (keys.iter().map(|k| k.to_string()).collect(), false);
+    }
+    let name = fold(full);
+    let mut keys = vec![name.clone()];
+    for w in name.split(|c: char| !c.is_alphanumeric()) {
+        if w.chars().count() >= 5 && !COMMON_WORDS.contains(&w) && !keys.iter().any(|k| k == w) {
+            keys.push(w.to_string());
+        }
+    }
+    (keys, true)
+}
+
+fn cites(head: &str, keys: &[String]) -> bool {
+    keys.iter()
+        .any(|k| !k.is_empty() && head.contains(k.as_str()))
+}
+
+/// Applique le guide aux matchs de la saison Euroleague (`games`, format
+/// [`crate::euroleague::parse_games`]) et met à jour `prev`
+/// (`{"<gameCode>": [{name, live}]}`). Même règle que [`apply_guide`] : un
+/// match trouvé est écrit ; un match sans diffusion n'est effacé que si le
+/// guide couvre son direct, sinon ce qu'on savait est gardé. Rend le nombre
+/// de matchs trouvés et les codes des clubs hors de la table de noms.
+pub fn apply_euro(
+    guide: &Guide,
+    games: &[Value],
+    prev: &mut serde_json::Map<String, Value>,
+) -> (usize, Vec<String>) {
+    let mut fallback: Vec<String> = Vec::new();
+    let (Some(from), Some(to)) = (guide.from, guide.to) else {
+        return (0, fallback);
+    };
+    let (lo, hi) = (from.min(to), from.max(to));
+    let mut found = 0;
+    for g in games {
+        let (Some(code), Some(start)) = (
+            g["code"].as_i64(),
+            g["utc"].as_str().and_then(parse_instant),
+        ) else {
+            continue;
+        };
+        if start < lo - Duration::hours(30) || start > hi + Duration::hours(1) {
+            continue;
+        }
+        let mut keys = |side: &str| {
+            let club = &g[side];
+            let c = club["code"].as_str().unwrap_or("");
+            let (k, fb) = club_keys(c, club["full"].as_str().unwrap_or(""));
+            if fb && !fallback.iter().any(|x| x == c) {
+                fallback.push(c.to_string());
+            }
+            k
+        };
+        let (home, away) = (keys("home"), keys("away"));
+        let list = airings_by(&guide.euro, start, |p| {
+            cites(&p.head, &home) && cites(&p.head, &away)
+        });
+        let covered =
+            from <= to && start >= from + Duration::hours(1) && start <= to - Duration::hours(3);
+        let key = code.to_string();
+        if !list.is_empty() {
+            found += 1;
+            let v: Vec<Value> = list
+                .iter()
+                .map(|a| json!({ "name": a.name, "live": a.live }))
+                .collect();
+            prev.insert(key, Value::Array(v));
+        } else if covered {
+            prev.remove(&key);
+        }
+    }
+    (found, fallback)
+}
+
+/// Clé `kv_cache` des diffusions beIN SPORTS d'une saison Euroleague.
+pub fn euro_key(season: &str) -> String {
+    format!("tv_fr:euroleague:{season}")
+}
+
+/// Champ `tv_fr` d'un match Euroleague (même format que les matchs NBA),
+/// `None` sans diffusion connue.
+pub fn euro_tv_json(tv: Option<&Value>, code: Option<i64>) -> Option<Value> {
+    let list = tv?.get(code?.to_string())?.as_array()?;
+    let out: Vec<Value> = list
+        .iter()
+        .filter_map(|a| {
+            Some(json!({
+                "name": a["name"].as_str()?,
+                "kind": "bein",
+                "live": a["live"].as_bool().unwrap_or(true),
+            }))
+        })
+        .collect();
+    (!out.is_empty()).then_some(Value::Array(out))
+}
+
+/// Partie Euroleague du job : saison en cache (sinon lue sur l'API),
+/// diffusions appariées et enregistrées.
+async fn sync_euro(db: &Db, guide: Arc<Guide>) -> Result<String, String> {
+    let season = crate::euroleague::season_code(Utc::now());
+    let games_key = crate::euroleague::cache_key(&season);
+    let k = games_key.clone();
+    let data = match db
+        .run(move |c| db::kv_get_at(c, &k, None, Utc::now()))
+        .await?
+    {
+        Some(v) => v,
+        None => {
+            let v = crate::euroleague::fetch(&season).await?;
+            let (v2, k) = (v.clone(), games_key.clone());
+            db.run(move |c| db::kv_set(c, &k, &v2)).await?;
+            v
+        }
+    };
+    let games: Vec<Value> = data["games"].as_array().cloned().unwrap_or_default();
+    let key = euro_key(&season);
+    db.run(move |c| {
+        let mut map = match db::kv_get_at(c, &key, None, Utc::now())? {
+            Some(Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        let before = Value::Object(map.clone());
+        let (found, fallback) = apply_euro(&guide, &games, &mut map);
+        let after = Value::Object(map);
+        if after != before {
+            db::kv_set(c, &key, &after)?;
+        }
+        let fallback = if fallback.is_empty() {
+            String::new()
+        } else {
+            format!(" (clubs hors table de noms : {})", fallback.join(", "))
+        };
+        Ok(format!("{found} matchs Euroleague diffusés{fallback}"))
+    })
+    .await
+}
+
 /// Client du guide : fichier de plusieurs Mo, délai plus long que l'API.
 fn client() -> &'static reqwest::Client {
     static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
@@ -374,11 +615,14 @@ fn client() -> &'static reqwest::Client {
     })
 }
 
-/// Job `sync-tv-fr` : guide téléchargé, programmes beIN SPORTS appliqués.
+/// Job `sync-tv-fr` : liste Prime Video France relue (une fois par jour),
+/// guide téléchargé, programmes beIN SPORTS appliqués aux matchs NBA et
+/// Euroleague.
 pub async fn sync_tv_fr(db: &Db) -> JobResult {
     run_logged(db, "sync-tv-fr", || async {
+        let prime = crate::prime_fr::refresh(db).await;
         let Some(url) = guide_url() else {
-            return Ok("désactivé (BL_TV_GUIDE_URL vide)".into());
+            return Ok(format!("guide désactivé (BL_TV_GUIDE_URL vide) ; {prime}"));
         };
         let res = client()
             .get(&url)
@@ -393,10 +637,15 @@ pub async fn sync_tv_fr(db: &Db) -> JobResult {
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| format!("guide TV illisible : {e}"))?;
-        let n = guide.programmes.len();
-        let (found, changed) = db.run(move |c| apply_guide(c, &guide)).await?;
+        let guide = Arc::new(guide);
+        let (n, ne) = (guide.programmes.len(), guide.euro.len());
+        let g = guide.clone();
+        let (found, changed) = db.run(move |c| apply_guide(c, &g)).await?;
+        let euro = sync_euro(db, guide)
+            .await
+            .unwrap_or_else(|e| format!("Euroleague non mise à jour : {e}"));
         Ok(format!(
-            "{n} programmes NBA sur beIN SPORTS, {found} matchs diffusés, {changed} mis à jour"
+            "{n} programmes NBA et {ne} d'Euroligue sur beIN SPORTS ; {found} matchs NBA diffusés, {changed} mis à jour ; {euro} ; {prime}"
         ))
     })
     .await
@@ -432,7 +681,11 @@ pub fn tv_fr_json(m: &MatchRow) -> Option<Value> {
     }
     let broadcast = m.broadcast.as_deref().unwrap_or("").to_ascii_lowercase();
     let note = m.competition.as_deref().unwrap_or("");
-    if broadcast.contains("prime video") || european_game(note) {
+    let listed = || {
+        parse_instant(&m.date_utc)
+            .is_some_and(|at| crate::prime_fr::listed(at, &m.away_abbr, &m.home_abbr))
+    };
+    if broadcast.contains("prime video") || european_game(note) || listed() {
         out.push(json!({ "name": "Prime Video", "kind": "prime", "live": true }));
     }
     (!out.is_empty()).then_some(Value::Array(out))
@@ -531,5 +784,206 @@ mod tests {
         assert_eq!(a.len(), 1);
         // Autre affiche : rien.
         assert!(airings(&g, at("2026-11-02T02:30:00.000Z"), "BOS", "LAL").is_empty());
+    }
+
+    /// Extraits réels du guide (2026-11-04/05), durées comprises.
+    const EURO_GUIDE: &str = r#"<tv>
+  <programme start="20261104204500 +0100" stop="20261104223000 +0100" channel="beINSPORTS1.fr">
+    <title lang="fr">Real Madrid / Panathinaïkos</title>
+    <sub-title lang="fr">Euroligue masculine - 10e journée</sub-title>
+    <desc lang="fr">Le Paris Basketball n'est pas à l'affiche.</desc>
+  </programme>
+  <programme start="20261105180000 +0100" stop="20261105194500 +0100" channel="beINSPORTS2.fr">
+    <title lang="fr">Real Madrid / Panathinaïkos</title>
+    <sub-title lang="fr">Euroligue masculine - 10e journée</sub-title>
+  </programme>
+  <programme start="20261105182000 +0100" stop="20261105200500 +0100" channel="beINSPORTSMAX5.fr">
+    <title lang="fr">Anadolu Efes Istanbul / Paris Basketball</title>
+    <sub-title lang="fr">Euroligue masculine - 10e journée</sub-title>
+    <desc lang="fr">Un ancien joueur de NBA mène Paris, passé par l'EuroCoupe.</desc>
+  </programme>
+  <programme start="20261105194500 +0100" stop="20261105200000 +0100" channel="beINSPORTS2.fr">
+    <title lang="fr">Basket-ball : avant-match</title>
+    <sub-title lang="fr">EUROLEAGUE - AVANT MATCH VILLEURBANNE BAYERN</sub-title>
+  </programme>
+  <programme start="20261105200000 +0100" stop="20261105220000 +0100" channel="beINSPORTS2.fr">
+    <title lang="fr">Lyon-Villeurbanne / Bayern Munich</title>
+    <sub-title lang="fr">Euroligue masculine - 10e journée</sub-title>
+  </programme>
+  <programme start="20261106090000 +0100" stop="20261106110000 +0100" channel="beINSPORTS1.fr">
+    <title lang="fr">Basket-ball : Euroligue masculine</title>
+    <sub-title lang="fr">ASVEL Lyon-Villeurbanne / FC Bayern Munchen</sub-title>
+  </programme>
+  <programme start="20261105200000 +0100" stop="20261105220000 +0100" channel="beINSPORTSMAX6.fr">
+    <title lang="fr">Basket-ball : Euroligue féminine</title>
+    <sub-title lang="fr">Fenerbahçe / Valence</sub-title>
+  </programme>
+</tv>"#;
+
+    fn club(code: &str, full: &str) -> Value {
+        json!({ "code": code, "full": full })
+    }
+
+    fn euro_game(code: i64, utc: &str, home: Value, away: Value) -> Value {
+        json!({ "code": code, "utc": utc, "home": home, "away": away })
+    }
+
+    #[test]
+    fn euroligue_masculine_seulement() {
+        let g = parse_guide(EURO_GUIDE.as_bytes()).unwrap();
+        // Avant-match (15 min) et féminines écartés ; un match d'Euroligue
+        // dont la description cite la NBA et l'EuroCoupe reste dans l'Euroligue.
+        assert_eq!(g.euro.len(), 5);
+        assert_eq!(g.programmes.len(), 1);
+        assert_eq!(
+            g.euro[0].head,
+            "real madrid / panathinaikos euroligue masculine - 10e journee "
+        );
+        assert_eq!(
+            fold("Fenerbahçe Dubaï İstanbul München Žalgiris"),
+            "fenerbahce dubai istanbul munchen zalgiris"
+        );
+    }
+
+    #[test]
+    fn libelles_du_guide_et_noms_officiels() {
+        // Noms officiels de l'API (saison E2026) contre libellés réels du guide.
+        let cases = [
+            ("ASV", "LDLC ASVEL Villeurbanne", "ASVEL Lyon-Villeurbanne"),
+            ("ASV", "LDLC ASVEL Villeurbanne", "Lyon-Villeurbanne"),
+            ("MUN", "FC Bayern Munich", "FC Bayern Munchen"),
+            ("PAN", "Panathinaikos AKTOR Athens", "Panathinaïkos"),
+            ("OLY", "Olympiacos Piraeus", "Olympiakos"),
+            ("ULK", "Fenerbahce Tarfin Istanbul", "Fenerbahçe"),
+            ("DUB", "Dubai Basketball", "Dubaï"),
+            ("IST", "Anadolu Efes Istanbul", "Anadolu Efes Istanbul"),
+            ("PRS", "Paris Basketball", "Paris Basketball"),
+            ("MAD", "Real Madrid", "Real Madrid"),
+            ("TEL", "Maccabi Rapyd Tel Aviv", "Maccabi Tel-Aviv"),
+            ("BES", "Besiktas Istanbul", "Besiktas"),
+            ("BAR", "FC Barcelona", "FC Barcelone"),
+            ("PAM", "Valencia Basket", "Valence"),
+            (
+                "RED",
+                "Crvena Zvezda Meridianbet Belgrade",
+                "Etoile Rouge de Belgrade",
+            ),
+        ];
+        for (code, full, label) in cases {
+            let (keys, fb) = club_keys(code, full);
+            assert!(!fb, "{code} dans la table");
+            assert!(cites(&fold(label), &keys), "{code} : « {label} »");
+        }
+        // Les clubs d'Istanbul ne se confondent pas.
+        assert!(!cites(
+            &fold("Anadolu Efes Istanbul"),
+            &club_keys("ULK", "").0
+        ));
+        // Club inconnu : nom officiel, puis ses mots distinctifs.
+        let (keys, fb) = club_keys("MON", "AS Monaco Basket");
+        assert!(fb);
+        assert!(cites(&fold("Monaco / Paris"), &keys));
+        assert!(!cites(&fold("Basket Istanbul"), &keys));
+    }
+
+    #[test]
+    fn diffusions_euroleague_ecrites_par_match() {
+        let g = parse_guide(EURO_GUIDE.as_bytes()).unwrap();
+        let games = vec![
+            // Direct beIN SPORTS 1 (20:45 à Paris) ; rediffusion le lendemain ignorée.
+            euro_game(
+                21,
+                "2026-11-04T19:45:00Z",
+                club("MAD", "Real Madrid"),
+                club("PAN", "Panathinaikos AKTOR Athens"),
+            ),
+            // Programme 5 min après le coup d'envoi : direct.
+            euro_game(
+                22,
+                "2026-11-05T17:15:00Z",
+                club("IST", "Anadolu Efes Istanbul"),
+                club("PRS", "Paris Basketball"),
+            ),
+            // Direct beIN SPORTS 2, l'avant-match ne compte pas.
+            euro_game(
+                23,
+                "2026-11-05T19:00:00Z",
+                club("ASV", "LDLC ASVEL Villeurbanne"),
+                club("MUN", "FC Bayern Munich"),
+            ),
+            // Paris cité seulement dans une description : rien.
+            euro_game(
+                24,
+                "2026-11-04T19:45:00Z",
+                club("MAD", "Real Madrid"),
+                club("PRS", "Paris Basketball"),
+            ),
+            // Hors de la période du guide : gardé tel quel.
+            euro_game(9, "2026-10-01T18:00:00Z", club("ASV", ""), club("PAR", "")),
+        ];
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "9".into(),
+            json!([{ "name": "beIN SPORTS 3", "live": true }]),
+        );
+        map.insert(
+            "24".into(),
+            json!([{ "name": "beIN SPORTS 9", "live": true }]),
+        );
+        let (found, fallback) = apply_euro(&g, &games, &mut map);
+        assert_eq!(found, 3);
+        assert!(fallback.is_empty());
+        assert_eq!(
+            map["21"],
+            json!([{ "name": "beIN SPORTS 1", "live": true }])
+        );
+        assert_eq!(
+            map["22"],
+            json!([{ "name": "beIN SPORTS MAX 5", "live": true }])
+        );
+        assert_eq!(
+            map["23"],
+            json!([{ "name": "beIN SPORTS 2", "live": true }])
+        );
+        assert_eq!(map["9"], json!([{ "name": "beIN SPORTS 3", "live": true }]));
+        // Période commune du guide d'exemple (19:00-19:05 UTC) trop courte
+        // pour couvrir un direct : rien n'est effacé.
+        assert_eq!(g.to.unwrap() - g.from.unwrap(), Duration::minutes(5));
+        assert!(map.contains_key("24"));
+
+        // Champ de la page, au format des matchs NBA.
+        let tv = Value::Object(map);
+        assert_eq!(
+            euro_tv_json(Some(&tv), Some(23)),
+            Some(json!([{ "name": "beIN SPORTS 2", "kind": "bein", "live": true }]))
+        );
+        assert_eq!(euro_tv_json(Some(&tv), Some(99)), None);
+        assert_eq!(euro_tv_json(None, Some(23)), None);
+    }
+
+    #[test]
+    fn match_sans_diffusion_efface_si_le_guide_le_couvre() {
+        let mut g = parse_guide(EURO_GUIDE.as_bytes()).unwrap();
+        g.from = Some(at("2026-11-04T00:00:00.000Z"));
+        g.to = Some(at("2026-11-09T00:00:00.000Z"));
+        let games = vec![euro_game(
+            30,
+            "2026-11-06T19:00:00Z",
+            club("VIR", "Virtus Bologna"),
+            club("ZAL", "Zalgiris Kaunas"),
+        )];
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "30".into(),
+            json!([{ "name": "beIN SPORTS 1", "live": true }]),
+        );
+        let kept = map.clone();
+        // Bornes inversées : rien n'est effacé.
+        let mut inv = g.clone();
+        (inv.from, inv.to) = (g.to, g.from);
+        apply_euro(&inv, &games, &mut map);
+        assert_eq!(map, kept);
+        apply_euro(&g, &games, &mut map);
+        assert!(!map.contains_key("30"));
     }
 }

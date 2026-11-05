@@ -7,7 +7,7 @@ import type { Activity } from '@/lib/activity';
 import type { PublicUser, UserRole } from '@/lib/db';
 import type { StandingRow } from '@/lib/espn';
 import type { Linescore } from '@/lib/linescore';
-import type { MatchDto } from '@/lib/present';
+import type { MatchDto, TvFr } from '@/lib/present';
 import type { DayCount, GameView, TeamRecord } from '@/lib/queries';
 import type { MinimaxSettingsView, OpenAiSettingsView } from '@/lib/settings';
 import type { TeamInfo } from '@/lib/teams';
@@ -228,6 +228,8 @@ export interface EuroGame {
   home: EuroClub & { score: number | null };
   away: EuroClub & { score: number | null };
   venue: string | null;
+  /** Diffusion beIN SPORTS (guide des programmes), absente si inconnue. */
+  tv_fr?: TvFr[];
 }
 
 /** Ligne du classement officiel de l'Euroleague. */

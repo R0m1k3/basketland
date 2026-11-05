@@ -31,6 +31,7 @@ pub mod node;
 pub mod okru;
 pub mod pages;
 pub mod present;
+pub mod prime_fr;
 pub mod proxy;
 pub mod queries;
 pub mod replay;
