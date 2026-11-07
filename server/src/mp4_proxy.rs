@@ -27,7 +27,9 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Taille d'un bloc. ok.ru bride chaque connexion à ≈ 2 Mb/s : un bloc de
 /// 1 Mo arrive en ≈ 4 s (un saut dans la vidéo attend un bloc entier).
@@ -63,6 +65,11 @@ struct Inner {
     /// lecteur part toujours, en plus).
     parallel: usize,
     readahead: u64,
+    /// Dernier bloc envoyé au lecteur (ms depuis `t0`). Un MP4 se lit sur UNE
+    /// longue requête : sans ce repère, le proxy se croyait inactif après
+    /// `VIDEO_CACHE_IDLE_MIN` et vidait le cache en pleine lecture (micro-gels).
+    last_use_ms: AtomicU64,
+    t0: Instant,
 }
 
 /// Morceaux parallèles d'un bloc attendu par le lecteur.
@@ -143,6 +150,8 @@ impl Mp4Cache {
                 windows: HashMap::new(),
             }),
             parallel: parallel.max(1),
+            last_use_ms: AtomicU64::new(0),
+            t0: Instant::now(),
             readahead,
         }))
     }
@@ -152,6 +161,17 @@ impl Mp4Cache {
         let mut st = self.st();
         st.cache.clear();
         st.windows.clear();
+    }
+
+    fn mark_used(&self) {
+        let now = self.0.t0.elapsed().as_millis() as u64;
+        self.0.last_use_ms.store(now, Ordering::Relaxed);
+    }
+
+    /// Millisecondes depuis le dernier bloc envoyé au lecteur.
+    pub fn idle_ms(&self) -> u64 {
+        let now = self.0.t0.elapsed().as_millis() as u64;
+        now.saturating_sub(self.0.last_use_ms.load(Ordering::Relaxed))
     }
 
     fn st(&self) -> std::sync::MutexGuard<'_, State> {
@@ -295,6 +315,7 @@ impl Mp4Cache {
                     return None;
                 }
                 let k = pos / BLOCK;
+                me.mark_used();
                 // Le bloc attendu part d'abord, la fenêtre ensuite.
                 let wanted = me.block(&file, &fetch, k, true);
                 me.read_ahead(&file, &fetch, total, k + 1, k + ahead);
@@ -361,7 +382,30 @@ async fn fetch_split(fetch: &RangeFetch, k: u64) -> Result<(Bytes, u64), String>
 
 #[cfg(test)]
 mod tests {
-    use super::parse_range;
+    use super::*;
+    use futures_util::StreamExt;
+
+    /// Une lecture MP4 tient sur une seule requête : chaque bloc envoyé doit
+    /// compter comme activité, sinon les caches sont vidés en pleine lecture.
+    #[tokio::test]
+    async fn chaque_bloc_envoye_compte_comme_activite() {
+        let total = 3 * BLOCK;
+        let fetch: RangeFetch = Arc::new(move |a, b| {
+            async move {
+                let n = (b.min(total - 1) - a + 1) as usize;
+                Ok((Bytes::from(vec![7u8; n]), total))
+            }
+            .boxed()
+        });
+        let c = Mp4Cache::new(64 << 20, 2, 2);
+        let r = c.serve("f", fetch, Some("bytes=0-")).await.unwrap();
+        let mut body = r.into_body().into_data_stream();
+        assert!(body.next().await.is_some());
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(c.idle_ms() >= 60, "inactif pendant la pause");
+        assert!(body.next().await.is_some());
+        assert!(c.idle_ms() < 60, "bloc suivant envoyé : actif");
+    }
 
     #[test]
     fn plages() {

@@ -811,9 +811,12 @@ impl Video {
         self.0.last_use_ms.store(now, Ordering::Relaxed);
     }
 
+    /// Temps sans lecture : ni requête vidéo, ni bloc MP4 envoyé (un MP4 se
+    /// lit sur une seule longue requête).
     fn idle_ms(&self) -> u64 {
         let now = self.0.t0.elapsed().as_millis() as u64;
         now.saturating_sub(self.0.last_use_ms.load(Ordering::Relaxed))
+            .min(self.0.mp4_blocks.idle_ms())
     }
 
     /// Vide les caches de segments et de blocs MP4 s'ils contiennent quelque
