@@ -717,6 +717,14 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         aria-label="Replay du match"
       />
 
+      {/* Plein écran : sans rien par-dessus la vidéo (barre masquée), Chrome confie la
+          vidéo à la carte graphique (« overlay » matériel) et, sur certains PC, ce qui
+          est dessiné au-dessus — la VF — disparaît. Un voile plein cadre quasi
+          transparent garde la vidéo dans le rendu normal de la page. */}
+      {fullscreen && vfOn && started && (
+        <div className="pointer-events-none absolute inset-0" style={{ background: 'rgba(0,0,0,0.01)' }} aria-hidden="true" />
+      )}
+
       {vfOn && started && (
         <SubtitleOverlay subs={subtitles} lifted={showControls} pos={subPos} voices={voiceColors ? voices : 0} />
       )}
