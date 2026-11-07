@@ -4,7 +4,16 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type HlsType from 'hls.js';
 import type { ErrorData, HlsConfig } from 'hls.js';
 import TeamLogo from '@/components/ui/TeamLogo';
-import { DEFAULT_SUB_DELAY, usePlayback, useScreenLines, voiceClass, voiceCount, type Subtitle } from '@/components/match/playback';
+import {
+  DEFAULT_SUB_DELAY,
+  minReadTime,
+  readDuration,
+  usePlayback,
+  useScreenLines,
+  voiceClass,
+  voiceCount,
+  type Subtitle,
+} from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime, qualityLabel as formatQualityLabel } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
@@ -474,6 +483,47 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
+  // Plein écran natif d'iOS (iPhone) : seule la vidéo est affichée, la VF en
+  // surimpression HTML disparaît. On recopie alors la VF dans une piste texte
+  // de la vidéo, qu'iOS affiche lui-même ; hors de ce mode la piste est coupée
+  // (sinon la VF s'afficherait deux fois).
+  const [nativeFs, setNativeFs] = useState(false);
+  const nativeTrack = useRef<TextTrack | null>(null);
+  const noSpoil = useNoSpoil();
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const on = () => setNativeFs(true);
+    const off = () => setNativeFs(false);
+    v.addEventListener('webkitbeginfullscreen', on);
+    v.addEventListener('webkitendfullscreen', off);
+    return () => {
+      v.removeEventListener('webkitbeginfullscreen', on);
+      v.removeEventListener('webkitendfullscreen', off);
+    };
+  }, []);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !nativeFs || !vfOn || typeof VTTCue === 'undefined') return;
+    // Une piste ajoutée par addTextTrack ne peut pas être retirée : on la réutilise.
+    const track = (nativeTrack.current ??= v.addTextTrack('subtitles', 'Français', 'fr'));
+    for (const c of Array.from(track.cues ?? [])) track.removeCue(c);
+    subtitles.forEach((s, i) => {
+      const start = s.video_ts + subDelay;
+      const next = subtitles[i + 1];
+      // Comme la surimpression : le temps de lire, sans trop chevaucher la ligne suivante.
+      const nextStart = next ? next.video_ts + subDelay : Infinity;
+      const end = Math.min(start + readDuration(s), Math.max(nextStart, start + minReadTime(s)));
+      const cue = new VTTCue(Math.max(0, start), Math.max(start + 0.5, end), noSpoil ? stripScores(s.text) : s.text);
+      if (subPos === 'haut') cue.line = 0;
+      track.addCue(cue);
+    });
+    track.mode = 'showing';
+    return () => {
+      track.mode = 'disabled';
+    };
+  }, [nativeFs, vfOn, subtitles, subDelay, subPos, noSpoil]);
+
   // --- actions
   const play = useCallback(
     (from?: number) => {
@@ -508,7 +558,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     if (!shell) return;
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     else if (shell.requestFullscreen) void shell.requestFullscreen().catch(() => undefined);
-    else v?.webkitEnterFullscreen?.(); // iOS : plein écran natif (sans VF superposée)
+    else v?.webkitEnterFullscreen?.(); // iPhone : plein écran natif, VF recopiée dans une piste texte (voir plus haut)
   }, []);
 
   const toggleMute = useCallback(() => {
