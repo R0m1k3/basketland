@@ -383,7 +383,7 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `MP4_CACHE_MB` | `256` | Cache mémoire des blocs MP4 (32 à 8192) ; doit dépasser la lecture anticipée. |
 | `MP4_QUALITY` | `hd` | Qualité MP4 maximale (`full` 1080p ≈ 6 Mb/s, `hd` 720p ≈ 3,5 Mb/s, `sd` 480p ≈ 1,5 Mb/s…) : ok.ru bride chaque connexion à ≈ 2 Mb/s, le 1080p gelait au moindre ralentissement. |
 | `VIDEO_CACHE_IDLE_MIN` | `5` | Sans lecture depuis ce nombre de minutes, les caches vidéo (segments et blocs MP4) sont vidés et leur mémoire rendue au système. `0` : jamais. |
-| `MP4_PARALLEL` | `12` | Blocs MP4 téléchargés en même temps pour la lecture anticipée (1 à 32) ; le bloc attendu par le lecteur passe toujours devant. |
+| `MP4_PARALLEL` | `12` | Blocs MP4 téléchargés en même temps pour la lecture anticipée (1 à 32), toujours dans l'ordre de lecture : dès qu'un bloc arrive, le premier bloc manquant part. Le bloc attendu par le lecteur passe devant ; au début d'une lecture ou après un saut, les 3 premiers blocs sont téléchargés chacun en 4 morceaux parallèles (≈ 1 s au lieu de 4). |
 | `MP4_READAHEAD_BLOCKS` | `48` | Blocs de 1 Mo lus d'avance (0 à 256 ; 48 ≈ 110 s en 720p). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
