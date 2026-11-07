@@ -285,6 +285,24 @@ pub fn best_mp4(sources: &[Mp4Source]) -> Option<&Mp4Source> {
     sources.iter().min_by_key(|m| mp4_rank(&m.name))
 }
 
+/// MP4 à lire : la meilleure qualité ne dépassant pas `max` (ex. « hd »),
+/// sinon la meilleure disponible. `max` inconnu : la meilleure.
+///
+/// ok.ru bride chaque connexion à ≈ 2 Mb/s : le « full » (1080p, ≈ 6 Mb/s)
+/// demande plusieurs connexions pleines en continu et gèle au moindre
+/// ralentissement, le « hd » (720p, ≈ 3,5 Mb/s) garde de la marge.
+pub fn pick_mp4<'a>(sources: &'a [Mp4Source], max: &str) -> Option<&'a Mp4Source> {
+    let cap = mp4_rank(max);
+    if cap >= MP4_QUALITY_ORDER.len() {
+        return best_mp4(sources);
+    }
+    sources
+        .iter()
+        .filter(|m| mp4_rank(&m.name) >= cap)
+        .min_by_key(|m| mp4_rank(&m.name))
+        .or_else(|| best_mp4(sources))
+}
+
 /// Hôtes autorisés pour les médias (anti-SSRF) : `https` exigé, hôtes de
 /// média réellement servis par ok.ru.
 pub fn is_allowed_media_host(url: &str) -> bool {
@@ -415,6 +433,20 @@ mod tests {
         ];
         assert_eq!(best_mp4(&two).unwrap().name, "mobile");
         assert_eq!(best_mp4(&[]), None);
+        // Plafond de qualité : la meilleure sous le plafond, sinon la meilleure.
+        let all: Vec<Mp4Source> = ["mobile", "full", "sd", "hd"]
+            .iter()
+            .map(|n| Mp4Source {
+                name: n.to_string(),
+                url: format!("https://x/{n}"),
+            })
+            .collect();
+        assert_eq!(pick_mp4(&all, "hd").unwrap().name, "hd");
+        assert_eq!(pick_mp4(&all, "full").unwrap().name, "full");
+        assert_eq!(pick_mp4(&all, "low").unwrap().name, "mobile");
+        assert_eq!(pick_mp4(&all, "?").unwrap().name, "full");
+        assert_eq!(pick_mp4(&two, "hd").unwrap().name, "mobile");
+        assert_eq!(pick_mp4(&[], "hd"), None);
     }
 
     #[test]

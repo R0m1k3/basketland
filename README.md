@@ -379,11 +379,12 @@ En cas d'échec, les tentatives automatiques sont espacées (1 h, 4 h, 16 h,
 | `PREFETCH_CONCURRENCY` | `3` | Segments préchargés en parallèle depuis ok.ru (1 à 8), en plus de ceux que le lecteur demande. |
 | `SEGMENT_STALL_MS` | `5000` | Un téléchargement ok.ru qui ne reçoit plus un octet pendant ce délai (ou dont les en-têtes tardent 1,6 fois plus) est coupé et repris là où il s'était arrêté, sur une connexion neuve, sans que le lecteur voie la coupure. Avant, une connexion bloquée gelait la lecture jusqu'à 60 s. |
 | `SEGMENT_RETRIES` | `4` | Reprises au plus par segment (blocage, coupure, erreur réseau ou 5xx ; une signature expirée déclenche en plus une nouvelle résolution du flux). |
-| `MP4_PROXY_CACHE` | `1` | Replays encore en MP4 seul (pas de HLS) : fichier servi par blocs de 2 Mo, avec cache et lecture anticipée sur plusieurs connexions (un seul flux bridé par ok.ru hachait la lecture). `0` : ancien relais direct. |
-| `MP4_CACHE_MB` | `128` | Cache mémoire des blocs MP4 (32 à 8192). |
+| `MP4_PROXY_CACHE` | `1` | Replays encore en MP4 seul (pas de HLS) : fichier servi par blocs de 1 Mo, avec cache et lecture anticipée sur plusieurs connexions (un seul flux bridé par ok.ru hachait la lecture). `0` : ancien relais direct. |
+| `MP4_CACHE_MB` | `256` | Cache mémoire des blocs MP4 (32 à 8192) ; doit dépasser la lecture anticipée. |
+| `MP4_QUALITY` | `hd` | Qualité MP4 maximale (`full` 1080p ≈ 6 Mb/s, `hd` 720p ≈ 3,5 Mb/s, `sd` 480p ≈ 1,5 Mb/s…) : ok.ru bride chaque connexion à ≈ 2 Mb/s, le 1080p gelait au moindre ralentissement. |
 | `VIDEO_CACHE_IDLE_MIN` | `5` | Sans lecture depuis ce nombre de minutes, les caches vidéo (segments et blocs MP4) sont vidés et leur mémoire rendue au système. `0` : jamais. |
-| `MP4_PARALLEL` | `6` | Blocs MP4 téléchargés en même temps pour la lecture anticipée (1 à 32) ; le bloc attendu par le lecteur passe toujours devant. |
-| `MP4_READAHEAD_BLOCKS` | `12` | Blocs de 2 Mo lus d'avance (12 ≈ 50 s pour un match de 4 Go). |
+| `MP4_PARALLEL` | `12` | Blocs MP4 téléchargés en même temps pour la lecture anticipée (1 à 32) ; le bloc attendu par le lecteur passe toujours devant. |
+| `MP4_READAHEAD_BLOCKS` | `48` | Blocs de 1 Mo lus d'avance (0 à 256 ; 48 ≈ 110 s en 720p). |
 | `FFMPEG_PATH` | `ffmpeg` | Chemin du binaire ffmpeg. |
 | `DISABLE_CRON` | — | `1` désactive les jobs internes. |
 

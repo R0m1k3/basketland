@@ -96,7 +96,9 @@ const PLAYLIST_CACHE_MAX: usize = 100;
 /// Ancien défaut : 512 Mo, gardés pour toujours après une lecture.
 pub const DEFAULT_SEGMENT_CACHE_MB: f64 = 192.0;
 /// Budget par défaut du cache des blocs MP4 (Mo).
-pub const DEFAULT_MP4_CACHE_MB: u64 = 128;
+pub const DEFAULT_MP4_CACHE_MB: u64 = 256;
+/// Qualité MP4 maximale servie (`MP4_QUALITY`) : voir [`okru::pick_mp4`].
+pub const DEFAULT_MP4_QUALITY: &str = "hd";
 /// Sans lecture depuis ce délai, les caches du proxy sont vidés et la
 /// mémoire rendue au système (`VIDEO_CACHE_IDLE_MIN`, 0 : jamais).
 const DEFAULT_CACHE_IDLE_MIN: u64 = 5;
@@ -864,8 +866,8 @@ impl Video {
                 .unwrap_or(DEFAULT_MP4_CACHE_MB)
                 .clamp(32, 8192)
                 << 20,
-            env_get("MP4_PARALLEL").unwrap_or(6).clamp(1, 32) as usize,
-            env_get("MP4_READAHEAD_BLOCKS").unwrap_or(12).min(128),
+            env_get("MP4_PARALLEL").unwrap_or(12).clamp(1, 32) as usize,
+            env_get("MP4_READAHEAD_BLOCKS").unwrap_or(48).min(256),
         );
         let inner = Inner {
             follow: client(true),
@@ -2568,7 +2570,10 @@ impl Inner {
                 }
             }
         }
-        let best = okru::best_mp4(&stream.mp4).cloned();
+        let max = self
+            .env_var("MP4_QUALITY")
+            .unwrap_or_else(|| DEFAULT_MP4_QUALITY.to_string());
+        let best = okru::pick_mp4(&stream.mp4, max.trim()).cloned();
         if let Some(b) = &best {
             if st.mp4_pins.len() >= 200 {
                 st.mp4_pins
