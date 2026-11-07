@@ -1323,7 +1323,10 @@ async fn mp4_blocs_plage_servie_depuis_un_bloc_aligne_puis_le_cache() {
     let calls = mp4_calls(&h);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].url, signed_mp4("sd", h.f.exp(), "vd123.okcdn.ru"));
-    assert_eq!(calls[0].range.as_deref(), Some("bytes=0-2097151"));
+    assert_eq!(
+        calls[0].range.as_deref(),
+        Some(format!("bytes=0-{}", basketland_server::mp4_proxy::BLOCK - 1).as_str())
+    );
 
     // Autre plage du même bloc, puis le fichier entier : depuis le cache.
     let r = h.mp4(Some("bytes=0-9")).await.unwrap();

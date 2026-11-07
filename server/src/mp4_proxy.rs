@@ -3,9 +3,9 @@
 //!
 //! Le MP4 était relayé tel quel, sur UNE connexion vers ok.ru : un match de
 //! 4 Go (~4 Mb/s) sur une connexion bridée hachait sans cesse. Ici, le
-//! fichier est découpé en blocs de 2 Mo :
+//! fichier est découpé en blocs de 1 Mo :
 //!  - un bloc demandé par le lecteur part tout de suite ;
-//!  - les blocs suivants (≈ 50 s de vidéo, `MP4_READAHEAD_BLOCKS`) se
+//!  - les blocs suivants (≈ 110 s de vidéo en 720p, `MP4_READAHEAD_BLOCKS`) se
 //!    téléchargent en même temps sur plusieurs connexions (`MP4_PARALLEL`) ;
 //!  - les blocs restent dans un cache borné (`MP4_CACHE_MB`) : revenir en
 //!    arrière ou reprendre la lecture ne retélécharge rien ;
@@ -24,8 +24,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
-/// Taille d'un bloc.
-pub const BLOCK: u64 = 2 << 20;
+/// Taille d'un bloc. ok.ru bride chaque connexion à ≈ 2 Mb/s : un bloc de
+/// 1 Mo arrive en ≈ 4 s (un saut dans la vidéo attend un bloc entier).
+pub const BLOCK: u64 = 1 << 20;
 
 /// Octets `début..=fin` du MP4 ; rend aussi la taille totale du fichier.
 /// Erreur `HTTP 416 …` : début au-delà de la fin du fichier.
