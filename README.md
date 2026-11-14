@@ -255,7 +255,8 @@ encore sur l'ancienne image.
 ## Connexion et utilisateurs
 
 Tout le site (pages et API) est réservé aux comptes connectés. Restent publics :
-`/api/health` (healthcheck Docker) et `/api/ingest` (protégé par son propre jeton).
+`/api/health` (healthcheck Docker), `/api/ingest` (protégé par son propre jeton) et
+`/api/auth/device/start|poll` (connexion d'une TV par code, voir plus bas).
 
 - **Premier démarrage** : tant qu'aucun compte n'existe, toute page mène à
   `/setup`, qui crée le compte **administrateur** (identifiant + mot de passe de
@@ -308,6 +309,49 @@ Tout le site (pages et API) est réservé aux comptes connectés. Restent public
 
   redéfinit le mot de passe (et crée le compte en administrateur s'il n'existe
   pas), puis ferme ses sessions ouvertes.
+
+## Application Android (téléphone, Android TV, Google TV, Fire TV)
+
+Le dossier `android/` contient une petite application Kotlin (`app.basketland`) qui
+ouvre `https://land.vonrodbox.eu` en plein écran. Tout le contenu vient du site :
+une évolution du site arrive dans l'appli sans nouvel APK. L'appli ajoute le plein
+écran vidéo, les touches de la télécommande (lecture/pause, avance et retour rapides,
+Menu, Retour), les contrôles de lecture dans la notification et sur l'écran
+verrouillé du téléphone, les commandes vocales du Fire TV (« Alexa, pause ») et
+garde l'écran allumé pendant la lecture. Un seul APK sert partout.
+
+- **Télécharger** : Paramètres › Mes appareils › « télécharger l'APK », ou
+  `https://github.com/R0m1k3/basketland/releases/latest/download/basketland.apk`.
+- **Téléphone** : ouvrir le lien, autoriser l'installation depuis le navigateur.
+- **Fire TV Cube / Fire TV** : installer l'application *Downloader* (Amazon
+  Appstore), puis Paramètres › Ma Fire TV › Options pour les développeurs ›
+  Installer des applications inconnues › Downloader : activé. Dans Downloader,
+  saisir l'URL ci-dessus.
+- **TV TCL / Google TV / Android TV** : même principe avec *Downloader* (Play
+  Store) ; autoriser les sources inconnues pour Downloader dans Paramètres ›
+  Système › Sécurité (ou Applications › Accès spéciaux).
+- **Autre voie** : `adb connect <ip-de-la-tv>` puis `adb install basketland.apk`.
+- **Mises à jour** : l'appli regarde une fois par jour la dernière Release
+  `android-v*` et propose de l'installer.
+
+**Connexion de la TV par code** : sur la TV, l'écran de connexion affiche un code
+(`ABCD-EFGH`). Sur un téléphone ou un ordinateur déjà connecté, ouvrir
+`/appareil`, saisir le code, vérifier le nom de l'appareil, puis « Autoriser » :
+la TV se connecte toute seule. Le code vaut 10 minutes et ne sert qu'une fois ;
+5 codes faux bloquent 1 minute. Paramètres › Mes appareils liste les sessions
+ouvertes (navigateurs, TV) et permet de les déconnecter.
+
+**À la télécommande** : la croix déplace le focus (cadre orange), OK valide.
+Dans le lecteur : la lecture part en plein écran ; OK = lecture/pause, ←/→ =
+10 s (appui long : 30 s puis 60 s), ↑ = barre de contrôle, Menu = réglages
+(qualité, VF), Retour = fermer le menu, puis la barre, puis le plein écran.
+
+**Publier une version** (CI `.github/workflows/android.yml`) : pousser un tag
+`android-vX.Y.Z` ; la CI construit l'APK signé et crée la Release. La clé de
+signature est dans les secrets du dépôt (`ANDROID_KEYSTORE_B64`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`) ; la perdre obligerait à
+désinstaller l'appli partout. Construire en local : JDK 17 + SDK Android, puis
+`cd android && ./gradlew assembleDebug`.
 
 ## Synchronisation des données
 

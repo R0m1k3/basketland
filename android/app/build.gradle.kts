@@ -41,7 +41,9 @@ android {
                 storeFile = file(storePath)
                 storePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "storePassword")
                 keyAlias = signingValue("ANDROID_KEY_ALIAS", "keyAlias")
+                // Magasin PKCS12 : même mot de passe pour la clé, sauf indication contraire.
                 keyPassword = signingValue("ANDROID_KEY_PASSWORD", "keyPassword")
+                    ?: signingValue("ANDROID_KEYSTORE_PASSWORD", "storePassword")
             }
         }
     }
