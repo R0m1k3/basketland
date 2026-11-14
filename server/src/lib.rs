@@ -15,6 +15,7 @@ pub mod commentary_db;
 pub mod cron;
 pub mod cup;
 pub mod db;
+pub mod device_auth;
 pub mod espn;
 pub mod espn_events;
 pub mod euroleague;
@@ -122,6 +123,17 @@ pub fn app(state: state::AppState) -> Router {
         .route("/api/auth/setup", post(routes_auth::setup))
         .route("/api/auth/logout", post(routes_auth::logout))
         .route("/api/account/password", post(routes_auth::account_password))
+        .route(
+            "/api/account/sessions",
+            get(routes_auth::sessions_list).post(routes_auth::sessions_post),
+        )
+        .route("/api/auth/device/start", post(routes_auth::device_start))
+        .route("/api/auth/device/poll", post(routes_auth::device_poll))
+        .route("/api/auth/device/check", post(routes_auth::device_check))
+        .route(
+            "/api/auth/device/approve",
+            post(routes_auth::device_approve),
+        )
         .route(
             "/api/admin/users",
             get(routes_auth::users_list).post(routes_auth::users_post),

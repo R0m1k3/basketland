@@ -4,6 +4,7 @@
 use crate::accounts::{self, Fail, LoggedIn};
 use crate::api::{error, json_response};
 use crate::auth::{self, Session};
+use crate::device_auth;
 use crate::routes::{db_error, guarded};
 use crate::state::AppState;
 use crate::writes::read_json_write;
@@ -246,6 +247,188 @@ pub async fn account_password(
                     cf.as_ref(),
                 )
             })
+            .await
+        {
+            Ok(Ok(())) => json_response(StatusCode::OK, &json!({ "ok": true })),
+            Ok(Err(f)) => fail_response(f),
+            Err(e) => db_error(e),
+        }
+    };
+    guarded(&st, &uri, &headers, fut).await
+}
+
+// ---------------------------------------------------------------- appareils (TV) : connexion par code
+
+fn body_str(body: &Map<String, Value>, k: &str) -> String {
+    body.get(k)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// `POST /api/auth/device/start { name? }` (public) → `{ device_code, user_code, expires_in, interval }`.
+pub async fn device_start(req: Request) -> Response {
+    let (parts, body) = req.into_parts();
+    let body = match read_json_write(&parts.headers, body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let ip = client_ip(&parts.headers);
+    let name = device_auth::clean_name(body.get("name").and_then(Value::as_str));
+    match device_auth::start(&ip, &name, Utc::now().timestamp_millis()) {
+        Ok(s) => json_response(
+            StatusCode::OK,
+            &json!({
+                "device_code": s.device_code,
+                "user_code": device_auth::display_code(&s.user_code),
+                "expires_in": s.expires_in_s,
+                "interval": device_auth::POLL_INTERVAL_S,
+            }),
+        ),
+        Err(f) => fail_response(f),
+    }
+}
+
+/// `POST /api/auth/device/poll { device_code }` (public) → `{ status: pending | expired }`,
+/// ou `{ status: approved, user }` + cookie de session.
+pub async fn device_poll(State(st): State<AppState>, req: Request) -> Response {
+    let (parts, body) = req.into_parts();
+    let body = match read_json_write(&parts.headers, body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let code = body_str(&body, "device_code");
+    match device_auth::poll(&code, Utc::now().timestamp_millis()) {
+        device_auth::Poll::Pending => {
+            json_response(StatusCode::OK, &json!({ "status": "pending" }))
+        }
+        device_auth::Poll::Expired => {
+            json_response(StatusCode::OK, &json!({ "status": "expired" }))
+        }
+        device_auth::Poll::Approved { user_id, name } => {
+            let r = st
+                .db
+                .run_own(
+                    move |c| -> rusqlite::Result<
+                        Option<(accounts::UserRow, accounts::NewSession)>,
+                    > {
+                        let Some(u) = accounts::user_by_id(c, user_id)? else {
+                            return Ok(None);
+                        };
+                        let s = accounts::create_labeled_session(c, user_id, &name)?;
+                        Ok(Some((u, s)))
+                    },
+                )
+                .await;
+            match r {
+                Ok(Some((u, session))) => with_session_cookie(
+                    json_response(
+                        StatusCode::OK,
+                        &json!({
+                            "status": "approved",
+                            "user": { "id": u.id, "username": u.username, "role": u.role },
+                        }),
+                    ),
+                    &parts.headers,
+                    &session,
+                ),
+                // Compte supprimé entre-temps.
+                Ok(None) => json_response(StatusCode::OK, &json!({ "status": "expired" })),
+                Err(e) => db_error(e),
+            }
+        }
+    }
+}
+
+/// `POST /api/auth/device/check|approve { code }` (session exigée) → `{ name, ip }`.
+async fn device_validate(st: AppState, uri: OriginalUri, req: Request, approve: bool) -> Response {
+    let headers = req.headers().clone();
+    let st2 = st.clone();
+    let fut = async move {
+        let (parts, body) = req.into_parts();
+        let (s, _) = match require_user(&st2, &parts.headers).await {
+            Ok(x) => x,
+            Err(r) => return r,
+        };
+        let body = match read_json_write(&parts.headers, body).await {
+            Ok(b) => b,
+            Err(r) => return r,
+        };
+        let code = body_str(&body, "code");
+        let ip = client_ip(&parts.headers);
+        let now = Utc::now().timestamp_millis();
+        let r = if approve {
+            device_auth::approve(&code, &ip, s.user_id, now)
+        } else {
+            device_auth::check(&code, &ip, s.user_id, now)
+        };
+        match r {
+            Ok(d) => json_response(
+                StatusCode::OK,
+                &json!({ "ok": true, "name": d.name, "ip": d.ip }),
+            ),
+            Err(f) => fail_response(f),
+        }
+    };
+    guarded(&st, &uri, &headers, fut).await
+}
+
+pub async fn device_check(State(st): State<AppState>, uri: OriginalUri, req: Request) -> Response {
+    device_validate(st, uri, req, false).await
+}
+
+pub async fn device_approve(
+    State(st): State<AppState>,
+    uri: OriginalUri,
+    req: Request,
+) -> Response {
+    device_validate(st, uri, req, true).await
+}
+
+/// `GET /api/account/sessions` → `{ sessions: [{ id, label, created_at, expires_at, current }] }`.
+pub async fn sessions_list(
+    State(st): State<AppState>,
+    uri: OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let fut = async {
+        let (s, h) = match require_user(&st, &headers).await {
+            Ok(x) => x,
+            Err(r) => return r,
+        };
+        match st
+            .db
+            .run(move |c| accounts::list_sessions(c, s.user_id, &h))
+            .await
+        {
+            Ok(v) => json_response(StatusCode::OK, &json!({ "sessions": v })),
+            Err(e) => db_error(e),
+        }
+    };
+    guarded(&st, &uri, &headers, fut).await
+}
+
+/// `POST /api/account/sessions { action: "revoke", id }` : déconnecte un appareil du compte.
+pub async fn sessions_post(State(st): State<AppState>, uri: OriginalUri, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let st2 = st.clone();
+    let fut = async move {
+        let (parts, body) = req.into_parts();
+        let (s, _) = match require_user(&st2, &parts.headers).await {
+            Ok(x) => x,
+            Err(r) => return r,
+        };
+        let body = match read_json_write(&parts.headers, body).await {
+            Ok(b) => b,
+            Err(r) => return r,
+        };
+        if body_str(&body, "action") != "revoke" {
+            return error(StatusCode::BAD_REQUEST, "Action inconnue.");
+        }
+        let id = body_str(&body, "id");
+        match st2
+            .db
+            .run_own(move |c| accounts::revoke_session(c, s.user_id, &id))
             .await
         {
             Ok(Ok(())) => json_response(StatusCode::OK, &json!({ "ok": true })),

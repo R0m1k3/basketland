@@ -13,12 +13,15 @@ pub const SESSION_TTL_MS: i64 = 30 * 24 * 3_600_000;
 /// La date d'expiration n'est réécrite qu'une fois par jour au plus.
 pub const SESSION_RENEW_AFTER_MS: i64 = 24 * 3_600_000;
 
-const PUBLIC_EXACT: [&str; 5] = [
+const PUBLIC_EXACT: [&str; 7] = [
     "/api/health",
     "/api/ingest",
     "/api/auth/login",
     "/api/auth/setup",
     "/api/auth/logout",
+    // Connexion d'une TV par code : la TV n'a pas encore de session.
+    "/api/auth/device/start",
+    "/api/auth/device/poll",
 ];
 const PUBLIC_PREFIXES: [&str; 2] = ["/_next/", "/__nextjs"];
 const ROOT_STATIC_EXT: [&str; 13] = [
