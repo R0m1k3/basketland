@@ -1,6 +1,7 @@
 'use client';
 
 import AccountPanel from '@/components/settings/AccountPanel';
+import DevicesPanel from '@/components/settings/DevicesPanel';
 import AutoTranslateSettings from '@/components/settings/AutoTranslateSettings';
 import MiniMaxSettings from '@/components/settings/MiniMaxSettings';
 import OpenAiSettings from '@/components/settings/OpenAiSettings';
@@ -51,6 +52,7 @@ function Settings({ d }: { d: SettingsData }) {
           Mon compte
         </SectionTitle>
         <AccountPanel username={user.username} role={user.role} />
+        <DevicesPanel />
       </section>
 
       <section aria-labelledby="s-subtitles" className="space-y-5">

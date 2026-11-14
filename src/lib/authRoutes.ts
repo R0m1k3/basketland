@@ -20,6 +20,9 @@ const PUBLIC_EXACT = new Set([
   '/api/auth/login',
   '/api/auth/setup',
   '/api/auth/logout',
+  // Connexion d'une TV par code (server/src/device_auth.rs).
+  '/api/auth/device/start',
+  '/api/auth/device/poll',
 ]);
 
 /** Ressources internes de Next (build, polices, HMR et overlay en développement). */

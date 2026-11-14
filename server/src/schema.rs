@@ -210,7 +210,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  label TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
@@ -279,6 +280,10 @@ pub fn migrate(c: &Connection) -> rusqlite::Result<()> {
         .any(|n| n == "speaker")
     {
         c.execute_batch("ALTER TABLE commentary_cues ADD COLUMN speaker INTEGER")?;
+    }
+    // Libellé des sessions ouvertes par code (« Fire TV », « Google TV »…), NULL pour un navigateur.
+    if !columns(c, "sessions")?.iter().any(|n| n == "label") {
+        c.execute_batch("ALTER TABLE sessions ADD COLUMN label TEXT")?;
     }
     // Doublage français retiré : ses tables (pistes et tronçons doublés) disparaissent.
     c.execute_batch("DROP TABLE IF EXISTS dub_chunks; DROP TABLE IF EXISTS dub_tracks;")

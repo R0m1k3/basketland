@@ -200,7 +200,7 @@ fn attempts() -> &'static Mutex<HashMap<String, Attempts>> {
     A.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn blocked_for(keys: &[String], now: i64) -> i64 {
+pub(crate) fn blocked_for(keys: &[String], now: i64) -> i64 {
     let a = attempts().lock().unwrap_or_else(|e| e.into_inner());
     keys.iter()
         .map(|k| a.get(k).map_or(0, |x| x.blocked_until) - now)
@@ -209,7 +209,7 @@ fn blocked_for(keys: &[String], now: i64) -> i64 {
         .max(0)
 }
 
-fn record_failure(keys: &[String], now: i64) {
+pub(crate) fn record_failure(keys: &[String], now: i64) {
     let mut a = attempts().lock().unwrap_or_else(|e| e.into_inner());
     if a.len() > 10_000 {
         a.retain(|_, x| !(x.blocked_until < now && now - x.first > FAILURE_WINDOW_MS));
@@ -233,14 +233,14 @@ fn record_failure(keys: &[String], now: i64) {
     }
 }
 
-fn clear_failures(keys: &[String]) {
+pub(crate) fn clear_failures(keys: &[String]) {
     let mut a = attempts().lock().unwrap_or_else(|e| e.into_inner());
     for k in keys {
         a.remove(k);
     }
 }
 
-fn too_many<T>(wait_ms: i64) -> Result<T, Fail> {
+pub(crate) fn too_many<T>(wait_ms: i64) -> Result<T, Fail> {
     Err((
         429,
         format!(
@@ -361,6 +361,55 @@ fn create_session(
         params![hash_token(&token), user_id, n, expires_at],
     )?;
     Ok(NewSession { token, expires_at })
+}
+
+// ---------------------------------------------------------------- sessions des appareils
+
+/// Session d'un appareil connecté par code (TV) : libellé affiché dans « Mes appareils ».
+pub(crate) fn create_labeled_session(
+    c: &Connection,
+    user_id: i64,
+    label: &str,
+) -> rusqlite::Result<NewSession> {
+    let s = create_session(c, user_id, Utc::now())?;
+    c.execute(
+        "UPDATE sessions SET label = ?1 WHERE token_hash = ?2",
+        params![label, hash_token(&s.token)],
+    )?;
+    touch_login(c, user_id)?;
+    Ok(s)
+}
+
+/// Sessions en cours d'un compte, la plus récente d'abord. `id` = empreinte du jeton
+/// (inutilisable comme jeton) ; `current` marque celle de la requête.
+pub fn list_sessions(c: &Connection, user_id: i64, current_hash: &str) -> rusqlite::Result<Value> {
+    let mut st = c.prepare(
+        "SELECT token_hash, label, created_at, expires_at FROM sessions
+         WHERE user_id = ?1 AND expires_at > ?2 ORDER BY created_at DESC",
+    )?;
+    let rows = st.query_map(params![user_id, now_iso()], |r| {
+        let h: String = r.get(0)?;
+        Ok(json!({
+            "id": h,
+            "label": r.get::<_, Option<String>>(1)?,
+            "created_at": r.get::<_, String>(2)?,
+            "expires_at": r.get::<_, String>(3)?,
+            "current": h == current_hash,
+        }))
+    })?;
+    Ok(Value::Array(rows.collect::<rusqlite::Result<Vec<_>>>()?))
+}
+
+/// Révoque une session du compte (jamais celle d'un autre compte).
+pub fn revoke_session(c: &Connection, user_id: i64, token_hash: &str) -> DbFn<()> {
+    let n = c.execute(
+        "DELETE FROM sessions WHERE token_hash = ?1 AND user_id = ?2",
+        params![token_hash, user_id],
+    )?;
+    if n == 0 {
+        return Ok(fail(404, "Session introuvable."));
+    }
+    Ok(Ok(()))
 }
 
 // ---------------------------------------------------------------- opérations

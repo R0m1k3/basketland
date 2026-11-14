@@ -37,6 +37,7 @@ export interface MediaState {
 interface NativeBridge {
   isTv(): boolean;
   version(): string;
+  deviceName(): string;
   mediaState(json: string): void;
   mediaClear(): void;
 }
@@ -68,6 +69,17 @@ export function isTvApp(userAgent: string = ua()): boolean {
 
 function native(): NativeBridge | undefined {
   return typeof window === 'undefined' ? undefined : window.BasketLandApp;
+}
+
+/** Nom de l'appareil (« Fire TV », « TCL Smart TV »…), affiché à la validation du code. */
+export function deviceName(): string {
+  try {
+    const n = native()?.deviceName();
+    if (n) return n;
+  } catch {
+    // Pont absent : nom générique.
+  }
+  return isTvApp() ? 'TV' : 'Navigateur';
 }
 
 // --- commandes média : un seul lecteur actif à la fois (le dernier monté).

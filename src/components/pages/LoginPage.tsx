@@ -4,6 +4,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import AuthShell from '@/components/auth/AuthShell';
 import LoginForm from '@/components/auth/LoginForm';
+import DeviceCodeLogin from '@/components/auth/DeviceCodeLogin';
+import { isTvApp } from '@/lib/appBridge';
 import type { SessionPage } from '@/components/page/types';
 
 /**
@@ -16,6 +18,9 @@ export default function LoginPage() {
   const router = useRouter();
   const raw = useSearchParams().get('next');
   const [next, setNext] = useState<string | null>(null);
+  // TV (appli Android) : connexion par code par défaut, le formulaire reste accessible.
+  const [withCode, setWithCode] = useState(false);
+  useEffect(() => setWithCode(isTvApp()), []);
 
   useEffect(() => {
     let live = true;
@@ -36,6 +41,17 @@ export default function LoginPage() {
       live = false;
     };
   }, [raw, router]);
+
+  if (withCode) {
+    return (
+      <AuthShell kicker="Accès privé" title="Connexion de la TV">
+        <DeviceCodeLogin next={next ?? raw ?? '/'} />
+        <button type="button" className="btn w-full" onClick={() => setWithCode(false)}>
+          Utiliser l’identifiant et le mot de passe
+        </button>
+      </AuthShell>
+    );
+  }
 
   return (
     <AuthShell kicker="Accès privé" title="Connexion" intro="Connectez-vous pour accéder aux replays, au calendrier et aux statistiques.">

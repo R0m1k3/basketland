@@ -1,5 +1,6 @@
 package app.basketland
 
+import android.os.Build
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
 
@@ -16,6 +17,17 @@ class WebBridge(private val activity: MainActivity, private val media: MediaCont
 
     @JavascriptInterface
     fun version(): String = BuildConfig.VERSION_NAME
+
+    /** Nom montré lors de la validation du code de connexion. */
+    @JavascriptInterface
+    fun deviceName(): String {
+        val pm = activity.packageManager
+        // Les modèles Fire TV ont des noms opaques (AFTGAZL…) : nom commercial.
+        if (pm.hasSystemFeature("amazon.hardware.fire_tv")) return "Fire TV"
+        val maker = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
+        val model = Build.MODEL
+        return if (model.startsWith(maker, ignoreCase = true)) model else "$maker $model"
+    }
 
     /**
      * État du lecteur : `{"playing":true,"title":"…","subtitle":"…","position":12.3,"duration":7200}`
