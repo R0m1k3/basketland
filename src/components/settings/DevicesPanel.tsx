@@ -11,6 +11,9 @@ interface SessionRow {
   current: boolean;
 }
 
+/** Dernier APK publié par la CI (tag android-vX.Y.Z, .github/workflows/android.yml). */
+export const ANDROID_APK_URL = 'https://github.com/R0m1k3/basketland/releases/latest/download/basketland.apk';
+
 const DATE = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Paris' });
 
 /** « Mes appareils » : sessions ouvertes du compte (navigateurs, TV connectées par code), révocables. */
@@ -76,6 +79,13 @@ export default function DevicesPanel() {
           ))}
         </ul>
       )}
+      <p className="border-t border-ink-700/70 pt-4 text-sm leading-relaxed text-paper-dim">
+        Application Android pour téléphone, Android TV, Google TV et Fire TV :{' '}
+        <a href={ANDROID_APK_URL} className="text-flame-hot underline-offset-2 hover:underline">
+          télécharger l’APK
+        </a>
+        . Sur une TV, l’application Downloader accepte ce lien ; la marche à suivre est dans le README du dépôt.
+      </p>
     </div>
   );
 }
