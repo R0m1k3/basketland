@@ -58,6 +58,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libtesseract-dev libleptonica-dev
+          # Leptonica ≥ 1.83 s'appelle libleptonica.so ; la crate tesseract lie encore -llept.
+          lib="$(dpkg -L libleptonica-dev | grep -E '/libleptonica\.so$' | head -1)"
+          if [ -n "$lib" ] && [ ! -e "$(dirname "$lib")/liblept.so" ]; then
+            sudo ln -s "$lib" "$(dirname "$lib")/liblept.so"
+          fi
 
       # Version de Rust lue dans rust-toolchain.toml.
       - name: Install Rust toolchain
