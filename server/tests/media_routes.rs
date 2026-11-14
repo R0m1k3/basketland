@@ -511,7 +511,18 @@ async fn mises_en_file_de_fond_et_replay_trouve() {
         .unwrap();
     assert!(r);
     wait_running(&t.media, t.partial).await;
-    // Pré-traduction de fond : replays récents sans piste complète.
+    // Pré-traduction de fond : replays récents (10 derniers jours) sans piste complète.
+    // Les fixtures sont datées : on rajeunit les matchs terminés pour que le test
+    // ne dépende pas du jour où il tourne.
+    Connection::open(&t.path)
+        .unwrap()
+        .execute(
+            "UPDATE matches SET date_utc = ?1 WHERE status = 'final'",
+            [basketland_server::time::iso_utc(
+                Utc::now() - Duration::days(1),
+            )],
+        )
+        .unwrap();
     let q = block(|d, m| scheduler::queue_recent_work(d, m, true, false)).await;
     assert_eq!(q.analyses, 0);
     assert!(q.commentaries > 0, "{q:?}");
