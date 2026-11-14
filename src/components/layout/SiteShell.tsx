@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { focusPage, setupTv } from '@/lib/tv';
 import Logo from '@/components/ui/Logo';
 import Nav, { BottomNav } from '@/components/ui/Nav';
 import UserMenu from '@/components/ui/UserMenu';
@@ -18,6 +20,12 @@ import type { SessionPage } from '@/components/page/types';
  */
 export default function SiteShell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionPage['user']>(null);
+  const pathname = usePathname();
+
+  // Appli TV : navigation à la télécommande, focus de départ de chaque page.
+  useEffect(() => {
+    if (setupTv()) focusPage(window.location.pathname + window.location.search);
+  }, [pathname]);
 
   useEffect(() => {
     let live = true;
