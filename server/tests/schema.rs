@@ -34,6 +34,12 @@ fn node_schema(fixture: &str) -> Vec<String> {
                     ", video_kind TEXT)",
                     &format!(", video_kind TEXT{SINCE_NODE})"),
                 )
+            } else if s.starts_with("CREATE TABLE sessions (") {
+                // `label` (nom de l'appareil, connexion par code) : ajoutée depuis Node.
+                s.replace(
+                    "expires_at TEXT NOT NULL\n)",
+                    "expires_at TEXT NOT NULL,\n  label TEXT\n)",
+                )
             } else {
                 s.to_string()
             }
