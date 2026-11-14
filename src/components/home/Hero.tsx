@@ -107,7 +107,7 @@ export default function Hero({ game, kicker }: { game: GameView; kicker: string 
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-3 md:justify-start">
-          <Link href={`/matchs/${game.id}`} className="btn-primary h-12 px-5 text-base">
+          <Link href={`/matchs/${game.id}`} className="btn-primary h-12 px-5 text-base" data-tv-autofocus="">
             <IconPlay size={14} />
             {game.hasVf ? 'Regarder en VF' : 'Regarder le replay'}
           </Link>

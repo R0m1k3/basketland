@@ -419,3 +419,29 @@ body {
     @apply inline-flex items-center justify-center gap-2 rounded-lg border border-loss/40 bg-loss/10 px-4 py-2 text-sm font-medium text-loss transition-colors hover:bg-loss/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-loss/50 disabled:cursor-not-allowed disabled:opacity-50;
   }
 }
+
+/* ---------------------------------------------------------------- mode TV
+   Appli Android sur Android TV / Google TV / Fire TV (classe posée par src/lib/tv.ts).
+   Navigation à la télécommande : focus très visible ; marges de sécurité de 5 %. */
+html.tv {
+  scroll-behavior: smooth;
+}
+html.tv :focus {
+  outline: 3px solid theme('colors.flame.DEFAULT') !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 7px rgba(255, 90, 31, 0.28) !important;
+  border-radius: 10px;
+}
+/* Le cadre du lecteur a le focus pendant la lecture : pas de cadre orange sur la vidéo. */
+html.tv .player:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+html.tv .mx-auto.max-w-7xl {
+  padding-left: max(1rem, 5vw);
+  padding-right: max(1rem, 5vw);
+}
+/* Le curseur de la souris n'existe pas : rien ne doit dépendre du survol. */
+html.tv .player-volume {
+  display: none !important;
+}

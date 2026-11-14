@@ -17,7 +17,8 @@ import {
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime, qualityLabel as formatQualityLabel } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
-import { isApp, onBack, onMediaAction, reportMediaState } from '@/lib/appBridge';
+import { isApp, isTvApp, onBack, onMediaAction, reportMediaState } from '@/lib/appBridge';
+import { move as moveFocus } from '@/lib/spatialNav';
 
 export type { Subtitle };
 
@@ -206,6 +207,9 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   const [voiceColors, setVoiceColors] = useState(true);
   const voices = useMemo(() => voiceCount(subtitles), [subtitles]);
   const [resumeAt, setResumeAt] = useState<number | null>(null);
+  // Appli TV : télécommande (le cadre du lecteur prend le focus, voir plus bas).
+  const [tv, setTv] = useState(false);
+  useEffect(() => setTv(isTvApp()), []);
 
   const posKey = src ? `bl:pos:${src}` : null;
 
@@ -616,7 +620,15 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
       const v = videoRef.current;
-      if (v && !v.paused) setControlsShown(false);
+      if (!v || v.paused) return;
+      // TV : le focus ne reste pas sur un bouton devenu invisible.
+      const shell = shellRef.current;
+      const a = document.activeElement;
+      if (shell && a !== shell && a?.closest('.player-controls') && shell.contains(a) && isTvApp()) {
+        if (!document.querySelector('.player [role="dialog"]')) shell.focus({ preventScroll: true });
+        else return;
+      }
+      setControlsShown(false);
     }, 2800);
   }, []);
   useEffect(() => {
@@ -627,8 +639,71 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   }, [paused, poke]);
   useEffect(() => () => clearTimeout(hideTimer.current), []);
 
-  // --- raccourcis clavier
+  // --- télécommande (appli TV). Cadre du lecteur focalisé : OK lecture/pause,
+  // ←/→ ±10 s (appui long : 30 s puis 60 s), ↑/↓ barre de contrôle. Sur un
+  // bouton de la barre, la navigation à la croix (spatialNav) reprend la main.
+  const repeats = useRef(0);
   useEffect(() => {
+    if (!tv) return;
+    const onKey = (e: KeyboardEvent) => {
+      const shell = shellRef.current;
+      if (!shell || e.defaultPrevented || document.activeElement !== shell) return;
+      switch (e.key) {
+        case 'Enter':
+        case ' ':
+          togglePlay();
+          break;
+        case 'ArrowLeft':
+        case 'ArrowRight': {
+          repeats.current = e.repeat ? repeats.current + 1 : 0;
+          const step = repeats.current < 6 ? 10 : repeats.current < 16 ? 30 : 60;
+          skip(e.key === 'ArrowLeft' ? -step : step);
+          break;
+        }
+        case 'ArrowUp':
+        case 'ArrowDown': {
+          // Hors plein écran : ↑/↓ quittent le lecteur (statistiques, liens de la page).
+          if (!document.fullscreenElement) {
+            e.preventDefault();
+            moveFocus(e.key === 'ArrowUp' ? 'up' : 'down');
+            return;
+          }
+          setControlsShown(true);
+          const first = shell.querySelector<HTMLElement>('.player-controls button');
+          if (first) requestAnimationFrame(() => first.focus({ preventScroll: true }));
+          break;
+        }
+        default:
+          return;
+      }
+      e.preventDefault();
+      poke();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tv, togglePlay, skip, poke]);
+
+  // TV : la lecture démarre en plein écran, le cadre prend le focus.
+  useEffect(() => {
+    if (!tv || !started) return;
+    const shell = shellRef.current;
+    if (!shell) return;
+    shell.focus({ preventScroll: true });
+    if (!document.fullscreenElement) void shell.requestFullscreen?.().catch(() => undefined);
+  }, [tv, started]);
+
+  // TV : menu ouvert → focus sur sa première option.
+  useEffect(() => {
+    if (!tv || !menuOpen) return;
+    const id = requestAnimationFrame(() =>
+      shellRef.current?.querySelector<HTMLElement>('[role="dialog"] button')?.focus({ preventScroll: true }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [tv, menuOpen]);
+
+  // --- raccourcis clavier (ordinateur)
+  useEffect(() => {
+    if (tv) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
@@ -684,7 +759,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay, skip, toggleFullscreen, toggleMute, toggleVf, poke]);
+  }, [tv, togglePlay, skip, toggleFullscreen, toggleMute, toggleVf, poke]);
 
   // --- application Android : télécommande, notification, Alexa, touche Retour (src/lib/appBridge.ts)
   const mediaTitle = useMemo(() => {
@@ -755,14 +830,30 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     };
   }, [mediaTitle, durationHint]);
 
+  // Touche Retour : menu fermé, puis (TV) barre quittée, puis plein écran quitté.
   useEffect(
     () =>
       onBack(() => {
-        if (!menuOpen) return false;
-        setMenuOpen(false);
-        return true;
+        const shell = shellRef.current;
+        if (menuOpen) {
+          setMenuOpen(false);
+          if (tv) shell?.querySelector<HTMLElement>('[data-menu-toggle] button')?.focus({ preventScroll: true });
+          return true;
+        }
+        if (!shell || !tv) return false;
+        const a = document.activeElement;
+        if (a && a !== shell && shell.contains(a)) {
+          shell.focus({ preventScroll: true });
+          setControlsShown(false);
+          return true;
+        }
+        if (document.fullscreenElement) {
+          void document.exitFullscreen().catch(() => undefined);
+          return true;
+        }
+        return false;
       }),
-    [menuOpen],
+    [menuOpen, tv],
   );
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -785,6 +876,9 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
       onPointerMove={poke}
       onPointerEnter={warmUp}
       onFocusCapture={warmUp}
+      tabIndex={tv && started ? 0 : undefined}
+      data-nav={tv ? 'manual' : undefined}
+      aria-label={tv ? 'Lecteur : OK lecture ou pause, gauche et droite pour reculer ou avancer' : undefined}
     >
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <video
@@ -1347,12 +1441,22 @@ function Poster({
         <TeamLogo abbr={homeAbbr} size={104} className="hidden sm:inline-flex" />
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2">
-        <button type="button" onClick={() => onPlay(resumeAt ? 0 : undefined)} className="btn-primary !px-5 !py-2.5 !text-[15px]">
+        <button
+          type="button"
+          onClick={() => onPlay(resumeAt ? 0 : undefined)}
+          className="btn-primary !px-5 !py-2.5 !text-[15px]"
+          data-tv-autofocus={resumeAt ? undefined : ''}
+        >
           <Icon name="play" size={18} />
           {resumeAt ? 'Depuis le début' : 'Lancer le replay'}
         </button>
         {resumeAt && (
-          <button type="button" onClick={() => onPlay(resumeAt)} className="btn !px-5 !py-2.5 !text-[15px] !bg-black/40 backdrop-blur">
+          <button
+            type="button"
+            onClick={() => onPlay(resumeAt)}
+            className="btn !px-5 !py-2.5 !text-[15px] !bg-black/40 backdrop-blur"
+            data-tv-autofocus=""
+          >
             <Icon name="replay" size={16} />
             Reprendre à {fmtTime(resumeAt)}
           </button>
