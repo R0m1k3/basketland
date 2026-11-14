@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BasketLand</string>
+    <string name="offline_title">Pas de connexion</string>
+    <string name="offline_body">BasketLand ne répond pas. Vérifie la connexion Internet, puis réessaie.</string>
+    <string name="retry">Réessayer</string>
+    <string name="media_channel">Lecture en cours</string>
+    <string name="play">Lecture</string>
+    <string name="pause">Pause</string>
+    <string name="rewind">Reculer de 10 s</string>
+    <string name="forward">Avancer de 10 s</string>
+    <string name="update_title">Mise à jour disponible</string>
+    <string name="update_body">La version %1$s de BasketLand est disponible (installée : %2$s).</string>
+    <string name="update_download">Télécharger</string>
+    <string name="later">Plus tard</string>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ballon de src/app/icon.svg (64 unités) agrandi ×1,35 et centré dans la zone sûre de 108 dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="1.35" android:scaleY="1.35" android:translateX="10.8" android:translateY="10.8">
+        <path android:fillColor="#FF5A1F" android:pathData="M32,11a21,21 0,1 1,0 42a21,21 0,1 1,0 -42z" />
+        <path android:strokeColor="#0B0B0E" android:strokeWidth="3" android:strokeLineCap="round"
+            android:pathData="M32,11v42M11,32h42M17.5,17.5c6,5 9,9.5 9,14.5s-3,9.5 -9,14.5M46.5,17.5c-6,5 -9,9.5 -9,14.5s3,9.5 9,14.5" />
+    </group>
+</vector>

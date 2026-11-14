@@ -17,6 +17,7 @@ import {
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime, qualityLabel as formatQualityLabel } from '@/components/match/format';
 import { teamInfo } from '@/lib/teams';
+import { isApp, onBack, onMediaAction, reportMediaState } from '@/lib/appBridge';
 
 export type { Subtitle };
 
@@ -684,6 +685,85 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [togglePlay, skip, toggleFullscreen, toggleMute, toggleVf, poke]);
+
+  // --- application Android : télécommande, notification, Alexa, touche Retour (src/lib/appBridge.ts)
+  const mediaTitle = useMemo(() => {
+    const a = teamInfo(awayAbbr);
+    const h = teamInfo(homeAbbr);
+    return `${a.nick} @ ${h.nick}`;
+  }, [awayAbbr, homeAbbr]);
+
+  useEffect(() => {
+    if (!isApp()) return;
+    const off = onMediaAction((action, arg) => {
+      const v = videoRef.current;
+      if (!v) return;
+      switch (action) {
+        case 'playpause':
+          togglePlay();
+          break;
+        case 'play':
+          if (v.paused) togglePlay();
+          break;
+        case 'pause':
+          if (!v.paused) v.pause();
+          break;
+        case 'forward':
+          skip(10);
+          break;
+        case 'rewind':
+          skip(-10);
+          break;
+        case 'next':
+          skip(30);
+          break;
+        case 'previous':
+          skip(-30);
+          break;
+        case 'seekto':
+          if (arg !== null && Number.isFinite(arg)) playback.seek(arg);
+          break;
+        case 'menu':
+          setMenuOpen((open) => !open);
+          break;
+      }
+      poke();
+    });
+    return off;
+  }, [togglePlay, skip, playback, poke]);
+
+  useEffect(() => {
+    if (!isApp()) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const send = () =>
+      reportMediaState({
+        playing: !v.paused,
+        title: mediaTitle,
+        subtitle: 'Replay · BasketLand',
+        position: v.currentTime || 0,
+        duration: Number.isFinite(v.duration) ? v.duration : (durationHint ?? 0),
+      });
+    const events = ['play', 'pause', 'seeked', 'loadedmetadata', 'ended'] as const;
+    events.forEach((e) => v.addEventListener(e, send));
+    const timer = setInterval(() => {
+      if (!v.paused) send();
+    }, 5000);
+    return () => {
+      events.forEach((e) => v.removeEventListener(e, send));
+      clearInterval(timer);
+    };
+  }, [mediaTitle, durationHint]);
+
+  useEffect(
+    () =>
+      onBack(() => {
+        if (!menuOpen) return false;
+        setMenuOpen(false);
+        return true;
+      }),
+    [menuOpen],
+  );
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
 
