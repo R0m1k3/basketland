@@ -10,6 +10,8 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -57,6 +59,9 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Fenêtre capable de transparence : condition pour voir la couche vidéo placée
+        // derrière elle en plein écran (voir onShowCustomView).
+        window.setFormat(PixelFormat.TRANSLUCENT)
         if (isTv) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
 
         root = FrameLayout(this).apply { setBackgroundColor(BG) }
@@ -137,6 +142,9 @@ class MainActivity : Activity() {
             if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) handleBack()
             return true
         }
+        // Plein écran : si le focus s'est perdu malgré tout, les touches vont à la vue plein écran.
+        val cv = customView
+        if (cv != null && currentFocus == null && cv.dispatchKeyEvent(event)) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -284,8 +292,19 @@ class MainActivity : Activity() {
             }
             customView = view
             customCallback = callback
+            // Sur TV (Fire TV, Google TV), la vidéo plein écran est souvent affichée dans une
+            // couche séparée, DERRIÈRE la fenêtre de l'appli, visible par un « trou »
+            // transparent percé dans la page. Un fond opaque (fenêtre, cadre racine) la cache :
+            // on entend le son mais l'écran reste noir. Fonds transparents le temps du plein écran.
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            root.setBackgroundColor(Color.TRANSPARENT)
             root.addView(view, MATCH)
             web.visibility = View.INVISIBLE
+            // Le WebView masqué perd le focus : sans focus sur la vue plein écran, les touches
+            // de la télécommande n'arrivent plus au site (lecteur inutilisable).
+            view.isFocusable = true
+            view.isFocusableInTouchMode = true
+            view.requestFocus()
             setImmersiveBars(true)
             if (!isTv) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
@@ -295,6 +314,8 @@ class MainActivity : Activity() {
             root.removeView(v)
             customView = null
             customCallback = null
+            window.setBackgroundDrawable(ColorDrawable(BG))
+            root.setBackgroundColor(BG)
             web.visibility = View.VISIBLE
             setImmersiveBars(false)
             if (!isTv) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
