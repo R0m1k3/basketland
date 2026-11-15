@@ -211,6 +211,13 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   // Appli TV : télécommande (le cadre du lecteur prend le focus, voir plus bas).
   const [tv, setTv] = useState(false);
   useEffect(() => setTv(isTvApp()), []);
+  // TV : affichage « compatibilité », la vidéo est recopiée dans un canvas (voir TvCanvas).
+  const [tvCanvas, setTvCanvas] = useState(false);
+  useEffect(() => setTvCanvas(readPref('bl:tvcanvas') === '1'), []);
+  const chooseTvCanvas = useCallback((on: boolean) => {
+    setTvCanvas(on);
+    writePref('bl:tvcanvas', on ? '1' : null);
+  }, []);
 
   const posKey = src ? `bl:pos:${src}` : null;
 
@@ -913,6 +920,8 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         onDoubleClick={toggleFullscreen}
         aria-label="Replay du match"
       />
+      {tv && tvCanvas && started && <TvCanvas videoRef={videoRef} />}
+      {tv && started && showControls && <TvDiag videoRef={videoRef} hlsRef={hlsRef} canvas={tvCanvas} />}
 
       {/* Plein écran : sans rien par-dessus la vidéo (barre masquée), Chrome confie la
           vidéo à la carte graphique (« overlay » matériel) et, sur certains PC, ce qui
@@ -1047,6 +1056,8 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           onSubDelay={chooseDelay}
           speed={speed}
           onSpeed={chooseSpeed}
+          tvCanvas={tv ? tvCanvas : undefined}
+          onTvCanvas={chooseTvCanvas}
           onClose={closeMenu}
         />
       )}
@@ -1279,6 +1290,8 @@ function SettingsMenu({
   onSubDelay,
   speed,
   onSpeed,
+  tvCanvas,
+  onTvCanvas,
   onClose,
 }: {
   levels: LevelOption[];
@@ -1296,6 +1309,8 @@ function SettingsMenu({
   onSubDelay: (d: number) => void;
   speed: number;
   onSpeed: (s: number) => void;
+  tvCanvas?: boolean;
+  onTvCanvas: (on: boolean) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -1314,6 +1329,16 @@ function SettingsMenu({
       aria-label="Réglages du lecteur"
       className="absolute bottom-[58px] right-2 z-20 max-h-[calc(100%-66px)] w-[248px] max-w-[80vw] overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-ink-900/95 p-3 text-sm shadow-card backdrop-blur-xl sm:bottom-[68px] sm:right-4 sm:max-h-[calc(100%-80px)]"
     >
+      {tvCanvas !== undefined && (
+        <MenuGroup title="Affichage (écran noir ?)">
+          <Seg active={!tvCanvas} onClick={() => onTvCanvas(false)}>
+            Normal
+          </Seg>
+          <Seg active={tvCanvas} onClick={() => onTvCanvas(true)}>
+            Compatibilité
+          </Seg>
+        </MenuGroup>
+      )}
       {levels.length > 0 && (
         <MenuGroup title="Qualité" hint={qualityLabel}>
           <Seg active={quality === 'auto'} onClick={() => onQuality('auto')}>
@@ -1572,5 +1597,96 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {PATHS[name]}
     </svg>
+  );
+}
+
+/**
+ * TV, affichage « compatibilité » : certaines TV jouent le son mais laissent la vidéo
+ * noire dans le WebView (image décodée mais jamais affichée). On recopie chaque image
+ * dans un canvas posé sur la vidéo : il est affiché par le rendu normal de la page.
+ */
+function TvCanvas({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const v = videoRef.current;
+    const c = ref.current;
+    const ctx = c?.getContext('2d', { alpha: false });
+    if (!v || !c || !ctx) return;
+    let raf = 0;
+    const draw = () => {
+      if (v.readyState >= 2 && v.videoWidth > 0) {
+        if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
+          c.width = v.videoWidth;
+          c.height = v.videoHeight;
+        }
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+  return <canvas ref={ref} className="pointer-events-none absolute inset-0 h-full w-full bg-black object-contain" aria-hidden="true" />;
+}
+
+/**
+ * TV : diagnostic de l'image, affiché avec la barre de contrôle. `images` = images
+ * décodées (perdues) ; `lum` = luminosité moyenne lue dans l'image décodée (0 = noir).
+ * Images qui avancent + lum > 0 avec un écran noir : la TV décode mais n'affiche pas.
+ */
+function TvDiag({
+  videoRef,
+  hlsRef,
+  canvas,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  hlsRef: React.RefObject<HlsType | null>;
+  canvas: boolean;
+}) {
+  const [text, setText] = useState('');
+  useEffect(() => {
+    const probe = document.createElement('canvas');
+    probe.width = 16;
+    probe.height = 9;
+    const pctx = probe.getContext('2d', { willReadFrequently: true });
+    const tick = () => {
+      const v = videoRef.current;
+      if (!v) return;
+      const q = v.getVideoPlaybackQuality?.();
+      let lum = '?';
+      try {
+        if (pctx && v.readyState >= 2) {
+          pctx.drawImage(v, 0, 0, 16, 9);
+          const d = pctx.getImageData(0, 0, 16, 9).data;
+          let sum = 0;
+          for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+          lum = String(Math.round(sum / (d.length / 4) / 3));
+        }
+      } catch (e) {
+        lum = 'err ' + (e as Error).name;
+      }
+      const hls = hlsRef.current;
+      const lvl = hls && hls.currentLevel >= 0 ? hls.levels[hls.currentLevel] : null;
+      const chrome = /Chrome\/(\d+)/.exec(navigator.userAgent)?.[1] ?? '?';
+      const model = /Android [\d.]+; ([^;)]+)/.exec(navigator.userAgent)?.[1] ?? '';
+      setText(
+        [
+          `${v.videoWidth}x${v.videoHeight} rs${v.readyState}`,
+          q ? `images ${q.totalVideoFrames} (perdues ${q.droppedVideoFrames})` : 'images ?',
+          `lum ${lum}`,
+          hls ? `hls ${lvl ? `${lvl.height}p ${lvl.videoCodec ?? ''}` : '?'}` : 'mp4',
+          `Chrome ${chrome} ${model}`,
+          canvas ? 'compat' : 'normal',
+        ].join(' · '),
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [videoRef, hlsRef, canvas]);
+  return (
+    <div className="pointer-events-none absolute left-2 top-2 z-30 rounded bg-black/75 px-2 py-1 font-mono text-[11px] text-white" aria-hidden="true">
+      {text}
+    </div>
   );
 }
