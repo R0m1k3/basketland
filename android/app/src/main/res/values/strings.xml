@@ -13,4 +13,5 @@
     <string name="update_body">La version %1$s de BasketLand est disponible (installée : %2$s).</string>
     <string name="update_download">Télécharger</string>
     <string name="later">Plus tard</string>
+    <string name="player_error">Lecture impossible (%1$s)</string>
 </resources>

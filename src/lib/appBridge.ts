@@ -40,6 +40,9 @@ interface NativeBridge {
   deviceName(): string;
   mediaState(json: string): void;
   mediaClear(): void;
+  /** Appli 0.2+ : lecteur vidéo natif (TV). */
+  hasNativePlayer?(): boolean;
+  playNative?(json: string): void;
 }
 
 declare global {
@@ -47,6 +50,7 @@ declare global {
     BasketLandApp?: NativeBridge;
     __blMedia?: (action: MediaAction, arg: number | null) => void;
     __blBack?: () => boolean;
+    __blNativeEnded?: (position: number, ended: boolean) => void;
   }
 }
 
@@ -140,4 +144,44 @@ export function onBack(handler: BackHandler): () => void {
     const i = backHandlers.lastIndexOf(handler);
     if (i >= 0) backHandlers.splice(i, 1);
   };
+}
+
+// --- lecteur natif (appli TV 0.2+) : la vidéo est lue par ExoPlayer, hors du WebView.
+
+export interface NativePlayRequest {
+  /** Adresse absolue du flux (HLS ou MP4) du site. */
+  url: string;
+  kind: 'hls' | 'mp4';
+  /** Secondes. */
+  position: number;
+  /** VF au format WebVTT (vide : pas de VF). */
+  vtt: string;
+  /** Taille de la VF (1 = normale). */
+  subScale: number;
+}
+
+/** Le lecteur natif est disponible (appli TV assez récente). */
+export function hasNativePlayer(): boolean {
+  try {
+    const n = native();
+    return !!n?.playNative && !!n.hasNativePlayer?.();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lance la lecture dans le lecteur natif ; `onEnd` reçoit la position de sortie
+ * (secondes) et `ended` si le replay est allé au bout.
+ */
+export function playNative(req: NativePlayRequest, onEnd: (position: number, ended: boolean) => void): boolean {
+  const n = native();
+  if (!n?.playNative) return false;
+  window.__blNativeEnded = onEnd;
+  try {
+    n.playNative(JSON.stringify(req));
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -34,6 +34,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 
 /**
  * Coquille de l'application : un WebView plein écran sur le site BasketLand.
@@ -129,6 +130,33 @@ class MainActivity : Activity() {
         media.release()
         web.destroy()
         super.onDestroy()
+    }
+
+    // ---------------------------------------------------------------- lecteur natif
+
+    /** Ouvre le lecteur natif (appelé par le pont, hors du fil principal). Flux du site seulement. */
+    fun playNative(url: String, kind: String, position: Double, vtt: String?, subScale: Float) {
+        val u = Uri.parse(url)
+        if (u.scheme != "https" || u.host != siteHost) return
+        val file = vtt?.let {
+            File(cacheDir, "vf.vtt").apply { writeText(it) }
+        }
+        runOnUiThread {
+            val ua = web.settings.userAgentString
+            @Suppress("DEPRECATION")
+            startActivityForResult(PlayerActivity.intent(this, url, kind, position, file, subScale.coerceIn(0.5f, 2f), ua), REQ_PLAYER)
+        }
+    }
+
+    @Deprecated("API Activity")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_PLAYER) return
+        val pos = data?.getDoubleExtra(PlayerActivity.EXTRA_POSITION, -1.0) ?: -1.0
+        val ended = data?.getBooleanExtra(PlayerActivity.EXTRA_ENDED, false) ?: false
+        web.post { web.evaluateJavascript("window.__blNativeEnded&&window.__blNativeEnded($pos,$ended)", null) }
+        web.requestFocus()
     }
 
     // ---------------------------------------------------------------- télécommande
@@ -351,6 +379,7 @@ class MainActivity : Activity() {
     companion object {
         private val BG = Color.rgb(0x0B, 0x0B, 0x0E)
         private const val EXIT_DELAY_MS = 2000L
+        private const val REQ_PLAYER = 41
         private val MATCH: FrameLayout.LayoutParams
             get() = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
