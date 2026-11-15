@@ -108,7 +108,8 @@ function usable(el: HTMLElement): boolean {
 
 /** Portée de la navigation : plein écran, sinon dialogue contenant le focus, sinon la page. */
 export function scope(): ParentNode {
-  const fs = document.fullscreenElement;
+  // Plein écran : Fullscreen API, ou plein écran CSS du lecteur sur TV (`data-fs`).
+  const fs = document.fullscreenElement ?? document.querySelector('[data-fs]');
   if (fs) {
     const dialog = document.activeElement?.closest('[role="dialog"]');
     return dialog && fs.contains(dialog) ? dialog : fs;
@@ -169,13 +170,23 @@ export function move(dir: Direction): boolean {
   const active = document.activeElement as HTMLElement | null;
   if (!active || active === document.body || !document.contains(active)) return focusFirst();
   const all = focusables().filter((el) => el !== active && !active.contains(el));
-  const i = pick(active.getBoundingClientRect(), all.map((el) => el.getBoundingClientRect()), dir);
+  const from = active.getBoundingClientRect();
+  // L'en-tête est collant : toujours en haut de l'écran, il paraît plus proche que le
+  // contenu situé au-dessus mais hors écran (la une de l'accueil). Depuis la page, on
+  // cherche donc d'abord dans la page ; l'en-tête seulement s'il n'y a plus rien.
+  const inPage = active.closest('header') ? [] : all.filter((el) => !el.closest('header'));
+  let pool = inPage;
+  let i = pick(from, pool.map((el) => el.getBoundingClientRect()), dir);
+  if (i < 0) {
+    pool = all;
+    i = pick(from, pool.map((el) => el.getBoundingClientRect()), dir);
+  }
   if (i < 0) {
     // Rien plus bas ou plus haut : on fait défiler la page (texte long, bas de page).
     if (dir === 'down' || dir === 'up') window.scrollBy({ top: (dir === 'down' ? 1 : -1) * window.innerHeight * 0.4 });
     return false;
   }
-  focusEl(all[i]);
+  focusEl(pool[i]);
   return true;
 }
 
