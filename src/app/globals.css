@@ -432,6 +432,25 @@ html.tv :focus {
   box-shadow: 0 0 0 7px rgba(255, 90, 31, 0.28) !important;
   border-radius: 10px;
 }
+/*
+ * Liens qui couvrent toute une carte (cartes replay, matchs NBA Cup, matchs d'une équipe…)
+ * et onglets des rangées défilantes : leur boîte touche le bord d'un parent en
+ * `overflow: hidden|auto`, qui rognerait un cadre extérieur (focus invisible à la
+ * télécommande). Le cadre est donc dessiné à l'intérieur, comme l'anneau
+ * `focus-visible:ring-inset` prévu pour la souris et le clavier.
+ */
+html.tv .focus-visible\:ring-inset:focus,
+html.tv .scroll-row :focus {
+  outline-offset: -3px !important;
+  box-shadow: inset 0 0 0 7px rgba(255, 90, 31, 0.28) !important;
+}
+/* Le lien couvre la carte : mêmes coins arrondis qu'elle. */
+html.tv .focus-visible\:ring-inset.absolute:focus {
+  border-radius: inherit;
+}
+html.tv .scroll-row .rounded-full:focus {
+  border-radius: 9999px;
+}
 /* Le cadre du lecteur a le focus pendant la lecture : pas de cadre orange sur la vidéo. */
 html.tv .player:focus {
   outline: none !important;
