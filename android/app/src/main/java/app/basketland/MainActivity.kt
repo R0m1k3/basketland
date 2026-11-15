@@ -15,6 +15,7 @@ import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -32,6 +33,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 
 /**
  * Coquille de l'application : un WebView plein écran sur le site BasketLand.
@@ -179,10 +181,33 @@ class MainActivity : Activity() {
             if (consumed == "true") return@evaluateJavascript
             when {
                 customView != null -> customCallback?.onCustomViewHidden()
+                // Accueil : deux appuis sur Retour (à moins de 2 s) pour quitter, même s'il reste
+                // de l'historique (sinon Retour ferait défiler toutes les pages déjà vues).
+                isHome() -> backAgainToExit()
                 web.canGoBack() -> web.goBack()
                 else -> finish()
             }
         }
+    }
+
+    private var lastBackAt = 0L
+    private var exitToast: Toast? = null
+
+    private fun isHome(): Boolean {
+        val u = web.url?.let(Uri::parse) ?: return false
+        return u.host == siteHost && (u.path.isNullOrEmpty() || u.path == "/")
+    }
+
+    private fun backAgainToExit() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBackAt < EXIT_DELAY_MS) {
+            exitToast?.cancel()
+            finish()
+            return
+        }
+        lastBackAt = now
+        exitToast?.cancel()
+        exitToast = Toast.makeText(this, "Appuyez encore sur Retour pour quitter", Toast.LENGTH_SHORT).also { it.show() }
     }
 
     // ---------------------------------------------------------------- écran
@@ -325,6 +350,7 @@ class MainActivity : Activity() {
 
     companion object {
         private val BG = Color.rgb(0x0B, 0x0B, 0x0E)
+        private const val EXIT_DELAY_MS = 2000L
         private val MATCH: FrameLayout.LayoutParams
             get() = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
