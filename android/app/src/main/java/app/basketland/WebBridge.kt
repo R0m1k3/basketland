@@ -51,6 +51,30 @@ class WebBridge(private val activity: MainActivity, private val media: MediaCont
         )
     }
 
+    /** Lecteur natif disponible (TV) : le site lui confie la lecture. */
+    @JavascriptInterface
+    fun hasNativePlayer(): Boolean = activity.isTv
+
+    /**
+     * Lecture dans le lecteur natif : `{"url":"https://…/master.m3u8","kind":"hls","position":12.3,
+     * "vtt":"WEBVTT…","subScale":1}`. La position de sortie revient par `window.__blNativeEnded`.
+     */
+    @JavascriptInterface
+    fun playNative(json: String) {
+        val o = try {
+            JSONObject(json)
+        } catch (_: Exception) {
+            return
+        }
+        activity.playNative(
+            url = o.optString("url"),
+            kind = o.optString("kind", "hls"),
+            position = o.optDouble("position", 0.0),
+            vtt = o.optString("vtt").takeIf { it.startsWith("WEBVTT") },
+            subScale = o.optDouble("subScale", 1.0).toFloat(),
+        )
+    }
+
     /** Le lecteur a disparu (page quittée) : plus de session média. */
     @JavascriptInterface
     fun mediaClear() {

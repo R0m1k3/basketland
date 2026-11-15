@@ -16,8 +16,9 @@ import {
 } from '@/components/match/playback';
 import { stripScores, useNoSpoil } from '@/components/match/spoiler';
 import { fmtTime, qualityLabel as formatQualityLabel } from '@/components/match/format';
+import { toWebVtt } from '@/components/match/webvtt';
 import { teamInfo } from '@/lib/teams';
-import { isApp, isTvApp, onBack, onMediaAction, reportMediaState } from '@/lib/appBridge';
+import { hasNativePlayer, isApp, isTvApp, onBack, onMediaAction, playNative, reportMediaState } from '@/lib/appBridge';
 import { move as moveFocus } from '@/lib/spatialNav';
 
 export type { Subtitle };
@@ -535,12 +536,35 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     (from?: number) => {
       const v = videoRef.current;
       if (!v) return;
+      // Appli TV : lecture par le lecteur natif (le WebView des TV affiche mal la vidéo).
+      if (tv && src && kind && hasNativePlayer()) {
+        const ok = playNative(
+          {
+            url: new URL(src, location.href).toString(),
+            kind,
+            position: from ?? 0,
+            vtt: vfOn ? toWebVtt(subtitles, subDelay, subPos, noSpoil) : '',
+            subScale: SUB_SCALE[subSize],
+          },
+          (position, ended) => {
+            if (!posKey) return;
+            if (ended) {
+              writePref(posKey, null);
+              setResumeAt(null);
+            } else if (position > 30) {
+              writePref(posKey, String(Math.floor(position)));
+              setResumeAt(position);
+            }
+          },
+        );
+        if (ok) return;
+      }
       warmUp();
       setStarted(true);
       if (from !== undefined) playback.seek(from);
       void v.play().catch(() => undefined);
     },
-    [playback, warmUp],
+    [playback, warmUp, tv, src, kind, vfOn, subtitles, subDelay, subPos, noSpoil, subSize, posKey],
   );
 
   const togglePlay = useCallback(() => {

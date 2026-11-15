@@ -73,5 +73,11 @@ android {
 }
 
 dependencies {
+    // Lecteur vidéo natif des TV (ExoPlayer) : HLS + MP4, sous-titres WebVTT, contrôles télécommande.
+    // 1.9+ exige compileSdk 36 (et un plugin Android plus récent).
+    val media3 = "1.8.0"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3")
+    implementation("androidx.media3:media3-ui:$media3")
     testImplementation("junit:junit:4.13.2")
 }
