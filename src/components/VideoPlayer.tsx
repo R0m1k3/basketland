@@ -196,6 +196,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   const [volume, setVolume] = useState(1);
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  const fsRef = useRef(false);
   const [controlsShown, setControlsShown] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [vfOn, setVfOn] = useState(true);
@@ -561,10 +562,15 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     const shell = shellRef.current;
     const v = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
     if (!shell) return;
+    // TV : plein écran CSS (voir fsRef), jamais la Fullscreen API.
+    if (tv) {
+      setFullscreen((f) => !f);
+      return;
+    }
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     else if (shell.requestFullscreen) void shell.requestFullscreen().catch(() => undefined);
     else v?.webkitEnterFullscreen?.(); // iPhone : plein écran natif, VF recopiée dans une piste texte (voir plus haut)
-  }, []);
+  }, [tv]);
 
   const toggleMute = useCallback(() => {
     const v = videoRef.current;
@@ -663,7 +669,7 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         case 'ArrowUp':
         case 'ArrowDown': {
           // Hors plein écran : ↑/↓ quittent le lecteur (statistiques, liens de la page).
-          if (!document.fullscreenElement) {
+          if (!fsRef.current) {
             e.preventDefault();
             moveFocus(e.key === 'ArrowUp' ? 'up' : 'down');
             return;
@@ -689,8 +695,23 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
     const shell = shellRef.current;
     if (!shell) return;
     shell.focus({ preventScroll: true });
-    if (!document.fullscreenElement) void shell.requestFullscreen?.().catch(() => undefined);
+    setFullscreen(true);
   }, [tv, started]);
+
+  // TV : plein écran en CSS (cadre fixe sur tout l'écran) plutôt que la Fullscreen API.
+  // Dans l'appli, la Fullscreen API fait sortir la vidéo du WebView (vue plein écran
+  // native) : sur les TV, son sans image et télécommande perdue. Ici tout reste dans
+  // la page ; la page dessous ne défile plus.
+  useEffect(() => {
+    fsRef.current = fullscreen;
+    if (!tv || !fullscreen) return;
+    const html = document.documentElement;
+    const prev = html.style.overflow;
+    html.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prev;
+    };
+  }, [tv, fullscreen]);
 
   // TV : menu ouvert → focus sur sa première option.
   useEffect(() => {
@@ -847,8 +868,9 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           setControlsShown(false);
           return true;
         }
-        if (document.fullscreenElement) {
-          void document.exitFullscreen().catch(() => undefined);
+        if (fsRef.current) {
+          setFullscreen(false);
+          shell.focus({ preventScroll: true });
           return true;
         }
         return false;
@@ -869,15 +891,16 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
   return (
     <div
       ref={shellRef}
-      className={`player group/player relative isolate aspect-video w-full overflow-hidden bg-black sm:rounded-2xl ${
-        fullscreen ? '' : 'shadow-card ring-1 ring-ink-700/80'
-      } ${showControls ? '' : 'cursor-none'}`}
+      className={`player group/player isolate overflow-hidden bg-black ${
+        tv && fullscreen ? 'fixed inset-0 z-[2147483000] h-full w-full' : 'relative aspect-video w-full sm:rounded-2xl'
+      } ${fullscreen ? '' : 'shadow-card ring-1 ring-ink-700/80'} ${showControls ? '' : 'cursor-none'}`}
       style={{ '--sub-scale': SUB_SCALE[subSize] } as React.CSSProperties}
       onPointerMove={poke}
       onPointerEnter={warmUp}
       onFocusCapture={warmUp}
       tabIndex={tv && started ? 0 : undefined}
       data-nav={tv ? 'manual' : undefined}
+      data-fs={tv && fullscreen ? '' : undefined}
       aria-label={tv ? 'Lecteur : OK lecture ou pause, gauche et droite pour reculer ou avancer' : undefined}
     >
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
@@ -911,7 +934,6 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
           duration={durationHint ?? null}
           cues={subtitles.length}
           resumeAt={resumeAt}
-          lowQuality={kind === 'mp4'}
           onPlay={play}
         />
       )}
@@ -1029,11 +1051,6 @@ export default function VideoPlayer({ kind, src, subtitles, markers = [], awayAb
         />
       )}
 
-      {kind === 'mp4' && started && (
-        <span className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-warn backdrop-blur">
-          Qualité réduite — la HD arrive
-        </span>
-      )}
     </div>
   );
 }
@@ -1415,7 +1432,6 @@ function Poster({
   duration,
   cues,
   resumeAt,
-  lowQuality,
   onPlay,
 }: {
   awayAbbr: string;
@@ -1423,7 +1439,6 @@ function Poster({
   duration: number | null;
   cues: number;
   resumeAt: number | null;
-  lowQuality: boolean;
   onPlay: (from?: number) => void;
 }) {
   const a = teamInfo(awayAbbr);
@@ -1469,7 +1484,6 @@ function Poster({
             <span className="h-1.5 w-1.5 rounded-full bg-flame" /> Commentaires traduits en français · {cues} sous-titres
           </span>
         )}
-        {lowQuality && <span className="text-warn">Qualité réduite — la HD arrive</span>}
         <span className="hidden sm:inline">Espace : lecture · ← → : ±10 s · F : plein écran · C : VF</span>
       </div>
     </div>
